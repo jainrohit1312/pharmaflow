@@ -863,3 +863,123 @@ mean a dependency and a set of credentials chasing a deployment decision.
 - The dispatch log is written for every channel from the start, so an operator
   auditing "did we tell this supplier" gets the same answer before and after push
   exists.
+
+---
+
+## D-030 — The Vision Model Is Named in Code, and a Model Change Is Verified Live
+
+**Date:** 2026-09-19
+
+**Status:** Active
+
+**Decision:** The bill reader asks `gemini-3.6-flash`, named as
+`DEFAULT_VISION_MODEL` in `supabase/functions/ocr-purchase-bill/gemini.ts`, with
+`GEMINI_VISION_MODEL` as an optional function secret that overrides it without a
+redeploy. A model change is made by someone editing that constant (or setting that
+secret) *and* running one live invocation, because the model's own answer is the
+only thing that proves a name still works.
+
+**Rationale:** The name was not chosen from documentation — the first deployed
+invocation returned
+
+```
+404 ... "This model models/gemini-2.5-flash is no longer available to new users.
+Please update your code to use models/gemini-3.6-flash for the latest features"
+```
+
+so the API named its own successor, and a live call is what verified it. Model
+names rot quietly and in one direction: `gemini-2.5-flash` still *lists* under
+`GET /v1beta/models` while answering 404 to `generateContent`, so a name that
+looks available is not the same as a name that works.
+
+**Consequences:**
+
+- The request shape that this model accepts is now a tested fact, not an
+  assumption: `responseSchema` in the **older dialect** (uppercase `OBJECT`,
+  `nullable: true`) works, `responseJsonSchema` (standard JSON Schema) does not
+  answer reliably, `inlineData` accepts both `image/png` and `application/pdf`,
+  and `maxOutputTokens` must be set generously because this family's *thinking*
+  shares the output budget.
+- A model swap is one string plus one live call. That is the point of keeping the
+  name in code rather than in a table.
+- Verified live at the end of Chunk B1: a synthetic three-line invoice parsed with
+  every header field, every line, and `DD/MM/YYYY` dates converted to ISO, with
+  `warnings: []` and `finish_reason: STOP`.
+
+---
+
+## D-031 — An Edge Function May Not Depend on Recent JavaScript Built-ins
+
+**Date:** 2026-09-19
+
+**Status:** Active
+
+**Decision:** Code under `supabase/functions/` uses only language-core JavaScript,
+and anything that needs a newer convenience lives in `_shared/` written by hand and
+tested with plain `deno test`. The first instance is base64:
+`_shared/base64.ts` rather than `Uint8Array#toBase64`.
+
+**Rationale:** `Uint8Array#toBase64` is a TC39 *proposal*, and the deployed edge
+runtime does not have it. Nothing local could have caught that:
+
+- `deno check` passed, because the *type* exists in Deno 2.9's libraries.
+- The 45 Deno tests passed, because they run on the local Deno.
+- So the first invocation of the deployed function answered `500` — my handler's
+  generic "something went wrong" — and there was no log to read (this CLI has no
+  `functions logs`, and there is no container to serve locally).
+
+The cost was three deploys and a bisect through the deployed function (a foreign
+path → 403, a missing object → 404, which narrowed it to the one step between the
+download and the model call). Twelve lines of hand-written arithmetic would have
+avoided all of it, and a table of one byte's worth of propositions is not worth
+that bill.
+
+**Consequences:**
+
+- The rule is about the *runtime's* feature set, not about style: a built-in that
+  arrived with the proposal stage must not be load-bearing in a function.
+- The `_shared/base64.ts` encoder is tested against `atob` for every remainder
+  length, so a padding mistake cannot survive.
+- Debugging a deployed function without logs is an established, disclosable
+  practice here: a **temporary** `detail` on the function's internal error, one
+  deploy, one invocation, then removed and redeployed. It was used once, in this
+  chunk, and the repository does not carry it.
+- Anything a function cannot express without a new built-in should be considered a
+  candidate for SQL (D-026's answer, one layer down): the database's feature set is
+  the one this project can actually pin.
+
+---
+
+## D-032 — The Bill Reader Does Not Retry, Because the Key Is on a Free Tier
+
+**Date:** 2026-09-19
+
+**Status:** Active
+
+**Decision:** `ocr-purchase-bill` makes **one** attempt per request and reports a
+retryable failure as `provider_unavailable` with the provider's own words. There is
+no internal retry, no backoff and no queue.
+
+**Rationale:** The project's Gemini key is on the free tier, measured during Chunk
+B1 at **five requests per minute** (`generate_content_free_tier_requests, limit:
+5`). Under a burst the API does not answer `429`; it answers
+`503 UNAVAILABLE — "This model is currently experiencing high demand"`, which is
+indistinguishable from a real outage except by the quota metric beside it. An
+internal retry against a quota already spent turns one refused read into two
+refused reads *and* hides the constraint from the person who can fix it (who sees
+only a slower failure). Letting the user retry deliberately is both cheaper and
+more honest, and the message they see says the reader is busy rather than that
+their bill is unreadable.
+
+**Consequences:**
+
+- The app must present this failure as **retryable** and distinct from "this bill
+  could not be read" — a bill the reader never saw is not a bill it could not
+  understand.
+- Whether to keep the free tier is a plan decision, not a code decision. Before
+  Phase 5's OCR flow meets a real counter, either the key moves to a paid tier or
+  a deliberate retry-once policy is added *with* a visible "waiting" state. Recorded
+  as open item **N-2**; a busy counter will meet 5/minute on its own.
+- The distinction is carried in the envelope, not guessed: `finish_reason` and the
+  provider's status both travel with the answer, so a screen can say which kind of
+  failure it is looking at.

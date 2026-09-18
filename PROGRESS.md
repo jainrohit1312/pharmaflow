@@ -1,8 +1,8 @@
 # PharmaFlow — Progress Tracker
 
 **Last Updated:** 2026-09-19
-**Current Phase:** Phase 5 IN PROGRESS — Chunk A (database foundation) landed and verified on the hosted project
-**Overall Status:** Phases 0-4 done and gated; Phase 5's migration 00022, its SQL test and the two new models are in, 397 tests
+**Current Phase:** Phase 5 IN PROGRESS — Chunk A done, Chunk B1 done: the OCR function is deployed and verified against the live model
+**Overall Status:** Phases 0-4 done and gated; Phase 5's AI substrate and its first Edge Function are in — 397 Flutter tests, 45 Deno tests
 
 ---
 
@@ -15,7 +15,7 @@
 | 2 | Purchase + Inventory + Batch Tracking | COMPLETE | 2026-09-18 | 2026-09-18 |
 | 3 | Sales/POS + Returns + GST Billing | COMPLETE | 2026-09-18 | 2026-09-18 |
 | 4 | Ledger + Payments + Reports | COMPLETE | 2026-09-18 | 2026-09-19 |
-| 5 | AI OCR + Smart Matching + Notifications | IN PROGRESS (Chunk A done) | 2026-09-19 | - |
+| 5 | AI OCR + Smart Matching + Notifications | IN PROGRESS (Chunk B1 done) | 2026-09-19 | - |
 | 6 | Testing + Deployment + Documentation | PENDING | - | - |
 
 ---
@@ -63,6 +63,11 @@
   `handle_new_user`); the RPCs (`onboard_pharmacy`, `checkout_sale` /
   `next_sale_invoice_no`, `record_payment`, `report_summary`); and the sales
   payment guard (`sales_payment_check`)
+- **One Edge Function deployed**: `ocr-purchase-bill`, with
+  `supabase/functions/_shared/` (errors, the JSON envelope + CORS, the
+  caller-scoped client, base64) for the functions still to come. It is verified
+  against the live model, not just locally — see the Chunk B1 section. Its **45
+  Deno tests are not part of the five gates** (open item N-3)
 - Indexes and triggers per migration: `set_updated_at` on every business table,
   and every stock and ledger effect attached as a trigger rather than left to a
   client (D-013, D-023)
@@ -107,6 +112,9 @@
 | T-4 | `sale_return_form_screen.dart` has two paths that cannot run: the bill picker's `'Choose a bill'` validator, and `if (saleId == null) _report('Choose the bill the goods were sold on.')`. The submit button is disabled while no bill is chosen (`onPressed: isSaving \|\| saleId == null ? null : _save`) and the picker offers no clear affordance, so `_save` never sees a null bill | Low | Either drop the dead branches or make the button live and let the validator speak, so the two do not have to be kept in step |
 | T-5 | `sale_return_form_screen.dart`'s bill picker renders `sales.value ?? const <Sale>[]`, so "the sales list is still loading" and "this pharmacy has no sales" look identical — an empty, disabled dropdown with no spinner and no explanation | Low | Distinguish the two the way the ledger's party picker does, or read the sales provider's `AsyncValue` states explicitly |
 | N-1 | Push delivery is not wired: `device_tokens` stays empty and `NotificationService.getFcmToken()` returns `null`. Phase 5 dispatches over WhatsApp/Email and shows the in-app list; the Firebase project, the web service worker, the VAPID key and the registration call are Phase 6's (D-029) | Medium | Phase 6, which owns the deploy target the credentials must be registered against |
+| N-2 | The Gemini key is on a **free tier: 5 requests per minute**, and a burst is shed as `503 UNAVAILABLE` rather than `429`, so a busy counter (or a double-tapped retry) meets "the reader is busy" with no queue behind it. `ocr-purchase-bill` makes one attempt and reports it as retryable on purpose (D-032) | Medium | A paid tier, or a deliberate retry-once policy with a visible waiting state — decide before the OCR flow meets a real counter |
+| N-3 | The 45 Deno tests for `supabase/functions/` are not in `HANDOFF_PROTOCOL`'s five gates, and nothing runs `deno test` for them, so they will rot silently. They are also the only tests covering the functions at all | Low | Add `deno test supabase/functions` (and `deno check`) to the gate list, or find a way to run them from the Flutter suite — needs a decision, as it changes the handoff contract |
+| N-4 | A deployed function's `console.error` is only visible in the Supabase dashboard: CLI 2.113.0 has no `functions logs` subcommand (only list/delete/download/deploy/new/serve) and there is no container to serve one locally. Debugging a function is therefore a deploy-and-probe cycle | Low | Accept it and probe deliberately (D-031 records the practice), or find a log path for the CLI version in use |
 
 **Resolved this chat:** P-1 / chat2b O-1 (editing an `ordered` purchase silently
 returned it to `draft` — now reverts only when the lines change, and says so:
@@ -145,6 +153,111 @@ environment:
 Changing any pin above requires explicit user approval (see DECISIONS.md D-007).
 
 ---
+
+## Chat 4 Progress — Chunk B1: the OCR Edge Function [DONE, live-verified]
+
+Chunk B (the AI OCR core) split in two, as its brief allowed: **B1 is the server
+side and is finished; B2 is the Flutter seam and the verify screen.** `supabase/functions/`
+now exists.
+
+### What is deployed
+
+`ocr-purchase-bill` — POST `{ "path": "<pharmacy_id>/<year>/<file>" }` → the bill's
+document, its lines, and `meta { model, warnings, image_path, finish_reason }`, or
+`{ error: { code, message } }`. It writes nothing: creating the purchase is the
+app's job through `PurchasesRepository` (D-011/D-013).
+
+- `_shared/` — the error vocabulary (`FunctionError`, `failJson`'s status map),
+  the JSON envelope **with CORS headers** (a Flutter web build calls this
+  cross-origin; without them the browser reports an opaque network failure), the
+  caller-scoped client (`userClient` + `requirePharmacyId` via the
+  `get_my_pharmacy_id()` RPC — never `service_role`, D-004), and `base64.ts` (D-031).
+- `ocr-purchase-bill/gemini.ts` — the prompt, the response schema, the request
+  builder, and the **defensive normalizer** that turns the model's reply into the
+  envelope: numbers written as text (`"₹1,120.00"`, `"1,25,000"`), a fractional
+  quantity rounded *and said so*, `DD/MM/YYYY` read day-first *and said so*, an
+  unreadable date left null rather than guessed, an invented empty row dropped,
+  and a lost answer reported as `finish_reason` rather than looking like an empty
+  bill.
+- `ocr-purchase-bill/handler.ts` + `deps.ts` + `index.ts` — the request path with
+  every effect injected, so a stub-driven test covers it; the order is
+  security-relevant and pinned: **the tenant comes from the caller's identity and is
+  compared with the path before anything is read**, and the size is checked before
+  the model is paid for.
+
+### Verified live, not just locally
+
+`deno check` + **45 Deno tests** (`deno test supabase/functions/_shared/base64_test.ts
+supabase/functions/ocr-purchase-bill/gemini_test.ts supabase/functions/ocr-purchase-bill/handler_test.ts`
+→ `ok | 45 passed | 0 failed`), then three deploys and a real invocation through a
+throwaway tenant created by public signup (deleted afterwards):
+
+```
+POST /functions/v1/ocr-purchase-bill  {"path":"<pharmacy>/2026/zztest-bill-5841-d.pdf"}
+200
+{ "document": { "supplier_name": "ARIHANT DISTRIBUTORS", "gstin": "27ABCDE1234F1Z5",
+                "invoice_no": "INV-2026-0042", "invoice_date": "2026-09-18",
+                "sub_total": 2420, "tax_total": 264.5, "grand_total": 2684.5 },
+  "lines": [ { "raw_name": "Dolo 650 Tab 15s", "qty": 10, "free_qty": 1, "rate": 100,
+               "mrp": 150, "gst_percent": 12, "batch_no": "D650-A21",
+               "expiry_date": "2027-06-30", "hsn_code": "3004", "confidence": 0.95 },
+             { "raw_name": "Amoxyclav 625 10s", ..., "expiry_date": "2026-12-31" },
+             { "raw_name": "Cetirizine 10mg 10s", "qty": 20, "free_qty": 2,
+               "rate": 18.5, "mrp": 30, "gst_percent": 5,
+               "expiry_date": "2027-02-28", "confidence": 0.95 } ],
+  "meta": { "model": "gemini-3.6-flash", "warnings": [], "image_path": "...",
+            "finish_reason": "STOP" } }
+```
+
+Every header field, every line, and `30/06/2027` → `2027-06-30` — the day-first
+conversion D-020's money rules would have had to live with. **Residue check after
+cleanup: one pharmacy (the real one), one user, zero stored bills.**
+
+### Three findings worth more than the feature
+
+1. **`Uint8Array#toBase64` does not exist in the deployed runtime** (it is a TC39
+   proposal). It passed `deno check` — the *type* is in Deno 2.9's libraries — and
+   passed all 45 local tests, and then answered `500` in production. Cost: three
+   deploys and a bisect through the deployed function to find it. Recorded as
+   **D-031** with the rule that follows: `supabase/functions/` uses language-core
+   JavaScript only.
+2. **The model name in the brief's plan was already dead.** The first live call
+   answered `404 "models/gemini-2.5-flash is no longer available to new users.
+   Please update your code to use models/gemini-3.6-flash"` — the API naming its own
+   successor. A live invocation is now the verification step for any model change
+   (**D-030**).
+3. **The key is free-tier: five requests a minute**, and a burst is shed as
+   `503 UNAVAILABLE` rather than `429` — so a double-tapped retry or a burst of
+   bills fails as "the reader is busy". The reader does **not** retry internally, on
+   purpose (**D-032**, open item **N-2**). Most of this chunk's 503s were this
+   quota, not the model being down.
+
+**A capture-UX finding for B2:** the first live read of the same invoice (9 pt table
+text in a generated PDF) returned the header and the tax total and *no line items*,
+with honest warnings; after the table text was made 12 pt (and a "read every row"
+instruction and an explicit `maxOutputTokens` were added in the same change) the
+same bill parsed completely. Three things changed at once, so this is not isolated
+to the font — but a marginal legibility failure is exactly what the warnings are for,
+and the verify screen should tell the user to photograph the table closely.
+
+### Gate output at completion
+
+```
+deno check supabase/functions/...                   -> clean
+deno test (base64, gemini, handler)                -> ok | 45 passed | 0 failed
+dart format --output=none --set-exit-if-changed    -> 355 files, 0 changed
+flutter analyze                                    -> No issues found!
+flutter test                                       -> +397: All tests passed!
+supabase functions deploy ocr-purchase-bill        -> deployed (728 kB)
+```
+
+(Flutter test count unchanged at 397 — Chunk B1 changed no Dart product code. The 45
+Deno tests are new and **not** in the five gates yet: open item **N-3**.)
+
+### Decisions added
+
+D-030 (the model is named in code and a change is verified live), D-031 (no
+proposal-stage built-ins in a function), D-032 (the reader does not retry, and why).
 
 ## Chat 4 Progress — Chunk A: Phase 5 database foundation [DONE]
 
@@ -928,14 +1041,24 @@ flutter test               -> +113: All tests passed!
 
 ## Next Action
 
-**Phase 5 Chunk B — the AI OCR core.** `context/chat3b-opening-prompt.md` is the
-brief: `supabase/functions/ocr-purchase-bill/` (Gemini Vision), a real `OcrService`,
-and `features/purchase_ocr/` — pick or capture a bill, upload it to
-`purchase-bills/<pharmacy_id>/…`, show what the OCR read, let the user correct it,
-and create the purchase **through `PurchasesRepository`** (D-011/D-013) rather than
-by inserting rows. It is the largest single feature of the phase and may split into
-B1 (the function, the service and the repository) and B2 (the verify UI and the
-save).
+**Phase 5 Chunk B2 — the OCR Flutter seam and the verify screen.**
+`context/chat3c-opening-prompt.md` is the brief. The server side is done, deployed
+and live-verified (Chunk B1); what remains is everything the user touches:
+
+- the envelope's Dart models (plain classes, `ReportSummary`'s precedent) for
+  `document` / `lines` / `meta`, including the tolerant decode of a reply whose
+  numbers may arrive as text;
+- `OcrService` implemented over `supabase.functions.invoke` (its stub still throws
+  `UnimplementedError('TODO(phase-5)')`) and a `features/purchase_ocr/` repository
+  that uploads the picked image to `purchase-bills/<pharmacy_id>/…` and invokes the
+  function;
+- the pick/capture screen, the verify form (image beside editable fields, a product
+  per line, money from `PurchaseTotals`), the save **through the existing
+  `PurchaseFormController.createPurchase` → draft → the GRN screen**, the
+  `/purchase/ocr` route, and the widget tests.
+
+Nothing in the Flutter tree changed in B1, so B2 starts from a green 397-test tree
+and adds the first Dart code for this feature.
 
 What Phase 5 builds on, and must not break:
 
