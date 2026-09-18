@@ -19,9 +19,10 @@ import 'package:app/features/customers/presentation/customers_form_screen.dart';
 import 'package:app/features/customers/presentation/customers_screen.dart';
 import 'package:app/features/dashboard/presentation/dashboard_home.dart';
 import 'package:app/features/dashboard/presentation/dashboard_shell.dart';
+import 'package:app/features/expenses/presentation/expenses_screen.dart';
 import 'package:app/features/inventory/presentation/expiry_calendar_screen.dart';
 import 'package:app/features/inventory/presentation/inventory_screen.dart';
-import 'package:app/features/ledger/presentation/ledger_placeholder.dart';
+import 'package:app/features/ledger/presentation/ledger_screen.dart';
 import 'package:app/features/onboarding/presentation/onboarding_pharmacy_screen.dart';
 import 'package:app/features/products/presentation/products_detail_screen.dart';
 import 'package:app/features/products/presentation/products_form_screen.dart';
@@ -30,7 +31,7 @@ import 'package:app/features/purchase/presentation/grn_screen.dart';
 import 'package:app/features/purchase/presentation/purchase_detail_screen.dart';
 import 'package:app/features/purchase/presentation/purchase_form_screen.dart';
 import 'package:app/features/purchase/presentation/purchases_screen.dart';
-import 'package:app/features/reports/presentation/reports_placeholder.dart';
+import 'package:app/features/reports/presentation/reports_screen.dart';
 import 'package:app/features/returns/presentation/purchase_return_detail_screen.dart';
 import 'package:app/features/returns/presentation/purchase_return_form_screen.dart';
 import 'package:app/features/returns/presentation/returns_screen.dart';
@@ -292,12 +293,22 @@ final appRouterProvider = Provider<GoRouter>((ref) {
           GoRoute(
             path: Routes.ledger,
             name: 'ledger',
-            builder: (context, state) => const LedgerPlaceholder(),
+            builder: (context, state) => const LedgerScreen(),
           ),
           GoRoute(
             path: Routes.reports,
             name: 'reports',
-            builder: (context, state) => const ReportsPlaceholder(),
+            builder: (context, state) => const ReportsScreen(),
+          ),
+          // A child of the reports destination, declared right after it. The two
+          // share a prefix, and the shell highlights a destination by prefix
+          // (`_belongsTo`), so `/reports` stays lit while the user is recording
+          // an expense. Neither path is parameterised, so this order is for a
+          // reader rather than the matcher.
+          GoRoute(
+            path: Routes.expenses,
+            name: 'expenses',
+            builder: (context, state) => const ExpensesScreen(),
           ),
           GoRoute(
             path: Routes.settings,

@@ -29,9 +29,7 @@ abstract class Expense with _$Expense {
     required DateTime expenseDate,
     required DateTime createdAt,
     required DateTime updatedAt,
-    @Default(PaymentMode.cash)
-    @PaymentModeConverter()
-    PaymentMode paymentMode,
+    @Default(PaymentMode.cash) @PaymentModeConverter() PaymentMode paymentMode,
     String? notes,
     String? createdBy,
   }) = _Expense;

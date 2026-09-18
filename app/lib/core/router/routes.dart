@@ -174,11 +174,22 @@ abstract final class Routes {
   /// Path of the detail screen for [returnId].
   static String returnDetail(String returnId) => '/returns/$returnId';
 
-  /// Customer and supplier ledgers (Phase 1 placeholder).
+  /// Customer and supplier ledgers: what each party owes, and the entries behind it.
   static const String ledger = '/ledger';
 
-  /// Reports and analytics (Phase 1 placeholder).
+  /// Reports and analytics: one summary per window, plus the way to expenses.
   static const String reports = '/reports';
+
+  /// Expenses: what the pharmacy spent, and the sheet that records it.
+  ///
+  /// Nested under [reports] rather than given a top-level `/expenses`, for the
+  /// reason `/inventory/calendar` is nested under inventory: it is a child of
+  /// that destination, reached from the summary it feeds, and the shell
+  /// highlights a destination by prefix (`_belongsTo`). A top-level path would be
+  /// the first route matching no destination, so the rail would sit on Dashboard
+  /// while the user was reading their expenses. Twelve destinations in the rail
+  /// is not what this needs either.
+  static const String expenses = '/reports/expenses';
 
   /// Application and pharmacy settings (Phase 1 placeholder).
   static const String settings = '/settings';

@@ -1,8 +1,8 @@
 # PharmaFlow — Progress Tracker
 
-**Last Updated:** 2026-09-18
-**Current Phase:** Phase 2 COMPLETE — purchase, inventory, batch tracking and purchase returns all built and gated
-**Overall Status:** Phases 0-2 done (masters, purchase, inventory, purchase returns); Phase 3 (sales/POS, sale returns, GST billing) is next
+**Last Updated:** 2026-09-19
+**Current Phase:** Phase 4 COMPLETE — ledger, payments, expenses and reporting all built and gated
+**Overall Status:** Phases 0-4 done (masters, purchase, inventory, purchase returns, sales/POS, sale returns, GST billing, ledger, payments, expenses, reports); Phase 5 (AI OCR, smart matching, notifications) is next
 
 ---
 
@@ -13,8 +13,8 @@
 | 0 | Project Setup + Schema + Auth | COMPLETE | 2026-09-18 | 2026-09-18 |
 | 1 | Product + Supplier + Customer Master | COMPLETE | 2026-09-18 | 2026-09-18 |
 | 2 | Purchase + Inventory + Batch Tracking | COMPLETE | 2026-09-18 | 2026-09-18 |
-| 3 | Sales/POS + Returns + GST Billing | PENDING | - | - |
-| 4 | Ledger + Payments + Reports | PENDING | - | - |
+| 3 | Sales/POS + Returns + GST Billing | COMPLETE | 2026-09-18 | 2026-09-18 |
+| 4 | Ledger + Payments + Reports | COMPLETE | 2026-09-18 | 2026-09-19 |
 | 5 | AI OCR + Smart Matching + Notifications | PENDING | - | - |
 | 6 | Testing + Deployment + Documentation | PENDING | - | - |
 
@@ -41,7 +41,7 @@
 
 - **Chat 1:** Phase 0 [DONE]
 - **Chat 2:** Phase 1 + Phase 2 [DONE]
-- **Chat 3:** Phase 3 + Phase 4 [target ~390k tokens]
+- **Chat 3:** Phase 3 + Phase 4 [DONE]
 - **Chat 4:** Phase 5 + Phase 6 [target ~280k tokens]
 - **Handoff trigger:** ~600k tokens used OR quality degrades OR both phases done
 
@@ -51,11 +51,20 @@
 
 ### Backend (Supabase Hosted)
 
-- 14 migrations applied, all idempotent
-- 21 tables, 2 views, RLS enforced on every business table
-- 3 helper functions: `get_my_pharmacy_id()`, `get_my_role()`, `normalize_product_name()`
-- 52 indexes (incl. GIN trigram on `product_aliases`), 28 triggers
-  (`set_updated_at` on 21 tables + `handle_new_user`)
+- 21 migrations applied, all idempotent (`supabase migration list`: 21/21 local
+  and remote match)
+- 22 tables and 2 views (`product_stock`, `batch_status`), RLS enforced on every
+  business table; migrations 00019-00021 added one table (`invoice_counters`)
+  and no view
+- Helper functions: `get_my_pharmacy_id()`, `get_my_role()`,
+  `normalize_product_name()` (identity and scope); the automation layer
+  (`ledger_auto_entry_*`, `stock_*`, `write_audit_log`, `set_updated_at`,
+  `handle_new_user`); the RPCs (`onboard_pharmacy`, `checkout_sale` /
+  `next_sale_invoice_no`, `record_payment`, `report_summary`); and the sales
+  payment guard (`sales_payment_check`)
+- Indexes and triggers per migration: `set_updated_at` on every business table,
+  and every stock and ledger effect attached as a trigger rather than left to a
+  client (D-013, D-023)
 - Auth working: email provider ON, confirm email OFF
 - User `owner@pharmaflow.dev` registered and promoted to `owner`
 - Pharmacy row created: "My Pharmacy"
@@ -93,10 +102,15 @@
 | I-2 | A purchase return is two statements (header, then lines). The lines are one atomic INSERT, so stock moves for all of them or none - but a refused set can leave a header with no lines. Deliberately not rolled back: see `PurchaseReturnsRepository.create` | Low | An `RPC` wrapping both statements when Phase 4 touches the ledger |
 | I-3 | A return form offers at most `returnablePurchaseLimit` (200) received purchases | Low | A searchable purchase picker, as the product picker already is |
 | R-1 | `README.md` still describes the project as "Phase 0 (scaffold)" with Phase 1+ screens as placeholders | Low | Refresh it in Phase 6, which owns documentation |
+| T-2 | Phase 3 shipped with **no Dart tests** — `test/features/sales/` does not exist, so nothing exercises the POS cart, the `checkout_sale` write, printing or the sale-return screen. Its database behaviour *is* covered by `supabase/tests/phase3_sale_triggers.sql` | Medium | Add them before Phase 6's polish pass, or as the first task of any chat that touches sales |
+| T-3 | The ledger screen's entries failure path is only reachable on a **first** read: while no party is selected the entries provider holds an empty page, so a failure after a party is chosen keeps that empty page and reports itself through a SnackBar rather than replacing the body. A user who cannot load a party's ledger therefore has no retry control until they navigate away and back | Low | Either treat "no party selected" as no value rather than an empty page, or give the SnackBar a retry action |
 
 **Resolved this chat:** P-1 / chat2b O-1 (editing an `ordered` purchase silently
 returned it to `draft` — now reverts only when the lines change, and says so:
-see D-019).
+see D-019). Chat 3 also closed the two defects the sale-side migration shipped
+with (an `anon` EXECUTE grant and an overpayment that stored a negative balance)
+and the purchase-return credit note Phase 2 left unposted — all three in
+migration 00020.
 
 ---
 
@@ -118,6 +132,109 @@ environment:
 Changing any pin above requires explicit user approval (see DECISIONS.md D-007).
 
 ---
+
+## Chat 3 Progress (Phase 3 + Phase 4)
+
+### Migrations 00019-00021 — sale automation, ledger/payments, reporting [DONE]
+
+All three are applied to the hosted project (`supabase migration list`: 21/21
+local and remote match) and each has a SQL test in `supabase/tests/`.
+
+- `20260918000019_phase3_sale_automation.sql` — enables the sale side of the
+  automation that migration 00010 shipped commented out, in a new file (D-013's
+  reasoning, one phase later): `ledger_auto_entry_sale()`,
+  `stock_update_on_sale()` (per sale **line**, gated on the parent sale not being
+  cancelled) and `write_audit_log()`, plus `stock_restore_on_sale_return()` /
+  `ledger_auto_entry_sale_return()`, the `invoice_counters` table that gives a
+  POS its per-day invoice number, and `checkout_sale(jsonb)` — the whole sale in
+  one transaction. Two deliberate deviations from the shipped bodies: a sale with
+  no customer posts nothing (a walk-in owes nothing, and
+  `ledger_entries_party_check` needs a party), and the ledger gate is "not
+  cancelled" rather than "is completed", so a credit sale posts its receivable
+  when it is written rather than when it is settled.
+- `20260918000020_phase4_ledger_payments.sql` — corrects two defects 00019 shipped
+  with, both found by `supabase/tests/phase3_sale_triggers.sql`: the EXECUTE
+  grant `anon` had kept (D-017's trap, again), and an overpayment storing a
+  negative `balance_due` (now a `before insert or update` trigger on `sales`).
+  It also closes the gap Phase 2 left: a purchase return posts its credit note
+  (`reference_type = 'purchase_return'`, at D-020's `grand_total`), and
+  `record_payment(...)` writes a payment and its `ledger_entries` row in one
+  transaction, taking the tenant from `get_my_pharmacy_id()`.
+- `20260918000021_phase4_reporting.sql` — `report_summary(date, date)`, one
+  `security definer` RPC returning every figure the reports screen shows as
+  `jsonb`. Server-side because PostgREST cannot `sum()`: a total assembled from
+  one capped page would be silently short of the truth, which is the one outcome
+  a financial report must not have. Verified by
+  `supabase/tests/phase4_report_summary.sql` (7 groups of assertions over the
+  sales, purchases, returns, expenses, stock and expiry blocks, the window edges,
+  and the anon/no-tenant refusals).
+
+### Phase 3 — sales/POS, sale returns, GST billing [DONE, NO DART TESTS]
+
+Delivered by the previous session and gated here as it stood: `features/sales/`
+(list with search and status filter, the POS counter over `PosCart` and
+`checkout_sale`, bill detail and print) and the sale side of `features/returns/`
+(sale-return form with `restock` and `refund_mode`, over
+`SaleReturnsRepository`). **It added no Dart tests** — `test/features/sales/`
+does not exist — which is open item T-2 below. Its database behaviour is
+covered by `supabase/tests/phase3_sale_triggers.sql`.
+
+### Phase 4 — ledger, payments, expenses, reports [DONE]
+
+- `features/ledger/` — `ledger_screen.dart` (supplier/customer segmented picker,
+  the selected party's balance and its paged entries, with the direction each
+  entry moved money spelled out per party type, and a payment sheet), over
+  `LedgerSelectionController`, `LedgerEntriesController`,
+  `partyLedgerBalanceProvider` and `PaymentController`. The balance is read from
+  `ledger_entries`, not from a stored figure, because the ledger *is* the record.
+- `features/expenses/` — `expenses_repository.dart`,
+  `expenses_controller.dart` (paged list + the write, which invalidates both the
+  list *and* the reports summary), `presentation/expenses_screen.dart` at
+  `/reports/expenses`, and `presentation/widgets/expense_sheet.dart` (category
+  from the fixed list, amount, mode, date, notes).
+- `features/reports/` — `application/reports_controller.dart` (the window, its
+  chip presets, and the one-round-trip summary provider) and
+  `presentation/reports_screen.dart` (seven cards: sales, purchases received,
+  returns, expenses, what the window contributed, stock on the shelf, and
+  expiry — each labelled with what it is, and the contributed figure labelled
+  with what it is **not**: it knows what was sold and what was spent, and nothing
+  about what those goods cost).
+- `Routes.expenses` is `/reports/expenses` rather than a top-level `/expenses`,
+  so the Reports destination stays highlighted; a path matching no shell
+  destination would leave the rail on Dashboard while the user read their
+  expenses (D-022).
+- `ledger_placeholder.dart` and `reports_placeholder.dart` deleted; `/ledger` and
+  `/reports` build the real screens. The unused `routes.dart` import in
+  `ledger_screen.dart` and the two analyze errors caused by the missing
+  `reports_controller.dart` are fixed.
+- Tests: 54 added, none changed — `report_summary_test.dart` (the RPC envelope's
+  decode, including numbers that arrive as strings), `reports_controller_test.dart`
+  (window arithmetic against fixed dates, the chip presets, the drag-the-other-end
+  rule, and the provider), and widget tests for the three screens over new fakes
+  and mini-router pump helpers in `test/support/`
+  (`fake_ledger_repository`, `fake_expenses_repository`,
+  `fake_reports_repository`, `ledger_test_app`, `reports_test_app`).
+
+### PHASE 4 COMPLETE
+
+Gate output at completion:
+
+```
+dart format lib test                      -> 0 changed (tree is formatter-clean)
+dart run build_runner build --delete...   -> wrote 89 outputs (T-1 SDK notice only)
+dart run custom_lint                      -> No issues found!
+flutter analyze                           -> No issues found!
+flutter test                              -> +291: All tests passed!
+```
+
+(237 at the end of Phase 2; 291 now — 54 added, none changed. Phase 3 contributed
+no tests of its own, so 54 is the whole of the increase.)
+
+Seven files the previous session wrote by hand were reformatted by
+`dart format` on the way through (`expense.dart`, `ledger_entry.dart`,
+`report_summary.dart`, `ledger_controller.dart`, `ledger_screen.dart`,
+`payment_sheet.dart`, `reports_repository.dart`); the diffs are wrapping and
+annotation placement only, no behaviour.
 
 ## Chat 2 Progress (Phase 1 + Phase 2)
 
@@ -623,35 +740,26 @@ flutter test               -> +113: All tests passed!
 
 ## Next Action
 
-**Phase 3 — Sales/POS + Returns + GST Billing.** Chat 3, per the plan:
+**Phase 5 — AI OCR + Smart Matching + Notifications.** Chat 4, per the plan:
+`context/chat2e-opening-prompt.md` carries the brief.
 
-1. Enable the sale-side automation that is still commented out in migration
-   `00010`: `ledger_auto_entry_sale()`, `stock_update_on_sale()`, and
-   `write_audit_log()`. As with Phase 2 (D-013) that is a **new migration**, not
-   uncommenting in place - 00010 is already applied to the hosted project.
-2. Sales/POS: cart, FEFO batch selection (a sale must decrement the earliest
-   expiry first, which `batch_status` already orders for), GST invoice, thermal
-   print (web PDF / Windows native, per D-005).
-3. Sale returns and credit notes in `features/returns/` - **extend it, do not
-   rebuild it**: the purchase side is already there, and the two lists share one
-   route and one destination.
-4. Phase 3 gate, then the handoff.
+What Phase 5 builds on, and must not break:
 
-What Phase 3 builds on, and must not break:
-
-- `product_batches.qty` is the single running balance, and three writes move it:
-  a purchase receipt (D-011/D-012, landed cost), a stock adjustment, and a
-  purchase return (quantity only). Sales will be the fourth, and the only one
-  that reduces stock at the counter.
-- Every read of stock is a view (`product_stock`, `batch_status`) scoped by
-  `pharmacy_id`; a POS screen must not sum batches itself.
-- `features/inventory/` owns `stock_adjustments` and the two views; a sale that
-  moves stock should invalidate the same providers
-  (`stockListControllerProvider`, `lowStockListProvider`,
-  `expiryBoardControllerProvider`, `expiryMonthControllerProvider`) - see
-  `StockAdjustmentController._refreshStockReaders`.
-- `purchase_return_items` credits a supplier from the invoice line's stored
-  amounts (D-020); a sale return has its own equivalent question and should
-  answer it the same way rather than from `qty x rate`.
-
-`context/chat2d-opening-prompt.md` carries the brief.
+- A sale is written through `checkout_sale(jsonb)` and nothing else, and its
+  stock moves per line from a trigger on `sale_items`. Quantity is
+  `product_batches.qty`; **no client posts it** (D-021's closing note). An OCR
+  path that fills a purchase invoice must go through `PurchasesRepository.receive`
+  for the same reason.
+- Every DB query is scoped by `pharmacy_id`, read **synchronously** from
+  `requirePharmacyIdProvider` (D-015).
+- `checkout_sale()`, `record_payment()` and `report_summary()` are
+  `security definer` and take the tenant from `get_my_pharmacy_id()`; an AI or
+  Edge Function must present the user's JWT, never `service_role` (D-004).
+- Money is computed once, by a pure helper, and both the screen and the write use
+  it (`PurchaseTotals`, `PurchaseReturnTotals`, `PosCart`), with
+  `PurchaseTotals.round2` as the shared rounding rule.
+- A document that has posted stock is corrected by a return, never by an edit
+  (D-013 for purchases, and the sale side follows it: `sale_status` has no draft).
+- Two open items Phase 5 should not make worse: **T-2** (Phase 3 has no Dart
+  tests) and **T-3** (the ledger's failure path offers no retry after a party is
+  chosen). I-1 to I-3 and R-1 are still open from Phase 2.

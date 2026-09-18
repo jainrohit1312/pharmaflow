@@ -150,7 +150,8 @@ class ReportExpiringTotals {
   final double warningValueAtMrp;
 
   /// Everything that needs a decision, at MRP.
-  double get atRisk => expiredValueAtMrp + criticalValueAtMrp + warningValueAtMrp;
+  double get atRisk =>
+      expiredValueAtMrp + criticalValueAtMrp + warningValueAtMrp;
 }
 
 /// Everything the reports screen shows, for one window.

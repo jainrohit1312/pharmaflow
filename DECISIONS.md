@@ -537,3 +537,159 @@ against, and it inherits the receipt's own rounding.
 - The four providers a batch balance feeds are invalidated in one place,
   `StockAdjustmentController._refreshStockReaders`. A future write that moves
   stock (a sale) must invalidate the same set.
+
+---
+
+## D-022 — A Screen That Is Not a Shell Destination Nests Under the One That Owns It
+
+**Date:** 2026-09-19
+**Status:** Active
+
+**Decision:** Expenses lives at `/reports/expenses`, not at a top-level
+`/expenses`. A screen reached from a destination it belongs to takes that
+destination's prefix as its path, whether or not it is declared as a nested
+`GoRoute`.
+
+**Rationale:** `DashboardShell` decides which destination is lit by prefix
+(`_belongsTo(path, destination)` is `path == destination ||
+path.startsWith('$destination/')`). Every path in the app matched a destination
+until now, so `/expenses` would have been the first that matched none — and the
+fallback is index 0, which means the rail and the bottom bar would have sat on
+"Dashboard" while the user was reading their expenses. The alternative was a
+twelfth destination in the rail, which the shell has no room for and this screen
+does not warrant (it is reached from the summary it feeds).
+
+**Consequences:**
+
+- The nested path is a routing convention, not an ownership claim: the expense
+  screen belongs to the expenses feature, and only its URL sits under `/reports`.
+  `/inventory/calendar` set this precedent and is declared the same way — as a
+  sibling `GoRoute` right after its parent, whose comment says why.
+- A new screen that hangs off an existing destination must take that prefix, or
+  the shell has to learn about it. A top-level path is only correct for something
+  that deserves its own destination (`Routes.shellPaths` and
+  `DashboardShell.destinationPaths` have to stay parallel — see D-018).
+- `Routes.expenses` is the constant callers use; no screen spells the path out.
+
+---
+
+## D-023 — A Sale Is One RPC and Its Stock Posts Per Line
+
+**Date:** 2026-09-19
+**Status:** Active
+
+**Decision:** A sale is written only through `checkout_sale(jsonb)`
+(migration 20260918000019), which creates the header, its lines and its
+invoice number in one transaction. Stock moves from a trigger on
+`sale_items` (`stock_update_on_sale()`), per line, gated on the parent sale not
+being cancelled — not on a status change, and never from the client.
+
+**Rationale:** PostgREST writes one statement at a time, so a header-then-lines
+write can be refused halfway: the header would already have posted a receivable,
+and a partial set of lines would have taken some units from stock and not others.
+`product_batches.qty` is the single running balance, so a partial post is a
+silently wrong number rather than a failed write. A purchase has a `draft` life
+to gate on (`purchases.stock_posted_at`, D-013); a sale does not — `sale_status`
+has no draft, so the lines are the only event and the once-only guarantee is
+structural: the app inserts a sale's lines exactly once and has no update path
+for them.
+
+**Consequences:**
+
+- A sale with **no customer** posts no ledger row. `ledger_entries_party_check`
+  requires a party, and a walk-in pays at the counter and owes nothing.
+- A **credit** sale posts its receivable when it is written, not when it is
+  settled: the ledger gate is "not cancelled", not "is completed".
+- An overpayment is refused (`sales_payment_check`, migration 00020). The change
+  a cashier hands back is not a payment, so `amount_paid` may not exceed
+  `grand_total` and `balance_due` may never go negative.
+- A sale that needs the balance carried must name a customer;
+  `SaleCheckoutController` refuses one that does not, before the write.
+- **Corrections are returns, not edits.** Deleting a sale line does not put the
+  units back — `write_audit_log()` records the deletion, and the correction path
+  is a sale return (with `restock`) or a stock adjustment. Cancelling a sale that
+  already moved stock does not reverse it, the same one-way contract D-013
+  established for purchases.
+- Anything that moves stock must refresh the same four readers; that rule is now
+  one shared function, `refreshStockReaders` in
+  `features/inventory/application/stock_readers.dart`, called by the stock
+  adjustment, the sale checkout, the sale return and the purchase return. A new
+  write that moves stock calls it rather than re-listing the providers.
+- Verified by `supabase/tests/phase3_sale_triggers.sql`.
+
+---
+
+## D-024 — A Payment and Its Ledger Row Are One Transaction
+
+**Date:** 2026-09-19
+**Status:** Active
+
+**Decision:** Recording a payment is `record_payment(...)`
+(migration 20260918000020), which writes the `payments` row and its
+`ledger_entries` row (`reference_type = 'payment'`) in one transaction, taking
+the tenant from `get_my_pharmacy_id()` and refusing a party from another tenant.
+The direction is the function's business: a supplier payment debits, a customer
+payment credits.
+
+**Rationale:** Two inserts cannot agree by convention. A payment that recorded the
+cash and failed to post its ledger row would leave a party looking in debt after
+they had paid — a wrong balance that nothing on screen could explain, in the one
+table a pharmacy reconciles against.
+
+**Consequences:**
+
+- `LedgerRepository.recordPayment` sends parameters and nothing else; it does not
+  write two rows and hope. The same reasoning is why the purchase return's credit
+  note is posted by `ledger_auto_entry_purchase_return()`, a trigger on
+  `purchase_returns`, rather than by a second client statement: the credit note
+  and the ledger entry it produces are one event.
+- The payment sheet is a modal sheet, not a route: `showPaymentSheet(...)` from
+  the ledger screen's "Record payment" button, over `PaymentController`. The
+  sheet resolves to whether anything was written, and the caller reloads its own
+  reads — which is what keeps the dependency one way (the supplier and customer
+  detail screens open it too, without the ledger feature knowing about them).
+- `party_balances` is still read by paging `ledger_entries` in
+  `LedgerRepository.balanceFor`; a server-side aggregate is the improvement
+  `report_summary()` made for reporting and could make here.
+
+---
+
+## D-025 — A Report Is One Server-Side Aggregate, Never Rows Summed in Dart
+
+**Date:** 2026-09-19
+**Status:** Active
+
+**Decision:** The reports screen reads `report_summary(p_from, p_to)`
+(migration 20260918000021), one `security definer` RPC returning every figure it
+shows as a single `jsonb` object. The window is an inclusive date range; presets
+(today, this month, last month, this quarter, this year) are computed in
+`features/reports/application/reports_controller.dart` and are the only place the
+calendar arithmetic lives.
+
+**Rationale:** PostgREST cannot `sum()`, so every total would otherwise be a page
+of rows summed in Dart — bounded by `max_rows` (1000) and therefore silently
+short of the truth in a busy month. A financial report that is wrong in a
+plausible-looking way is worse than one that is slow. One function rather than
+six queries is the other half of it: a report whose parts were read at different
+moments can disagree with itself (a sale rung up between two reads lands in one
+figure and not the other), and a report nobody trusts is worse than no report.
+
+**Consequences:**
+
+- New report figures belong in `report_summary()` (a migration — the function is
+  `create or replace`), not in a repository method that sums rows.
+- The pharmacy is not an argument: the function takes it from the caller's
+  identity, so a crafted parameter cannot read another tenant's numbers (D-004's
+  rule for RPCs, and the reason it is `security definer`).
+- The screen never assembles a figure. `ReportSummary` (plain classes, not
+  Freezed: it is an RPC envelope, and no migration owns its shape) decodes the
+  numbers exactly once, tolerating a `numeric` that arrives as a string.
+- The figures are honest about what they are: `contributedMargin` is billed less
+  refunds less expenses, and the screen labels it "Not a profit" with the reason —
+  it knows what was sold and what was spent, and nothing about what those goods
+  cost, which arrived on invoices rather than on bills. Gross margin needs the
+  cost of each sale line, which is a future migration.
+- The expense write invalidates the summary as well as its own list
+  (`ExpenseFormController.createExpense`), because an expense moves the window it
+  was recorded in.
+- Verified by `supabase/tests/phase4_report_summary.sql`.

@@ -52,7 +52,9 @@ class ReportsRepository {
         final Map<dynamic, dynamic> map => map.cast<String, dynamic>(),
         final List<dynamic> rows when rows.isNotEmpty =>
           (rows.first as Map).cast<String, dynamic>(),
-        _ => throw const ServerException(message: 'The report came back empty.'),
+        _ => throw const ServerException(
+          message: 'The report came back empty.',
+        ),
       };
       return ReportSummary.fromJson(row);
     } on sb.PostgrestException catch (error) {
@@ -64,7 +66,10 @@ class ReportsRepository {
       if (error is AppException) {
         rethrow;
       }
-      throw ServerException(message: 'Unable to read the report.', cause: error);
+      throw ServerException(
+        message: 'Unable to read the report.',
+        cause: error,
+      );
     }
   }
 }

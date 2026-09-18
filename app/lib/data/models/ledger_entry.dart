@@ -90,8 +90,7 @@ class LedgerReferenceTypeConverter
 
   /// Decodes `'purchase'`, `'sale'`, `'payment'`, and the rest.
   @override
-  LedgerReferenceType fromJson(String? json) =>
-      ledgerReferenceTypeFromDb(json);
+  LedgerReferenceType fromJson(String? json) => ledgerReferenceTypeFromDb(json);
 
   /// Emits the DB literal, e.g. `'sale_return'`.
   @override
@@ -119,9 +118,7 @@ abstract class LedgerEntry with _$LedgerEntry {
     required DateTime entryDate,
     required DateTime createdAt,
     required DateTime updatedAt,
-    @Default(PartyType.supplier)
-    @PartyTypeConverter()
-    PartyType partyType,
+    @Default(PartyType.supplier) @PartyTypeConverter() PartyType partyType,
     @Default(LedgerReferenceType.opening)
     @LedgerReferenceTypeConverter()
     LedgerReferenceType referenceType,

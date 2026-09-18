@@ -181,9 +181,8 @@ Future<PartyBalance?> partyLedgerBalance(Ref ref) async {
 /// directions (`PartyBalanceX`).
 extension LedgerBalanceMeaning on PartyBalance {
   /// The amount that matters for [partyType], always positive when owed.
-  double owedFor(PartyType partyType) => partyType == PartyType.supplier
-      ? payable
-      : receivable;
+  double owedFor(PartyType partyType) =>
+      partyType == PartyType.supplier ? payable : receivable;
 
   /// What to call that amount, from the pharmacy's point of view.
   String labelFor(PartyType partyType) => partyType == PartyType.supplier

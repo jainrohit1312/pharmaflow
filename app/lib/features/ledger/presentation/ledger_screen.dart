@@ -2,7 +2,6 @@
 library;
 
 import 'package:app/core/errors/error_message.dart';
-import 'package:app/core/router/routes.dart';
 import 'package:app/core/utils/formatters.dart';
 import 'package:app/core/utils/logger.dart';
 import 'package:app/core/widgets/app_button.dart';
@@ -78,7 +77,8 @@ class LedgerScreen extends ConsumerWidget {
                     ),
                   ],
                   selected: <PartyType>{selection.partyType},
-                  onSelectionChanged: (chosen) => selector.partyType(chosen.first),
+                  onSelectionChanged: (chosen) =>
+                      selector.partyType(chosen.first),
                 ),
                 const SizedBox(height: 12),
                 AppDropdownField<String>(
@@ -295,9 +295,7 @@ class _BalanceRow extends StatelessWidget {
             StatusBadge(
               label: owed >= 0 ? 'Outstanding' : 'In advance',
               tone: owed >= 0 ? BadgeTone.warning : BadgeTone.info,
-              icon: owed >= 0
-                  ? Icons.schedule_outlined
-                  : Icons.trending_up,
+              icon: owed >= 0 ? Icons.schedule_outlined : Icons.trending_up,
             ),
           ],
         ),
@@ -346,10 +344,7 @@ class _EntryList extends ConsumerWidget {
             ),
           );
         }
-        return _EntryTile(
-          entry: page.entries[index],
-          partyType: partyType,
-        );
+        return _EntryTile(entry: page.entries[index], partyType: partyType);
       },
     );
   }
@@ -423,10 +418,7 @@ class _EntryTile extends StatelessWidget {
                         : theme.colorScheme.primary,
                   ),
                 ),
-                Text(
-                  _effectLabel(effect),
-                  style: theme.textTheme.bodySmall,
-                ),
+                Text(_effectLabel(effect), style: theme.textTheme.bodySmall),
               ],
             ),
           ],
