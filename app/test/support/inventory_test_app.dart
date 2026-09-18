@@ -4,10 +4,12 @@
 library;
 
 import 'package:app/core/router/routes.dart';
+import 'package:app/data/models/product.dart';
 import 'package:app/features/auth/application/pharmacy_scope.dart';
 import 'package:app/features/inventory/data/inventory_repository.dart';
 import 'package:app/features/inventory/presentation/expiry_calendar_screen.dart';
 import 'package:app/features/inventory/presentation/inventory_screen.dart';
+import 'package:app/features/products/data/products_repository.dart';
 import 'package:app/features/products/presentation/products_detail_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -15,6 +17,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 
 import 'fake_inventory_repository.dart';
+import 'fake_products_repository.dart';
 
 /// A router carrying the inventory screens and the one product screen they can
 /// navigate to.
@@ -51,6 +54,7 @@ GoRouter inventoryTestRouter({String initialLocation = Routes.inventory}) =>
 Future<GoRouter> pumpInventoryApp(
   WidgetTester tester, {
   required FakeInventoryRepository repository,
+  FakeProductsRepository? products,
   String initialLocation = Routes.inventory,
 }) async {
   tester.view.physicalSize = const Size(1200, 4000);
@@ -69,6 +73,12 @@ Future<GoRouter> pumpInventoryApp(
       overrides: [
         inventoryRepositoryProvider.overrideWithValue(repository),
         requirePharmacyIdProvider.overrideWith((ref) => 'ph-1'),
+        // The expiry screens name their rows through the products repository,
+        // which owns product names - so they need a fake of it even though the
+        // rows themselves come from the inventory fake.
+        productsRepositoryProvider.overrideWithValue(
+          products ?? FakeProductsRepository(products: const <Product>[]),
+        ),
       ],
       child: MaterialApp.router(routerConfig: router),
     ),

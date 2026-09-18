@@ -12,6 +12,13 @@ abstract final class Formatters {
   /// Formats [amount] as Indian-grouped rupees, e.g. `₹1,23,456.00`.
   static String currency(num amount) => _currency.format(amount);
 
+  /// Formats [amount] as Indian-grouped digits with two decimals and no symbol,
+  /// e.g. `1,23,456.00`.
+  ///
+  /// For the one place a symbol will not print: a thermal receipt, whose code page
+  /// usually has no rupee glyph (and whose PDF twin has no font for one either).
+  static String amount(num amount) => _amount.format(amount);
+
   /// Formats [date] as `18/09/2026`.
   static String dateDdMmYyyy(DateTime date) => _ddMmYyyy.format(date);
 
@@ -47,6 +54,9 @@ abstract final class Formatters {
     symbol: '₹',
     decimalDigits: 2,
   );
+  // The Indian lakh/crore grouping, spelled out because this one carries no
+  // symbol at all: `NumberFormat.currency` would decide where a symbol goes.
+  static final NumberFormat _amount = NumberFormat('#,##,##0.00', 'en_IN');
   static final DateFormat _ddMmYyyy = DateFormat('dd/MM/yyyy');
   static final DateFormat _ddMmmYyyy = DateFormat('dd MMM yyyy');
   static final DateFormat _ddMmmYyyyHm = DateFormat('dd MMM yyyy HH:mm');

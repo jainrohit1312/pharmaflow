@@ -304,6 +304,82 @@ class ProductsRepository {
     }
   }
 
+  /// Names of [productIds], keyed by id.
+  ///
+  /// For screens that hold a stored product id and have to name it:
+  /// `batch_status` and `sale_item` both reference a product without carrying its
+  /// name, and one request per screen beats one per row. Lives here rather than in
+  /// a feature because products own their names, and three features ask.
+  ///
+  /// Ids that cannot be read are simply absent from the result, so a caller
+  /// decides what to draw for a name it does not have.
+  Future<Map<String, String>> namesFor({
+    required String pharmacyId,
+    required List<String> productIds,
+  }) async {
+    if (productIds.isEmpty) {
+      return const <String, String>{};
+    }
+    try {
+      final rows = await _client
+          .from('products')
+          .select('id, name')
+          .eq('pharmacy_id', pharmacyId)
+          .inFilter('id', productIds);
+      return <String, String>{
+        for (final row in rows) row['id'] as String: row['name'] as String,
+      };
+    } on sb.PostgrestException catch (error) {
+      throw mapPostgrestException(
+        error,
+        fallbackMessage: 'Unable to load the product names.',
+      );
+    } on Object catch (error) {
+      throw ServerException(
+        message: 'Unable to load the product names.',
+        cause: error,
+      );
+    }
+  }
+
+  /// How many units each of [batchIds] holds, keyed by batch id.
+  ///
+  /// For the one caller that has to check availability against a set of batches
+  /// it did not fetch itself: a checkout, which holds a basket of batches chosen
+  /// over the previous minutes and has to refuse an out-of-stock line with a
+  /// message naming the product rather than the batch's uuid.
+  ///
+  /// A batch that has since been deleted is simply absent, which a caller reads as
+  /// zero.
+  Future<Map<String, int>> batchQuantitiesFor({
+    required String pharmacyId,
+    required List<String> batchIds,
+  }) async {
+    if (batchIds.isEmpty) {
+      return const <String, int>{};
+    }
+    try {
+      final rows = await _client
+          .from('product_batches')
+          .select('id, qty')
+          .eq('pharmacy_id', pharmacyId)
+          .inFilter('id', batchIds);
+      return <String, int>{
+        for (final row in rows) row['id'] as String: row['qty'] as int,
+      };
+    } on sb.PostgrestException catch (error) {
+      throw mapPostgrestException(
+        error,
+        fallbackMessage: 'Unable to check what is left in those batches.',
+      );
+    } on Object catch (error) {
+      throw ServerException(
+        message: 'Unable to check what is left in those batches.',
+        cause: error,
+      );
+    }
+  }
+
   /// Aliases recorded for [productId], newest first.
   Future<List<ProductAlias>> aliasesFor({
     required String pharmacyId,

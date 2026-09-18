@@ -3,12 +3,14 @@ library;
 
 import 'package:app/core/errors/app_exception.dart';
 import 'package:app/data/models/batch_status.dart';
+import 'package:app/data/models/product.dart';
 import 'package:app/data/models/product_stock.dart';
 import 'package:app/data/models/stock_adjustment.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import '../../support/fake_inventory_repository.dart';
+import '../../support/fake_products_repository.dart';
 import '../../support/inventory_test_app.dart';
 
 /// Taps a tab by its label, inside the tab bar.
@@ -106,10 +108,14 @@ void main() {
             expiryDate: DateTime(2026),
           ),
         ],
-        names: <String, String>{
-          'product-1': 'Dolo 650',
-          'product-2': 'Amoxicillin',
-        },
+      ),
+      // The expiry rows are named by the products repository, so the names a test
+      // expects come from the products fake.
+      products: FakeProductsRepository(
+        products: <Product>[
+          buildProduct('Dolo 650', id: 'product-1'),
+          buildProduct('Amoxicillin', id: 'product-2'),
+        ],
       ),
     );
 
@@ -133,7 +139,6 @@ void main() {
   testWidgets('records a stock correction against a batch', (tester) async {
     final repository = FakeInventoryRepository(
       batches: <BatchStatus>[buildBatch()],
-      names: <String, String>{'product-1': 'Dolo 650'},
     );
     await pumpInventoryApp(tester, repository: repository);
     await _openTab(tester, 'Expiry');
@@ -163,7 +168,6 @@ void main() {
   ) async {
     final repository = FakeInventoryRepository(
       batches: <BatchStatus>[buildBatch()],
-      names: <String, String>{'product-1': 'Dolo 650'},
     );
     await pumpInventoryApp(tester, repository: repository);
     await _openTab(tester, 'Expiry');
@@ -186,10 +190,7 @@ void main() {
     tester,
   ) async {
     final repository =
-        FakeInventoryRepository(
-            batches: <BatchStatus>[buildBatch()],
-            names: <String, String>{'product-1': 'Dolo 650'},
-          )
+        FakeInventoryRepository(batches: <BatchStatus>[buildBatch()])
           ..errorToThrow = const ValidationException(
             message: 'stock adjustment abc would take batch batch-1 below zero',
           );

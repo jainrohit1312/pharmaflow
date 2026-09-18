@@ -4,12 +4,14 @@ library;
 import 'package:app/core/router/routes.dart';
 import 'package:app/core/utils/formatters.dart';
 import 'package:app/data/models/batch_status.dart';
+import 'package:app/data/models/product.dart';
 import 'package:app/features/inventory/application/expiry_batch.dart';
 import 'package:app/features/inventory/application/expiry_calendar_controller.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import '../../support/fake_inventory_repository.dart';
+import '../../support/fake_products_repository.dart';
 import '../../support/inventory_test_app.dart';
 
 /// The current month, which is the one the calendar opens on.
@@ -86,7 +88,9 @@ void main() {
               expiryStatus: ExpiryStatus.warning,
             ),
           ],
-          names: <String, String>{'product-1': 'Dolo 650'},
+        ),
+        products: FakeProductsRepository(
+          products: <Product>[buildProduct('Dolo 650', id: 'product-1')],
         ),
         initialLocation: Routes.inventoryCalendar,
       );
@@ -112,7 +116,9 @@ void main() {
               expiryStatus: ExpiryStatus.warning,
             ),
           ],
-          names: <String, String>{'product-1': 'Dolo 650'},
+        ),
+        products: FakeProductsRepository(
+          products: <Product>[buildProduct('Dolo 650', id: 'product-1')],
         ),
         initialLocation: Routes.inventoryCalendar,
       );

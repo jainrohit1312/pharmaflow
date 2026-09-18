@@ -273,7 +273,7 @@ class _PurchaseLineEditorState extends State<PurchaseLineEditor> {
                   keyboardType: const TextInputType.numberWithOptions(
                     decimal: true,
                   ),
-                  validator: _percent,
+                  validator: Validators.percentIfPresent,
                 ),
               ],
             ),
@@ -287,7 +287,7 @@ class _PurchaseLineEditorState extends State<PurchaseLineEditor> {
                   keyboardType: const TextInputType.numberWithOptions(
                     decimal: true,
                   ),
-                  validator: _percent,
+                  validator: Validators.percentIfPresent,
                 ),
                 AppTextField(
                   controller: _hsnCode,
@@ -397,20 +397,4 @@ double _parseDouble(String raw) => double.tryParse(raw.trim()) ?? 0;
 String? _trimmedOrNull(String raw) {
   final value = raw.trim();
   return value.isEmpty ? null : value;
-}
-
-/// Accepts a blank field, otherwise a percentage between 0 and 100.
-String? _percent(String? value) {
-  final raw = value?.trim() ?? '';
-  if (raw.isEmpty) {
-    return null;
-  }
-  final parsed = double.tryParse(raw);
-  if (parsed == null) {
-    return 'Enter a number';
-  }
-  if (parsed < 0 || parsed > 100) {
-    return 'Must be between 0 and 100';
-  }
-  return null;
 }

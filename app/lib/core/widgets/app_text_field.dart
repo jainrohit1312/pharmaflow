@@ -19,6 +19,7 @@ class AppTextField extends StatefulWidget {
     this.obscureText = false,
     this.keyboardType,
     this.textInputAction,
+    this.onChanged,
     this.onSubmitted,
     this.autofillHints,
     this.enabled = true,
@@ -50,6 +51,13 @@ class AppTextField extends StatefulWidget {
 
   /// Action key shown on the soft keyboard.
   final TextInputAction? textInputAction;
+
+  /// Called on every keystroke with the field's current text.
+  ///
+  /// Forwarded to the framework's own `onChanged`. A field whose value feeds a
+  /// live total wants this rather than [onSubmitted], because a browser and a
+  /// desktop have no submit key to press.
+  final ValueChanged<String>? onChanged;
 
   /// Called when the user submits the field.
   final ValueChanged<String>? onSubmitted;
@@ -94,6 +102,7 @@ class _AppTextFieldState extends State<AppTextField> {
       autofillHints: widget.autofillHints,
       maxLines: _isObscured ? 1 : widget.maxLines,
       validator: widget.validator,
+      onChanged: widget.onChanged,
       onFieldSubmitted: widget.onSubmitted,
       decoration: InputDecoration(
         labelText: widget.label,

@@ -136,8 +136,21 @@ abstract final class Routes {
   /// Path of the detail screen for [purchaseId].
   static String purchaseDetail(String purchaseId) => '/purchase/$purchaseId';
 
-  /// Billing and point of sale (Phase 1 placeholder).
+  /// Billing and point of sale. Also the shell's Sales destination.
   static const String sales = '/sales';
+
+  /// The counter: search, basket, payment.
+  ///
+  /// Declared before [saleDetailPattern], for the same reason as [productForm]:
+  /// GoRouter matches in declaration order, so `/sales/new` would otherwise be read
+  /// as the id of a sale called "new".
+  static const String pos = '/sales/new';
+
+  /// Route pattern for one sale's bill.
+  static const String saleDetailPattern = '/sales/:saleId';
+
+  /// Path of the bill for [saleId].
+  static String saleDetail(String saleId) => '/sales/$saleId';
 
   /// Sales returns and credit notes (Phase 1 placeholder).
   ///
@@ -151,6 +164,9 @@ abstract final class Routes {
   /// [productForm]: GoRouter matches in declaration order, so `/returns/new`
   /// would otherwise be read as the id of a return called "new".
   static const String returnsForm = '/returns/new';
+
+  /// Create-sale-return form, for goods a customer brought back.
+  static const String saleReturnForm = '/returns/sale/new';
 
   /// Route pattern for one purchase return.
   static const String returnsDetailPattern = '/returns/:returnId';

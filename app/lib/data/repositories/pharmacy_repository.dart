@@ -8,6 +8,7 @@ library;
 import 'package:app/core/errors/app_exception.dart';
 import 'package:app/data/datasources/postgrest_error_mapper.dart';
 import 'package:app/data/datasources/supabase_client.dart';
+import 'package:app/data/models/pharmacy.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart' as sb;
 
@@ -24,6 +25,32 @@ class PharmacyRepository {
   PharmacyRepository(this._client);
 
   final sb.SupabaseClient _client;
+
+  /// The pharmacy row, or `null` when it cannot be read.
+  ///
+  /// For the screens that have to *print* the tenant rather than merely branch on
+  /// a field of it: a GST bill carries the seller's name, address and GSTIN, and
+  /// none of those are in `stateFor`.
+  Future<Pharmacy?> byId(String pharmacyId) async {
+    try {
+      final row = await _client
+          .from('pharmacies')
+          .select()
+          .eq('id', pharmacyId)
+          .maybeSingle();
+      return row == null ? null : Pharmacy.fromJson(row);
+    } on sb.PostgrestException catch (error) {
+      throw mapPostgrestException(
+        error,
+        fallbackMessage: 'Unable to read your pharmacy details.',
+      );
+    } on Object catch (error) {
+      throw ServerException(
+        message: 'Unable to read your pharmacy details.',
+        cause: error,
+      );
+    }
+  }
 
   /// The state this pharmacy is registered in, or `null` when it is unset.
   ///

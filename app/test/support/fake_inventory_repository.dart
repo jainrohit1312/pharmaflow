@@ -63,22 +63,21 @@ BatchStatus buildBatch({
 /// cannot be constructed without an initialised backend.
 class FakeInventoryRepository implements InventoryRepository {
   /// Creates a fake over [stock] and [batches].
+  ///
+  /// No product names: naming rows is a products-repository job
+  /// (`ProductsRepository.namesFor`), so the expiry controllers read names from the
+  /// products fake and this one never sees them.
   FakeInventoryRepository({
     List<ProductStock> stock = const <ProductStock>[],
     List<BatchStatus> batches = const <BatchStatus>[],
-    Map<String, String> names = const <String, String>{},
   }) : stock = List<ProductStock>.of(stock),
-       batches = List<BatchStatus>.of(batches),
-       names = Map<String, String>.of(names);
+       batches = List<BatchStatus>.of(batches);
 
   /// The rows the stock view holds.
   final List<ProductStock> stock;
 
   /// The rows the batch view holds.
   final List<BatchStatus> batches;
-
-  /// Product names by id.
-  final Map<String, String> names;
 
   /// The last query `stockList` was given.
   StockQuery? lastStockQuery;
@@ -173,15 +172,6 @@ class FakeInventoryRepository implements InventoryRepository {
           )
           .toList(growable: false)
         ..sort((a, b) => a.expiryDate.compareTo(b.expiryDate));
-
-  @override
-  Future<Map<String, String>> namesFor({
-    required String pharmacyId,
-    required List<String> productIds,
-  }) async => <String, String>{
-    for (final id in productIds)
-      if (names.containsKey(id)) id: names[id]!,
-  };
 
   @override
   Future<void> adjustStock({

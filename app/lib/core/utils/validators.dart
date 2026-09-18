@@ -195,6 +195,37 @@ abstract final class Validators {
     return null;
   }
 
+  /// Validates a decimal amount when one was entered, and accepts a blank value.
+  ///
+  /// For a field whose blank state has a meaning of its own: a tender left empty
+  /// at the counter means "the exact amount was paid", which is not the same as
+  /// zero and is certainly not an error.
+  static String? nonNegativeDecimalIfPresent(String? value) {
+    if ((value?.trim() ?? '').isEmpty) {
+      return null;
+    }
+    return nonNegativeDecimal(value);
+  }
+
+  /// Validates a percentage between 0 and 100 when one was entered.
+  ///
+  /// Blank passes: a line with no discount and no tax is a real line, and forcing
+  /// the counter to type `0` twice would be friction for nothing.
+  static String? percentIfPresent(String? value) {
+    final raw = value?.trim() ?? '';
+    if (raw.isEmpty) {
+      return null;
+    }
+    final parsed = double.tryParse(raw);
+    if (parsed == null) {
+      return 'Enter a number';
+    }
+    if (parsed < 0 || parsed > 100) {
+      return 'Must be between 0 and 100';
+    }
+    return null;
+  }
+
   static final RegExp _email = RegExp(r'^[\w.+-]+@[\w-]+(\.[\w-]+)+$');
   static final RegExp _uppercase = RegExp('[A-Z]');
   static final RegExp _lowercase = RegExp('[a-z]');

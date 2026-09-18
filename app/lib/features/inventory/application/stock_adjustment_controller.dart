@@ -3,10 +3,7 @@ library;
 
 import 'package:app/data/models/stock_adjustment.dart';
 import 'package:app/features/auth/application/pharmacy_scope.dart';
-import 'package:app/features/inventory/application/expiry_calendar_controller.dart';
-import 'package:app/features/inventory/application/expiry_dashboard_controller.dart';
-import 'package:app/features/inventory/application/low_stock_controller.dart';
-import 'package:app/features/inventory/application/stock_list_controller.dart';
+import 'package:app/features/inventory/application/stock_readers.dart';
 import 'package:app/features/inventory/data/inventory_repository.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
@@ -55,23 +52,10 @@ class StockAdjustmentController extends _$StockAdjustmentController {
             reason: reason,
           );
       state = const AsyncData<void>(null);
-      _refreshStockReaders();
+      refreshStockReaders(ref);
     } on Object catch (error, stackTrace) {
       state = AsyncError<void>(error, stackTrace);
       rethrow;
     }
-  }
-
-  /// Drops every cached read that a batch balance feeds.
-  ///
-  /// All four are invalidated, not just the one screen that asked: an increase
-  /// can lift a product out of the low-stock list and a decrease can put it in,
-  /// and an adjustment is exactly how a user corrects an expiry reading.
-  void _refreshStockReaders() {
-    ref
-      ..invalidate(stockListControllerProvider)
-      ..invalidate(lowStockListProvider)
-      ..invalidate(expiryBoardControllerProvider)
-      ..invalidate(expiryMonthControllerProvider);
   }
 }

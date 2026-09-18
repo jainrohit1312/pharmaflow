@@ -4,6 +4,7 @@ library;
 import 'package:app/data/models/purchase.dart';
 import 'package:app/data/models/purchase_return.dart';
 import 'package:app/features/auth/application/pharmacy_scope.dart';
+import 'package:app/features/inventory/application/stock_readers.dart';
 import 'package:app/features/purchase/data/purchases_repository.dart';
 import 'package:app/features/returns/application/purchase_returns_list_controller.dart';
 import 'package:app/features/returns/data/purchase_returns_repository.dart';
@@ -45,14 +46,12 @@ Future<List<ReturnableLine>> returnableLines(Ref ref, String purchaseId) async {
       .returnableFor(pharmacyId: pharmacyId, purchaseId: purchaseId);
 }
 
-/// Creates a purchase return, and refreshes the list it will appear in.
+/// Creates a purchase return, and refreshes everything the movement touches.
 ///
-/// The inventory views are deliberately not invalidated here. They are
-/// auto-dispose providers that refetch when their screen is next built, and the
-/// two screens that can be open while a return is written - this form and the
-/// return it opens afterwards - are not among their watchers. The one place that
-/// does invalidate them is the stock adjustment, which is written *from* the
-/// inventory screen.
+/// A return decrements a batch, so it refreshes the same four stock readers a
+/// stock adjustment does (`refreshStockReaders`, the one place that list lives -
+/// D-021). It also invalidates the list it will appear in, which is this
+/// feature's own concern.
 @riverpod
 class PurchaseReturnFormController extends _$PurchaseReturnFormController {
   @override
@@ -84,6 +83,7 @@ class PurchaseReturnFormController extends _$PurchaseReturnFormController {
           );
       state = AsyncData<PurchaseReturn?>(saved);
       ref.invalidate(purchaseReturnsListControllerProvider);
+      refreshStockReaders(ref);
       return saved;
     } on Object catch (error, stackTrace) {
       state = AsyncError<PurchaseReturn?>(error, stackTrace);

@@ -7,12 +7,18 @@ import 'package:app/data/models/product.dart';
 import 'package:app/features/products/data/products_repository.dart';
 
 /// Builds a product with only the fields a test cares about.
+///
+/// [id] defaults to `id-<name>`, which is what makes `buildProduct('Dolo 650')`
+/// usable as a stable reference in assertions. Pass it explicitly when a test has
+/// to match a product id that something else already knows, such as a batch or a
+/// sale line fixture.
 Product buildProduct(
   String name, {
+  String? id,
   ScheduleType scheduleType = ScheduleType.otc,
   bool isActive = true,
 }) => Product(
-  id: 'id-$name',
+  id: id ?? 'id-$name',
   pharmacyId: 'ph-1',
   name: name,
   scheduleType: scheduleType,
@@ -37,6 +43,12 @@ class FakeProductsRepository implements ProductsRepository {
 
   /// Offsets the controller asked for, in order.
   final List<int> requestedOffsets = <int>[];
+
+  /// The quantities [batchQuantitiesFor] answers with, by batch id.
+  ///
+  /// Set by a test that has to make a checkout see stock: the POS re-reads these
+  /// before it writes, so a test can make a basket look short.
+  final Map<String, int> batchQuantities = <String, int>{};
 
   /// The last query the controller sent.
   ProductsQuery? lastQuery;
@@ -72,6 +84,24 @@ class FakeProductsRepository implements ProductsRepository {
 
     return matching.skip(offset).take(limit).toList(growable: false);
   }
+
+  @override
+  Future<Map<String, String>> namesFor({
+    required String pharmacyId,
+    required List<String> productIds,
+  }) async => <String, String>{
+    for (final product in products)
+      if (productIds.contains(product.id)) product.id: product.name,
+  };
+
+  @override
+  Future<Map<String, int>> batchQuantitiesFor({
+    required String pharmacyId,
+    required List<String> batchIds,
+  }) async => <String, int>{
+    for (final entry in batchQuantities.entries)
+      if (batchIds.contains(entry.key)) entry.key: entry.value,
+  };
 
   @override
   dynamic noSuchMethod(Invocation invocation) => throw UnimplementedError(

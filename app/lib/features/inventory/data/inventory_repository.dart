@@ -264,40 +264,6 @@ class InventoryRepository {
     }
   }
 
-  /// Names of [productIds], keyed by id.
-  ///
-  /// `batch_status` is `product_batches` plus the expiry bucket and carries no
-  /// product name, so the expiry screens name their rows from here. One request
-  /// per screen rather than one per row.
-  Future<Map<String, String>> namesFor({
-    required String pharmacyId,
-    required List<String> productIds,
-  }) async {
-    if (productIds.isEmpty) {
-      return const <String, String>{};
-    }
-    try {
-      final rows = await _client
-          .from('products')
-          .select('id, name')
-          .eq('pharmacy_id', pharmacyId)
-          .inFilter('id', productIds);
-      return <String, String>{
-        for (final row in rows) row['id'] as String: row['name'] as String,
-      };
-    } on sb.PostgrestException catch (error) {
-      throw mapPostgrestException(
-        error,
-        fallbackMessage: 'Unable to load the product names.',
-      );
-    } on Object catch (error) {
-      throw ServerException(
-        message: 'Unable to load the product names.',
-        cause: error,
-      );
-    }
-  }
-
   /// Records a manual stock correction.
   ///
   /// The row is the whole write: `stock_apply_adjustment()` moves the batch in

@@ -34,7 +34,10 @@ import 'package:app/features/reports/presentation/reports_placeholder.dart';
 import 'package:app/features/returns/presentation/purchase_return_detail_screen.dart';
 import 'package:app/features/returns/presentation/purchase_return_form_screen.dart';
 import 'package:app/features/returns/presentation/returns_screen.dart';
-import 'package:app/features/sales/presentation/sales_placeholder.dart';
+import 'package:app/features/returns/presentation/sale_return_form_screen.dart';
+import 'package:app/features/sales/presentation/pos_screen.dart';
+import 'package:app/features/sales/presentation/sale_detail_screen.dart';
+import 'package:app/features/sales/presentation/sales_screen.dart';
 import 'package:app/features/settings/presentation/settings_placeholder.dart';
 import 'package:app/features/suppliers/presentation/suppliers_detail_screen.dart';
 import 'package:app/features/suppliers/presentation/suppliers_form_screen.dart';
@@ -246,7 +249,20 @@ final appRouterProvider = Provider<GoRouter>((ref) {
           GoRoute(
             path: Routes.sales,
             name: 'sales',
-            builder: (context, state) => const SalesPlaceholder(),
+            builder: (context, state) => const SalesScreen(),
+          ),
+          // Before the parameterised pattern, so `/sales/new` is not read as the
+          // id of a sale called "new".
+          GoRoute(
+            path: Routes.pos,
+            name: 'pos',
+            builder: (context, state) => const PosScreen(),
+          ),
+          GoRoute(
+            path: Routes.saleDetailPattern,
+            name: 'saleDetail',
+            builder: (context, state) =>
+                SaleDetailScreen(saleId: state.pathParameters['saleId']!),
           ),
           GoRoute(
             path: Routes.returns,
@@ -254,11 +270,17 @@ final appRouterProvider = Provider<GoRouter>((ref) {
             builder: (context, state) => const ReturnsScreen(),
           ),
           // Before the parameterised pattern, so `/returns/new` is not read as
-          // the id of a return called "new".
+          // the id of a return called "new". The sale-return form is a longer
+          // literal path, so it cannot collide with either.
           GoRoute(
             path: Routes.returnsForm,
             name: 'returnsForm',
             builder: (context, state) => const PurchaseReturnFormScreen(),
+          ),
+          GoRoute(
+            path: Routes.saleReturnForm,
+            name: 'saleReturnForm',
+            builder: (context, state) => const SaleReturnFormScreen(),
           ),
           GoRoute(
             path: Routes.returnsDetailPattern,

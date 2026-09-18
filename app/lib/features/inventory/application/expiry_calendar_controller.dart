@@ -4,6 +4,7 @@ library;
 import 'package:app/features/auth/application/pharmacy_scope.dart';
 import 'package:app/features/inventory/application/expiry_batch.dart';
 import 'package:app/features/inventory/data/inventory_repository.dart';
+import 'package:app/features/products/data/products_repository.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 part 'expiry_calendar_controller.g.dart';
@@ -132,13 +133,15 @@ class ExpiryMonthController extends _$ExpiryMonthController {
       from: month,
       to: lastOfMonth(month),
     );
-    final names = await repository.namesFor(
-      pharmacyId: pharmacyId,
-      productIds: batches
-          .map((batch) => batch.productId)
-          .toSet()
-          .toList(growable: false),
-    );
+    final names = await ref
+        .watch(productsRepositoryProvider)
+        .namesFor(
+          pharmacyId: pharmacyId,
+          productIds: batches
+              .map((batch) => batch.productId)
+              .toSet()
+              .toList(growable: false),
+        );
 
     final unitsByDay = <int, int>{};
     for (final batch in batches) {
