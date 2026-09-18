@@ -267,26 +267,85 @@ plausibly collide with:
 
 ---
 
-## END-OF-CHAT HANDOFF
+## CONTEXT MANAGEMENT — YOUR CALL
 
-This is the last chat with a planned successor, so there is no opening prompt to
-write for the next one. When Phase 5 and Phase 6 are complete (or context ~600k):
+Phase 5 is large: a migration with four new objects, five Edge Functions, a new
+Flutter feature for OCR, a chatbot surface, notification plumbing, and the four
+service stubs. It will not fit cleanly into a single session if compressed.
 
-1. Run all gates, paste raw output.
-2. Update `PROGRESS.md` — Phase 5 and Phase 6 COMPLETE, pruning resolved open
-   items.
-3. Create `context/chat3-summary.md`.
-4. Add any new decision to `DECISIONS.md` (next free id after **D-025** is
-   **D-026**).
-5. Output a numbered list of every file created / modified / deleted.
+**You decide the split.** You have access to the codebase, the file sizes, and
+the context meter. Work through Phase 5 in logical chunks that let you ship
+each piece at production quality — not the maximum amount that fits.
 
-If Phase 5 finishes with context to spare, carry straight on into Phase 6 rather
-than handing off mid-plan.
+**Rules for splitting:**
+
+1. **Each chunk ends in a working, gated state.** Run all five gates at the
+   end of every chunk. If a chunk's work is not shippable, don't end the chunk
+   there.
+2. **Hand off at ~60-70% context**, or earlier if response quality visibly
+   degrades (forgetting earlier files, needing re-reads of the same file,
+   losing track of the current chunk's plan). Do not push to 90%.
+3. **Each chunk gets its own handoff files:**
+   - Update `PROGRESS.md` — mark exactly what is done, what is next, and
+     current test count.
+   - Create `context/chat3a-summary.md` (or `chat3b-…`, `chat3c-…` — next
+     letter in sequence) describing what this chunk delivered.
+   - Create `context/chat3b-opening-prompt.md` (or next letter) as the brief
+     for the next chunk. Same shape as this file, scoped to that chunk.
+   - Add new decisions to `DECISIONS.md` with the next free id (D-026+).
+   - Leave the tree commit-ready.
+4. **Never compress.** Do not skip SQL tests to save context. Do not skip
+   Flutter tests. Do not stub an Edge Function. Do not leave a partial
+   migration. If a chunk would need to cut corners, split it into two.
+5. **If you finish a chunk and context has room**, you may start the next
+   chunk in the same session — but re-run all gates first, and stop at the
+   same 60-70% rule. Do not silently continue past the handoff threshold.
+
+**Suggested chunk sequence** (adjust as you see fit — this is a starting
+point, not a mandate):
+
+1. **Chunk A — Database foundation:** migration 00022 (pgvector, `products.embedding`,
+   `device_tokens`, `notification_logs`) + atomic SQL test + Dart model for
+   `DeviceToken` and `NotificationLog`. Verify the migration on the live
+   project before writing any app code that depends on it.
+2. **Chunk B — AI OCR core:** `supabase/functions/ocr-purchase-bill/` (Gemini
+   Vision) + `features/purchase_ocr/` (capture/pick, verify UI, save flow).
+   This is the biggest single feature — it may itself need to split into B1
+   (edge function) and B2 (Flutter verify UI).
+3. **Chunk C — Smart matching:** `match-product` edge function (pg_trgm +
+   pgvector) + `save-purchase-from-ocr` + alias-learning (write to
+   `product_aliases` on manual match). Also populate `products.embedding` for
+   existing products — a backfill job.
+4. **Chunk D — Notifications:** `send-notification` edge function + FCM +
+   WhatsApp Cloud API + SendGrid + `features/notifications/` + implement the
+   four service stubs.
+5. **Chunk E — Chatbot:** `chat-sql-agent` edge function + chatbot surface
+   (natural-language → SQL SELECT → RLS-scoped answer).
+6. **Chunk F — Auto-send PO:** hook into the approval flow — on approve, send
+   the PO PDF to the supplier via their `preferred_channel`. This depends on
+   Chunk D being done.
+
+Realistically, chunks B and D are each likely to need their own split. You
+decide.
+
+**When Phase 5 is fully done** (all six chunks), the last chunk's handoff
+should also preview Phase 6. Do not start Phase 6 in the same session as a
+Phase 5 chunk.
+
+**If a chunk cannot be finished before context runs low** — for example, the
+Flutter UI is half-built when you hit 70% — hand off mid-chunk with a clear
+"PARTIAL" status: what's done, what's not, what the next chat must do first.
+A clean PARTIAL handoff is far better than a rushed finish.
+
+---
 
 ## BEGIN
 
-Start with the migration: `pgvector`, `products.embedding`, `device_tokens` and
-`notification_logs`, each with a `supabase/tests/*.sql` script that is atomic,
-rolls itself back and asserts the numbers. Verify the extension and the embedding
-column against the live project before building anything on them, then build
-`features/purchase_ocr/` against a deployed `ocr-purchase-bill` function.
+Start by reading the files listed in STEP 0, output the 5-line understanding
+check, and then **propose your chunk split** — how many chunks you plan, what
+each covers, and roughly how much context each will take. Wait for my approval
+before starting the migration.
+
+Once approved, begin with Chunk A: migration 00022 with an atomic
+`supabase/tests/*.sql` script that rolls itself back and asserts the numbers,
+then the Dart models for the new tables.
