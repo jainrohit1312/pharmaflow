@@ -37,8 +37,14 @@ class PurchaseTotalsPreview extends StatelessWidget {
     final lineTotals = lines
         .map((line) => PurchaseTotals.forLine(line, split: split))
         .toList(growable: false);
-    final cgstTotal = lineTotals.fold(0.0, (sum, line) => sum + line.cgst);
-    final sgstTotal = lineTotals.fold(0.0, (sum, line) => sum + line.sgst);
+    final cgstTotal = lineTotals.fold<double>(
+      0,
+      (sum, line) => sum + line.cgst,
+    );
+    final sgstTotal = lineTotals.fold<double>(
+      0,
+      (sum, line) => sum + line.sgst,
+    );
 
     return SectionCard(
       title: 'Totals',
@@ -54,10 +60,7 @@ class PurchaseTotalsPreview extends StatelessWidget {
                 _Row(label: 'SGST', amount: sgstTotal),
               ],
             ),
-            TaxSplit.interState => _Row(
-              label: 'IGST',
-              amount: totals.taxTotal,
-            ),
+            TaxSplit.interState => _Row(label: 'IGST', amount: totals.taxTotal),
           },
           const Divider(height: 24),
           _Row(
@@ -79,12 +82,15 @@ class PurchaseTotalsPreview extends StatelessWidget {
       ),
     );
   }
-
 }
 
 /// A label and an amount, right aligned.
 class _Row extends StatelessWidget {
-  const _Row({required this.label, required this.amount, this.emphasise = false});
+  const _Row({
+    required this.label,
+    required this.amount,
+    this.emphasise = false,
+  });
 
   /// What the amount is.
   final String label;

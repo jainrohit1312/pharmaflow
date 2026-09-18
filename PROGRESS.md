@@ -1,8 +1,8 @@
 # PharmaFlow — Progress Tracker
 
 **Last Updated:** 2026-09-18
-**Current Phase:** Phase 1 COMPLETE | Phase 2 NEXT
-**Overall Status:** Masters done and gated; Phase 2 DB layer already live
+**Current Phase:** Phase 2 IN PROGRESS | purchase module COMPLETE
+**Overall Status:** Masters done and gated; Phase 2 DB layer live; purchase module (data, application and presentation) complete — inventory, batch tracking and purchase returns remain
 
 ---
 
@@ -12,7 +12,7 @@
 |---|---|---|---|---|
 | 0 | Project Setup + Schema + Auth | COMPLETE | 2026-09-18 | 2026-09-18 |
 | 1 | Product + Supplier + Customer Master | COMPLETE | 2026-09-18 | 2026-09-18 |
-| 2 | Purchase + Inventory + Batch Tracking | IN PROGRESS (DB layer complete) | 2026-09-18 | - |
+| 2 | Purchase + Inventory + Batch Tracking | IN PROGRESS (purchase complete; inventory next) | 2026-09-18 | - |
 | 3 | Sales/POS + Returns + GST Billing | PENDING | - | - |
 | 4 | Ledger + Payments + Reports | PENDING | - | - |
 | 5 | AI OCR + Smart Matching + Notifications | PENDING | - | - |
@@ -89,6 +89,7 @@
 | D-1 | 5 manual Providers remain (service stubs + router) | Low | Convert to `@riverpod` when the respective features are built |
 | T-1 | `dart run custom_lint` SDK language version notice (cosmetic) | Low | Wait for upstream analyzer fix |
 | A-1 | `anonKey` deprecated in supabase_flutter 2.17 | Low | Migrate to `publishableKey` in Phase 6 |
+| P-1 | Editing an `ordered` purchase silently returns it to `draft` — `PurchasesRepository.updateDraft` writes `status = 'draft'` unconditionally (`purchases_repository.dart`, `_totalsPayload(... status: PurchaseStatus.draft)`) | Low | Decide whether the reset is intended. If it is, the form should say so; if not, carry the status through. **Not changed** — the data layer was declared complete. |
 
 ---
 
@@ -383,8 +384,48 @@ the lines add up to the document totals; **a repeat upsert of the same batch doe
 not reset its stock**; and two payload rows for one batch are refused by Postgres
 (which is why `validateLines` exists).
 
-Still to do for the purchase module: the four screens (list, form, GRN, detail),
-their routes, and widget tests.
+### Purchase module — presentation layer [DONE]
+
+The purchase module is complete. Built after a crash mid-write of
+`purchase_line_editor.dart`; `context/chat2b-summary.md` is the detailed account.
+
+- Screens: `purchases_screen.dart` (search, supplier dropdown, status chips,
+  invoice-date range, paging), `purchase_form_screen.dart` (order: invoice
+  details and lines, no batches), `grn_screen.dart` (the receipt — reaches stock
+  and the ledger), `purchase_detail_screen.dart` (invoice, stored totals, lines
+  with batches, and the next step)
+- Widgets: `purchase_line_editor.dart` (one editor for both halves of a
+  purchase's life; `showBatchFields` is the difference), `purchase_card.dart`,
+  `purchase_filter_bar.dart`, `purchase_status_badge.dart`,
+  `purchase_locked_view.dart`
+- Routes `/purchase`, `/purchase/grn`, `/purchase/new`,
+  `/purchase/:purchaseId/edit`, `/purchase/:purchaseId/grn`,
+  `/purchase/:purchaseId` — literal segments declared before the parameterised
+  one, since declaration order is match order; `purchase_placeholder.dart`
+  deleted
+- New shared pieces: `core/widgets/app_date_field.dart` (a `FormField`-based date
+  field, so a required date reports at the field), and
+  `suppliers/application/supplier_options.dart` (`supplierOptions` — every
+  supplier, inactive included, for pickers and for naming a card)
+- `ProductPickerField` gained `selectedName`: an existing document stores a
+  line's product id and a displayed name, not the catalogue row
+- Detail totals are rendered from the document's own stored columns, because
+  those are what `ledger_auto_entry_purchase()` posted; the tax *head* is summed
+  from the lines, where it is actually stored
+- A standalone receipt (goods with no purchase order behind them) creates the
+  document as a draft and receives it in one action, so a failure in between
+  leaves a recoverable draft rather than losing the typed lines
+- Tests: 21 widget tests across the four screens, over
+  `test/support/fake_purchases_repository.dart` (which runs the real
+  `validateLines`, so a screen that skips a check the write enforces fails in the
+  test rather than in front of a user) and `test/support/purchase_test_app.dart`
+  (a mini-router, so each screen's `context.go` is exercised)
+
+Two bugs were found by those tests and fixed: a picked date never reached the
+line draft (`AppDateField.onChanged` did not `_emit()`, so the receipt was
+refused for a missing expiry the user had chosen), and the detail screen could
+show a stale document because the writing screen invalidated the list but not
+`purchaseWithLines(id)`.
 
 ### PHASE 1 COMPLETE
 
@@ -453,21 +494,38 @@ flutter test               -> +113: All tests passed!
   `colorScheme`; build one via `ColorScheme.fromSeed(brightness:)`
 - `MaterialApp` swaps themes through an `AnimatedTheme`, so widget tests
   must `pumpAndSettle` before reading a theme
+- A `SliverList` only *mounts* the children inside its viewport, so a widget
+  test asserting on a field below the fold finds nothing at all — not something
+  merely off-screen. The purchase-screen tests size the test window tall in
+  `pumpPurchaseApp` instead of scrolling to every assertion
+- A `DropdownButton` keeps every item it was given in its own subtree (an
+  `IndexedStack`), so `find.text('Arihant Distributors')` also matches the
+  closed filter button. Assert through `find.widgetWithText(SomeCard, …)`, or
+  through the chip
+- `find.text` matches an `EditableText`'s content too, so a search field holding
+  the term matches the same `find.text` the results do
+- After a write that changes a document, invalidate **the document provider as
+  well as the list**: a document provider still cached against the screen that
+  wrote it can hand the next screen the pre-write copy (found by a purchase test)
 
 ---
 
 ## Next Action
 
-Phase 2 — Purchase + Inventory + Batch tracking. Build order:
+Phase 2 — the remainder. The purchase module is done; build order from here:
 
-1. Purchase module (repository, controllers, screens). The GRN screen is the
-   complex part: it must upsert `product_batches` at `qty = 0` first, then write
-   `purchase_items` carrying `batch_id`, then move the document to `received`
-   (which is what posts stock and the supplier ledger entry).
-2. Inventory (stock view, low-stock list from `product_stock`, expiry
-   dashboard, adjustments), with the batch/expiry calendar inside it.
+1. Inventory (stock view over `product_stock`, low-stock list, expiry dashboard
+   over `batch_status`, stock adjustments), with the batch/expiry calendar
+   inside it.
+2. Batch tracking (batch list per product, expiry calendar, 30/90-day
+   near-expiry alerts).
 3. Purchase returns (extend `features/returns/`).
 4. Phase 2 gate + handoff.
 
-The Phase 2 DB automation is already live and verified, so the purchase module
-builds directly against it.
+The Phase 2 DB automation is already live and verified, so inventory builds
+directly against it: `stock_apply_adjustment()` moves its batch and raises
+`check_violation` rather than going negative, and
+`stock_update_on_purchase_return()` refuses to oversell. Outbound movements
+change quantity only — the remaining units keep the batch's cost basis (D-012).
+
+`context/chat2c-opening-prompt.md` carries the brief.

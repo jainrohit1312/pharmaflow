@@ -25,7 +25,10 @@ import 'package:app/features/onboarding/presentation/onboarding_pharmacy_screen.
 import 'package:app/features/products/presentation/products_detail_screen.dart';
 import 'package:app/features/products/presentation/products_form_screen.dart';
 import 'package:app/features/products/presentation/products_screen.dart';
-import 'package:app/features/purchase/presentation/purchase_placeholder.dart';
+import 'package:app/features/purchase/presentation/grn_screen.dart';
+import 'package:app/features/purchase/presentation/purchase_detail_screen.dart';
+import 'package:app/features/purchase/presentation/purchase_form_screen.dart';
+import 'package:app/features/purchase/presentation/purchases_screen.dart';
 import 'package:app/features/reports/presentation/reports_placeholder.dart';
 import 'package:app/features/returns/presentation/returns_placeholder.dart';
 import 'package:app/features/sales/presentation/sales_placeholder.dart';
@@ -189,10 +192,44 @@ final appRouterProvider = Provider<GoRouter>((ref) {
             name: 'inventory',
             builder: (context, state) => const InventoryPlaceholder(),
           ),
+          // Purchase: the list route first, then the routes whose first
+          // segment is a literal, then the parameterised ones. Declaration
+          // order is match order, so `/purchase/grn` must not be read as the
+          // id of a document called "grn".
           GoRoute(
             path: Routes.purchase,
             name: 'purchase',
-            builder: (context, state) => const PurchasePlaceholder(),
+            builder: (context, state) => const PurchasesScreen(),
+          ),
+          GoRoute(
+            path: Routes.purchaseGrnForm,
+            name: 'purchaseGrnForm',
+            builder: (context, state) => const GrnScreen(),
+          ),
+          GoRoute(
+            path: Routes.purchaseForm,
+            name: 'purchaseForm',
+            builder: (context, state) => const PurchaseFormScreen(),
+          ),
+          GoRoute(
+            path: Routes.purchaseEditPattern,
+            name: 'purchaseEdit',
+            builder: (context, state) => PurchaseFormScreen(
+              purchaseId: state.pathParameters['purchaseId'],
+            ),
+          ),
+          GoRoute(
+            path: Routes.purchaseGrnPattern,
+            name: 'purchaseGrn',
+            builder: (context, state) =>
+                GrnScreen(purchaseId: state.pathParameters['purchaseId']),
+          ),
+          GoRoute(
+            path: Routes.purchaseDetailPattern,
+            name: 'purchaseDetail',
+            builder: (context, state) => PurchaseDetailScreen(
+              purchaseId: state.pathParameters['purchaseId']!,
+            ),
           ),
           GoRoute(
             path: Routes.sales,

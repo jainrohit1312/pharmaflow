@@ -19,6 +19,7 @@ class ProductPickerField extends StatelessWidget {
     required this.onSelected,
     super.key,
     this.selected,
+    this.selectedName,
     this.enabled = true,
     this.label = 'Product',
     this.isRequired = true,
@@ -29,6 +30,14 @@ class ProductPickerField extends StatelessWidget {
 
   /// The product already on this line, if any.
   final Product? selected;
+
+  /// The name to show when there is no [selected] to show.
+  ///
+  /// An existing document stores a line's product id and a displayed name, not
+  /// the catalogue row itself, so a form seeded from one has a name without a
+  /// product. Without this the field would claim the line has no product and
+  /// mark it as an error.
+  final String? selectedName;
 
   /// Whether the field accepts taps.
   final bool enabled;
@@ -42,7 +51,10 @@ class ProductPickerField extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final product = selected;
+    final rawName = selected?.name ?? selectedName;
+    // Blank counts as absent: a document whose product name was never recorded
+    // is as unset as one with no product at all.
+    final name = rawName != null && rawName.trim().isNotEmpty ? rawName : null;
 
     return InkWell(
       onTap: enabled ? () => _pick(context) : null,
@@ -52,11 +64,11 @@ class ProductPickerField extends StatelessWidget {
           labelText: label,
           prefixIcon: const Icon(Icons.medication_outlined),
           suffixIcon: const Icon(Icons.search),
-          errorText: isRequired && product == null ? 'Choose a product' : null,
+          errorText: isRequired && name == null ? 'Choose a product' : null,
         ),
         child: Text(
-          product == null ? 'Search the catalogue' : product.name,
-          style: product == null
+          name ?? 'Search the catalogue',
+          style: name == null
               ? theme.textTheme.bodyMedium?.copyWith(
                   color: theme.colorScheme.onSurfaceVariant,
                 )

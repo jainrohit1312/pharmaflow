@@ -95,8 +95,39 @@ abstract final class Routes {
   /// Batch-level stock inventory (Phase 1 placeholder).
   static const String inventory = '/inventory';
 
-  /// Purchase and goods-received entry (Phase 1 placeholder).
+  /// Purchase document list. Also the shell's Purchase destination.
   static const String purchase = '/purchase';
+
+  /// Standalone goods receipt, for goods that arrive without a purchase order.
+  ///
+  /// Declared before [purchaseDetailPattern], for the same reason as
+  /// [productForm]: GoRouter matches in declaration order, so `/purchase/grn`
+  /// would otherwise be read as the id of a document called "grn".
+  static const String purchaseGrnForm = '/purchase/grn';
+
+  /// Create-purchase form.
+  ///
+  /// Before [purchaseDetailPattern] as well, so `/purchase/new` is not read as
+  /// an id.
+  static const String purchaseForm = '/purchase/new';
+
+  /// Route pattern for the purchase edit form.
+  static const String purchaseEditPattern = '/purchase/:purchaseId/edit';
+
+  /// Route pattern for one document's goods receipt.
+  static const String purchaseGrnPattern = '/purchase/:purchaseId/grn';
+
+  /// Route pattern for one purchase's detail screen.
+  static const String purchaseDetailPattern = '/purchase/:purchaseId';
+
+  /// Path of the edit form for [purchaseId].
+  static String purchaseEdit(String purchaseId) => '/purchase/$purchaseId/edit';
+
+  /// Path of the goods receipt for [purchaseId].
+  static String purchaseGrn(String purchaseId) => '/purchase/$purchaseId/grn';
+
+  /// Path of the detail screen for [purchaseId].
+  static String purchaseDetail(String purchaseId) => '/purchase/$purchaseId';
 
   /// Billing and point of sale (Phase 1 placeholder).
   static const String sales = '/sales';
