@@ -28,6 +28,17 @@ abstract final class Formatters {
   static String? dateDdMmYyyyOrNull(DateTime? d) =>
       d == null ? null : _ddMmYyyy.format(d);
 
+  /// Formats [date] as the `YYYY-MM-DD` a Postgres `date` column expects.
+  ///
+  /// Used for query parameters and inserts, not for display: PostgREST compares a
+  /// `date` column against this string, and a full timestamp would silently
+  /// compare as a different day.
+  static String dateIso(DateTime date) {
+    final month = date.month.toString().padLeft(2, '0');
+    final day = date.day.toString().padLeft(2, '0');
+    return '${date.year}-$month-$day';
+  }
+
   static final NumberFormat _currency = NumberFormat.currency(
     locale: 'en_IN',
     symbol: '₹',
