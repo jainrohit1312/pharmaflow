@@ -1,0 +1,79 @@
+name: app
+description: "PharmaFlow — multi-tenant Pharmacy ERP (Flutter client)."
+publish_to: 'none'
+
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.8.0
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  cupertino_icons: ^1.0.8
+
+  # State management
+  flutter_riverpod: ^3.0.0
+  riverpod_annotation: ^3.0.0
+
+  # Routing
+  go_router: ^14.2.0
+
+  # Backend
+  supabase_flutter: ^2.5.6
+
+  # Models
+  freezed_annotation: ^3.0.0
+  json_annotation: ^4.9.0
+
+  # Local DB (scaffold only — no tables yet, see TODO(phase-2))
+  drift: ^2.20.0
+  drift_flutter: ^0.2.0
+  sqlite3_flutter_libs: ^0.5.24
+  path_provider: ^2.1.4
+  path: ^1.9.0
+
+  # Reporting / documents
+  fl_chart: ^0.68.0
+  pdf: ^3.11.0
+  printing: ^5.12.0
+
+  # Scanning
+  mobile_scanner: ^5.2.3
+
+  # Utilities
+  intl: ^0.19.0
+  logger: ^2.4.0
+  flutter_dotenv: ^5.1.0
+  shared_preferences: ^2.3.2
+  connectivity_plus: ^6.0.5
+  cached_network_image: ^3.4.1
+  image_picker: ^1.1.2
+  permission_handler: ^11.3.1
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+
+  build_runner: ^2.4.11
+  freezed: ^3.0.0
+  json_serializable: ^6.8.0
+  riverpod_generator: ^3.0.0
+  drift_dev: ^2.20.0
+  very_good_analysis: ^6.0.0
+  custom_lint: ^0.8.0
+  # Upper bound is load-bearing: riverpod_lint 3.1.8 renamed its public
+  # entrypoint from lib/riverpod_lint.dart to lib/main.dart, while
+  # custom_lint 0.8.1 still generates a plugin client that imports
+  # `package:riverpod_lint/riverpod_lint.dart`. `^3.0.0` would let the
+  # constraint reach 3.1.8 and `dart run custom_lint` then dies with
+  # "Failed to start the plugins". 3.0.3 is the newest release whose
+  # entrypoint custom_lint 0.8.1 can load.
+  riverpod_lint: '>=3.0.0 <3.1.0'
+
+flutter:
+  uses-material-design: true
+
+  assets:
+    - .env

@@ -1,0 +1,28 @@
+# PharmaFlow analyzer configuration.
+#
+# Layered on top of `very_good_analysis`, which enables a strict Dart lint set
+# (trailing commas, single quotes, sorted directives, declared return types...).
+#
+# `custom_lint` is wired in as an analyzer plugin so that `riverpod_lint`
+# diagnostics (unregistered providers, missing overrides, misused refs) are
+# reported by the IDE and by `dart run custom_lint` in CI, alongside the
+# standard analyzer output.
+include: package:very_good_analysis/analysis_options.yaml
+
+analyzer:
+  plugins:
+    - custom_lint
+  exclude:
+    - '**/*.g.dart'
+    - '**/*.freezed.dart'
+    - '**/*.drift.dart'
+
+linter:
+  rules:
+    public_member_api_docs: false
+    lines_longer_than_80_chars: false
+    avoid_print: true
+    # Dependencies are deliberately grouped by concern (state management,
+    # routing, backend, models, local DB, ...) with explanatory comments, which
+    # is more useful than alphabetical order, so this rule is disabled.
+    sort_pub_dependencies: false

@@ -1,0 +1,37 @@
+# ─── Secrets ───────────────────────────────────────────────────────────────────
+# Hosted-only Supabase: credentials are never committed. Copy app/.env.example
+# to app/.env and fill in the hosted project URL + anon key.
+app/.env
+supabase/.env
+
+# The example templates are meant to be committed.
+!.env.example
+
+# ─── Flutter / Dart build output (root-level safety net) ───────────────────────
+# app/.gitignore already covers build/, .dart_tool/ and platform build dirs; these
+# are repeated here so the root ignore file is meaningful on its own.
+app/windows/flutter/ephemeral/
+app/**/generated_plugin_registrant.*
+app/**/generated_plugins.cmake
+app/**/generated_plugin_registrant.dart
+
+# ─── Generated code ────────────────────────────────────────────────────────────
+# Emitted by `make gen` (dart run build_runner build --delete-conflicting-outputs):
+# freezed, json_serializable, riverpod_generator and drift_dev. Not committed, so
+# diffs stay reviewable — run `make gen` after cloning or the app will not compile.
+app/lib/**/*.g.dart
+app/lib/**/*.freezed.dart
+app/lib/**/*.drift.dart
+app/test/**/*.g.dart
+app/test/**/*.freezed.dart
+
+# ─── Supabase CLI local state ──────────────────────────────────────────────────
+supabase/.branches/
+supabase/.temp/
+
+# ─── Editors / OS ──────────────────────────────────────────────────────────────
+.idea/
+.vscode/
+*.iml
+.DS_Store
+Thumbs.db

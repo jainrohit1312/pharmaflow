@@ -1,0 +1,28 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(C:\\Users\\regal\\AppData\\Local\\Pub\\Cache\\hosted\\pub.dev\\very_good_analysis-6.0.0\\lib/**)",
+      "Bash(dir *)",
+      "Bash(findstr *)",
+      "Read(C:\\Users\\regal\\AppData\\Local\\Pub\\Cache\\hosted\\pub.dev\\freezed-2.5.8\\lib/**)",
+      "WebFetch(raw.githubusercontent.com)",
+      "Bash(type *)",
+      "Read(E:\\flutter\\packages\\flutter\\lib\\src\\material\\input_decorator.dart/**)",
+      "Read(E:\\flutter\\packages\\flutter\\lib\\src\\material\\theme_data.dart/**)",
+      "Read(E:\\flutter/**)",
+      "Read(E:\\flutter\\packages\\flutter\\lib\\src\\material\\app_bar_theme.dart/**)",
+      "Read(E:\\flutter\\packages\\flutter\\lib\\src\\material/**)",
+      "Read(E:\\flutter\\packages\\flutter\\lib\\src\\material\\navigation_bar_theme.dart/**)",
+      "Read(E:\\flutter\\packages\\flutter\\lib\\src\\material\\button_style_button.dart/**)",
+      "Read(E:\\flutter\\packages\\flutter\\lib\\src\\material\\filled_button.dart/**)",
+      "Read(E:\\flutter\\bin\\cache\\dart-sdk\\lib\\_internal\\sdk_library_metadata\\lib\\libraries.dart/**)",
+      "Read(E:\\flutter\\bin\\cache\\dart-sdk\\lib\\_internal\\sdk_library_metadata\\lib/**)",
+      "Read(E:\\flutter\\packages\\flutter\\lib\\src\\material\\card_theme.dart/**)",
+      "Read(E:\\flutter\\packages\\flutter\\lib\\src\\material\\color_scheme.dart/**)",
+      "Read(C:\\Users\\regal\\AppData\\Local\\Pub\\Cache\\hosted\\pub.dev\\freezed-2.5.8\\lib\\src\\freezed_generator.dart/**)",
+      "Read(C:\\Users\\regal\\AppData\\Local\\Pub\\Cache\\hosted\\pub.dev\\freezed-2.5.8\\lib\\src/**)",
+      "Read(C:\\Users\\regal\\AppData\\Local\\Pub\\Cache\\hosted\\pub.dev\\freezed-2.5.8\\lib\\src\\templates\\concrete_template.dart/**)"
+    ]
+  },
+  "$version": 4
+}

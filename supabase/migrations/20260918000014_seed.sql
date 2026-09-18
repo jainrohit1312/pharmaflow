@@ -1,0 +1,70 @@
+-- Migration: 20260918000014_seed | Purpose: opt-in demo/bootstrap seed - inserts nothing by default
+-- Target: PostgreSQL 17 (Supabase)
+--
+-- ===========================================================================
+-- SEEDS ARE OPT-IN. This migration is intentionally a NO-OP.
+-- ===========================================================================
+--
+-- Rationale: production tenants onboard through the app (sign-up -> profiles
+-- row via handle_new_user() -> pharmacy created in-app), and demo/reference
+-- data must never leak into a live database. This file therefore inserts
+-- nothing. The examples below are commented out on purpose; uncomment them in
+-- a *local* or *preview* database only, and never commit uncommented rows.
+--
+-- The statements are written to be safely re-runnable (they target a fixed
+-- UUID / a uniquely-keyed row rather than blindly appending).
+--
+-- Note: pharmacies.gstin is guarded by a PARTIAL unique index
+-- (pharmacies_gstin_key ... where gstin is not null), so the ON CONFLICT
+-- inference below must repeat the index predicate. Any example below with a
+-- bare `on conflict do nothing` needs a unique key on that table to actually
+-- be idempotent - add one, or switch to an upsert with an explicit target.
+--
+-- --- 1. Create a demo tenant ------------------------------------------------
+-- insert into public.pharmacies (
+--   name, address, city, state, pincode, phone, email, gstin, drug_license_no
+-- ) values (
+--   'Demo Pharmacy',
+--   '12 MG Road',
+--   'Pune',
+--   'Maharashtra',
+--   '411001',
+--   '+912012345678',
+--   'demo@pharmaflow.local',
+--   '27AAAAA0000A1Z5',
+--   'DL-MH-XX-000000'
+-- )
+-- on conflict (gstin) where gstin is not null do nothing;
+--
+-- --- 2. Attach an existing auth user to that tenant as owner -----------------
+--    Replace both UUIDs: the profiles.id is the auth.users id.
+-- update public.profiles
+--    set pharmacy_id = '<uuid-of-pharmacy>',
+--        role        = 'owner',
+--        is_active   = true
+--  where id = '<uuid-of-auth-user>';
+--
+-- --- 3. Optional reference data (kept minimal and clearly fake) --------------
+-- insert into public.suppliers (pharmacy_id, name, phone, gstin)
+-- values ('<uuid-of-pharmacy>', 'Demo Distributors', '+912098765432', '27BBBBB0000B1Z4')
+-- on conflict do nothing;
+--
+-- --- 4. Optional product catalogue ------------------------------------------
+-- insert into public.products (
+--   pharmacy_id, name, generic_name, brand, hsn_code, category,
+--   schedule_type, pack_size, unit, min_stock_level, rack_location, barcode
+-- ) values (
+--   '<uuid-of-pharmacy>', 'Paracetamol 500mg', 'Paracetamol', 'DemoBrand',
+--   '30049099', 'Analgesic', 'OTC', 10, 'strip', 20, 'A-01', '8901234567890'
+-- )
+-- on conflict do nothing;
+--
+-- ===========================================================================
+-- The only executable statement in this file is the no-op guard below, which
+-- exists so migration tooling that rejects empty migrations still applies the
+-- file cleanly. It changes nothing.
+-- ===========================================================================
+do $$
+begin
+  null;
+end $$;
