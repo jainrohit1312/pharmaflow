@@ -344,6 +344,48 @@ section highlighted, mobile keeps 4 + the full drawer), plus `widget_test.dart`
 now pins `DashboardShell.destinationPaths == Routes.shellPaths` and
 `.bottomBarPaths == Routes.bottomNavPaths`.
 
+### Phase 2 — Purchase module: data + application layer [DONE]
+
+Models: `purchase.dart` (+ `PurchaseStatus`), `purchase_item.dart`,
+`purchase_draft.dart` (`PurchaseDraft` + `PurchaseLineDraft`).
+
+- `features/purchase/data/purchase_totals.dart` — line and document money math,
+  pure and separately tested. Rounds each figure before summing so a stored grand
+  total always equals the sum of its stored lines, and rounds half-away-from-zero
+  with an epsilon so `1.005` does not come out a paisa short of what Postgres
+  `numeric` would store.
+- `features/purchase/data/purchases_repository.dart` — list (supplier, status,
+  date range, search), byId, itemsFor, create, updateDraft, setStatus, receive.
+- `data/repositories/pharmacy_repository.dart` — the pharmacy's state, needed to
+  decide the GST split.
+- Application: filter/list controller with paging, form controller,
+  `purchaseWithLines`, `purchaseTaxSplit`, and `GrnController`.
+- Tests: `purchase_totals_test.dart` (12) and `grn_controller_test.dart` (6).
+
+**The receipt's write order** (D-013) now lives in one place,
+`PurchasesRepository.receive`, with the reasoning inline:
+
+1. `product_batches` upserted on `(pharmacy_id, product_id, batch_no)`
+   **without `qty`** — a new row takes the default 0, and the upsert leaves an
+   existing batch's balance alone instead of zeroing live stock;
+2. `purchase_items` replaced wholesale, now carrying `batch_id` and the line's
+   share of the tax;
+3. the header's totals **and** `status = 'received'` in one statement, because
+   `ledger_auto_entry_purchase()` reads `grand_total` off the row it is handed.
+
+**Verified against the live database** by `supabase/tests/grn_write_order.sql`
+(15 assertions, all passing, atomic and self-rolling-back), which reproduces the
+client's exact payloads and proves: a draft creates no batch; a new batch starts
+at 0 with no landed cost; lines written before receipt move nothing; receipt
+applies `qty + free_qty` for every line; the landed cost lands at 83.3333; the
+marker is stamped; the ledger posts 1344 from the same statement as the status;
+the lines add up to the document totals; **a repeat upsert of the same batch does
+not reset its stock**; and two payload rows for one batch are refused by Postgres
+(which is why `validateLines` exists).
+
+Still to do for the purchase module: the four screens (list, form, GRN, detail),
+their routes, and widget tests.
+
 ### PHASE 1 COMPLETE
 
 Delivered: three masters at full CRUD — products (multi-batch FEFO view,
