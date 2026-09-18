@@ -23,7 +23,15 @@ Stream<AuthState> authStateChanges(Ref ref) =>
 /// subscribes to the auth state stream and invalidates itself whenever the
 /// signed-in user id changes, which is how the app refreshes on login and
 /// logout.
-@riverpod
+///
+/// Kept alive because it is session state that several features read, and
+/// because the auth-state subscription is what keeps the cached profile honest:
+/// an auto-dispose controller would drop that subscription whenever no screen
+/// was listening, and a profile changed during that window (a pharmacy linked,
+/// a role changed) would go unnoticed until something rebuilt it. Being kept
+/// alive is also what lets the tenant-scope providers below it be kept alive,
+/// which `riverpod_lint` requires.
+@Riverpod(keepAlive: true)
 class AuthController extends _$AuthController {
   @override
   Future<Profile?> build() async {
@@ -38,6 +46,16 @@ class AuthController extends _$AuthController {
         return;
       }
       if (authState.session?.user.id != signedInUserId) {
+        ref.invalidateSelf();
+        return;
+      }
+      // A token refresh is the only signal that the profile row itself may have
+      // changed underneath an already-signed-in user: an owner linking this
+      // account to a pharmacy, changing its role, or the row being edited
+      // directly in the database. Without this the cached profile - including a
+      // null `pharmacy_id` - survives until the user signs out and back in,
+      // which is the failure that was reported.
+      if (authState.event == AuthChangeEvent.tokenRefreshed) {
         ref.invalidateSelf();
       }
     });

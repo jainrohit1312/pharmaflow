@@ -21,7 +21,12 @@ part 'auth_repository.g.dart';
 /// Generated: `riverpod_generator` emits `authRepositoryProvider` from this
 /// function name, so consumers are unaffected by the move off a hand-written
 /// `Provider`.
-@riverpod
+///
+/// Kept alive because it is stateless plumbing over process-wide state: the
+/// client it wraps lives for the whole app run, so re-deriving this per screen
+/// gains nothing. It also sits in the kept-alive auth chain that
+/// `riverpod_lint` requires to be consistent.
+@Riverpod(keepAlive: true)
 AuthRepository authRepository(Ref ref) =>
     AuthRepository(ref.watch(supabaseClientProvider));
 

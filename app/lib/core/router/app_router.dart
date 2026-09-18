@@ -8,21 +8,31 @@ library;
 
 import 'package:app/core/router/routes.dart';
 import 'package:app/core/widgets/error_view.dart';
+import 'package:app/data/models/profile.dart';
 import 'package:app/features/auth/application/auth_controller.dart';
 import 'package:app/features/auth/data/auth_repository.dart';
 import 'package:app/features/auth/presentation/login_screen.dart';
 import 'package:app/features/auth/presentation/register_screen.dart';
 import 'package:app/features/auth/presentation/splash_screen.dart';
+import 'package:app/features/customers/presentation/customers_detail_screen.dart';
+import 'package:app/features/customers/presentation/customers_form_screen.dart';
+import 'package:app/features/customers/presentation/customers_screen.dart';
 import 'package:app/features/dashboard/presentation/dashboard_home.dart';
 import 'package:app/features/dashboard/presentation/dashboard_shell.dart';
 import 'package:app/features/inventory/presentation/inventory_placeholder.dart';
 import 'package:app/features/ledger/presentation/ledger_placeholder.dart';
-import 'package:app/features/products/presentation/products_placeholder.dart';
+import 'package:app/features/onboarding/presentation/onboarding_pharmacy_screen.dart';
+import 'package:app/features/products/presentation/products_detail_screen.dart';
+import 'package:app/features/products/presentation/products_form_screen.dart';
+import 'package:app/features/products/presentation/products_screen.dart';
 import 'package:app/features/purchase/presentation/purchase_placeholder.dart';
 import 'package:app/features/reports/presentation/reports_placeholder.dart';
 import 'package:app/features/returns/presentation/returns_placeholder.dart';
 import 'package:app/features/sales/presentation/sales_placeholder.dart';
 import 'package:app/features/settings/presentation/settings_placeholder.dart';
+import 'package:app/features/suppliers/presentation/suppliers_detail_screen.dart';
+import 'package:app/features/suppliers/presentation/suppliers_form_screen.dart';
+import 'package:app/features/suppliers/presentation/suppliers_screen.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -41,11 +51,30 @@ final appRouterProvider = Provider<GoRouter>((ref) {
       final location = state.uri.path;
       final isAuthLocation =
           location == Routes.login || location == Routes.register;
+      final isOnboarding = location == Routes.onboardingPharmacy;
 
       if (session == null) {
         return isAuthLocation ? null : Routes.login;
       }
       if (location == Routes.splash || isAuthLocation) {
+        return Routes.dashboard;
+      }
+
+      // Whether this account has a pharmacy decides where it belongs, and the
+      // profile arrives after the session does. While it is still loading there
+      // is no answer yet: sending a linked user into onboarding would be the
+      // same mistake as reporting a loading profile as "unlinked", one layer up.
+      final profileState = ref.read(authControllerProvider);
+      if (profileState.isLoading && !profileState.hasValue) {
+        return null;
+      }
+      final profile = profileState.value;
+      final needsOnboarding = profile != null && profile.pharmacyId == null;
+
+      if (needsOnboarding && !isOnboarding) {
+        return Routes.onboardingPharmacy;
+      }
+      if (!needsOnboarding && isOnboarding) {
         return Routes.dashboard;
       }
       return null;
@@ -66,6 +95,11 @@ final appRouterProvider = Provider<GoRouter>((ref) {
         name: 'register',
         builder: (context, state) => const RegisterScreen(),
       ),
+      GoRoute(
+        path: Routes.onboardingPharmacy,
+        name: 'onboardingPharmacy',
+        builder: (context, state) => const OnboardingPharmacyScreen(),
+      ),
       ShellRoute(
         builder: (context, state, child) => DashboardShell(child: child),
         routes: <RouteBase>[
@@ -77,7 +111,78 @@ final appRouterProvider = Provider<GoRouter>((ref) {
           GoRoute(
             path: Routes.products,
             name: 'products',
-            builder: (context, state) => const ProductsPlaceholder(),
+            builder: (context, state) => const ProductsScreen(),
+          ),
+          // Declared before the parameterised routes: GoRouter matches in
+          // order, so `/products/new` would otherwise be read as a product id.
+          GoRoute(
+            path: Routes.productForm,
+            name: 'productForm',
+            builder: (context, state) => const ProductsFormScreen(),
+          ),
+          GoRoute(
+            path: Routes.productEditPattern,
+            name: 'productEdit',
+            builder: (context, state) => ProductsFormScreen(
+              productId: state.pathParameters['productId'],
+            ),
+          ),
+          GoRoute(
+            path: Routes.productDetailPattern,
+            name: 'productDetail',
+            builder: (context, state) => ProductsDetailScreen(
+              productId: state.pathParameters['productId']!,
+            ),
+          ),
+          // Masters: the flat list route, then the create form, then the
+          // parameterised routes - declaration order is match order.
+          GoRoute(
+            path: Routes.suppliers,
+            name: 'suppliers',
+            builder: (context, state) => const SuppliersScreen(),
+          ),
+          GoRoute(
+            path: Routes.supplierForm,
+            name: 'supplierForm',
+            builder: (context, state) => const SuppliersFormScreen(),
+          ),
+          GoRoute(
+            path: Routes.supplierEditPattern,
+            name: 'supplierEdit',
+            builder: (context, state) => SuppliersFormScreen(
+              supplierId: state.pathParameters['supplierId'],
+            ),
+          ),
+          GoRoute(
+            path: Routes.supplierDetailPattern,
+            name: 'supplierDetail',
+            builder: (context, state) => SuppliersDetailScreen(
+              supplierId: state.pathParameters['supplierId']!,
+            ),
+          ),
+          GoRoute(
+            path: Routes.customers,
+            name: 'customers',
+            builder: (context, state) => const CustomersScreen(),
+          ),
+          GoRoute(
+            path: Routes.customerForm,
+            name: 'customerForm',
+            builder: (context, state) => const CustomersFormScreen(),
+          ),
+          GoRoute(
+            path: Routes.customerEditPattern,
+            name: 'customerEdit',
+            builder: (context, state) => CustomersFormScreen(
+              customerId: state.pathParameters['customerId'],
+            ),
+          ),
+          GoRoute(
+            path: Routes.customerDetailPattern,
+            name: 'customerDetail',
+            builder: (context, state) => CustomersDetailScreen(
+              customerId: state.pathParameters['customerId']!,
+            ),
           ),
           GoRoute(
             path: Routes.inventory,
@@ -127,18 +232,27 @@ final appRouterProvider = Provider<GoRouter>((ref) {
 /// Bridges the auth state stream into a [Listenable] for [GoRouter].
 class _AuthRouterRefresh extends ChangeNotifier {
   _AuthRouterRefresh(this._ref) {
-    _subscription = _ref.listen<AsyncValue<sb.AuthState>>(
+    _authState = _ref.listen<AsyncValue<sb.AuthState>>(
       authStateChangesProvider,
+      (previous, next) => notifyListeners(),
+    );
+    // The profile is listened to as well, not just the session: the redirect has
+    // to know whether the account has a pharmacy, and that answer arrives after
+    // the session does - including right after onboarding links one.
+    _profile = _ref.listen<AsyncValue<Profile?>>(
+      authControllerProvider,
       (previous, next) => notifyListeners(),
     );
   }
 
   final Ref _ref;
-  late final ProviderSubscription<AsyncValue<sb.AuthState>> _subscription;
+  late final ProviderSubscription<AsyncValue<sb.AuthState>> _authState;
+  late final ProviderSubscription<AsyncValue<Profile?>> _profile;
 
-  /// Drops the provider subscription held by this listenable.
+  /// Drops the provider subscriptions held by this listenable.
   void close() {
-    _subscription.close();
+    _authState.close();
+    _profile.close();
   }
 
   @override
