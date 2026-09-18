@@ -1,0 +1,107 @@
+/// A router and pump helper for the sales screens.
+///
+/// Not a `_test.dart` file, so `flutter test` does not try to run it.
+library;
+
+import 'package:app/core/router/routes.dart';
+import 'package:app/data/models/batch_status.dart';
+import 'package:app/data/models/customer.dart';
+import 'package:app/data/models/product.dart';
+import 'package:app/features/auth/application/pharmacy_scope.dart';
+import 'package:app/features/customers/application/customer_options.dart';
+import 'package:app/features/products/application/product_search.dart';
+import 'package:app/features/products/data/products_repository.dart';
+import 'package:app/features/purchase/data/purchase_totals.dart';
+import 'package:app/features/sales/application/sale_tax_split.dart';
+import 'package:app/features/sales/application/sellable_batches_controller.dart';
+import 'package:app/features/sales/data/sales_repository.dart';
+import 'package:app/features/sales/presentation/pos_screen.dart';
+import 'package:app/features/sales/presentation/sales_screen.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:go_router/go_router.dart';
+
+import 'fake_products_repository.dart';
+import 'fake_sales_repository.dart';
+
+/// A router carrying the sales list and the counter.
+///
+/// The real router is unreachable in a test - it reads a Supabase session while it
+/// builds - so the navigation these screens perform (`context.go`) is exercised
+/// against this instead. The declaration order mirrors `app_router.dart`, where
+/// `/sales/new` has to come before `/sales/:saleId`.
+///
+/// The bill the counter opens after a write is a stub on purpose: `sale_detail_
+/// screen.dart` has its own reads and is not what these tests are about, and a
+/// test that had to stand up its providers to check where the counter navigated
+/// would be testing the wrong screen.
+GoRouter salesTestRouter({String initialLocation = Routes.sales}) => GoRouter(
+  initialLocation: initialLocation,
+  routes: <RouteBase>[
+    GoRoute(
+      path: Routes.sales,
+      builder: (context, state) => const SalesScreen(),
+    ),
+    GoRoute(path: Routes.pos, builder: (context, state) => const PosScreen()),
+    GoRoute(
+      path: Routes.saleDetailPattern,
+      builder: (context, state) =>
+          Scaffold(body: Text('bill ${state.pathParameters['saleId']}')),
+    ),
+  ],
+);
+
+/// Pumps a sales screen over [repository] and lets the first load settle.
+///
+/// The test window is made tall before anything is pumped, for the same reason as
+/// the purchase helper: these screens are long, and a `SliverList` only mounts the
+/// children inside its viewport, so an assertion about something below the fold
+/// would find nothing at all rather than something merely off-screen.
+///
+/// The counter reads four things that belong to other features - the product
+/// search, the sellable batches of a product, the customers a bill may be put on,
+/// and the tax split - so all four are stubbed here rather than left to reach a
+/// real repository.
+Future<GoRouter> pumpSalesApp(
+  WidgetTester tester, {
+  required FakeSalesRepository repository,
+  FakeProductsRepository? products,
+  List<Product> searchResults = const <Product>[],
+  List<BatchStatus> batches = const <BatchStatus>[],
+  List<Customer> customers = const <Customer>[],
+  String initialLocation = Routes.sales,
+  Size size = const Size(1200, 4000),
+}) async {
+  tester.view.physicalSize = size;
+  tester.view.devicePixelRatio = 1;
+  addTearDown(tester.view.resetPhysicalSize);
+  addTearDown(tester.view.resetDevicePixelRatio);
+
+  final router = salesTestRouter(initialLocation: initialLocation);
+  addTearDown(router.dispose);
+
+  await tester.pumpWidget(
+    ProviderScope(
+      // The list is left untyped on purpose: `Override` is declared in
+      // `riverpod`, which `flutter_riverpod` does not re-export, so naming the
+      // element type would need an extra import for no benefit (D-015 notes).
+      overrides: [
+        salesRepositoryProvider.overrideWithValue(repository),
+        requirePharmacyIdProvider.overrideWith((ref) => 'ph-1'),
+        productSearchProvider.overrideWith((ref, term) async => searchResults),
+        sellableBatchesProvider.overrideWith((ref, productId) async => batches),
+        customerOptionsProvider.overrideWith((ref) async => customers),
+        saleTaxSplitProvider.overrideWith(
+          (ref, placeOfSupply) => TaxSplit.intraState,
+        ),
+        productsRepositoryProvider.overrideWithValue(
+          products ?? FakeProductsRepository(products: const <Product>[]),
+        ),
+      ],
+      child: MaterialApp.router(routerConfig: router),
+    ),
+  );
+  await tester.pumpAndSettle();
+  return router;
+}

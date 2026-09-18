@@ -1,8 +1,8 @@
 # PharmaFlow — Progress Tracker
 
 **Last Updated:** 2026-09-19
-**Current Phase:** Phase 4 COMPLETE — ledger, payments, expenses and reporting all built and gated
-**Overall Status:** Phases 0-4 done (masters, purchase, inventory, purchase returns, sales/POS, sale returns, GST billing, ledger, payments, expenses, reports); Phase 5 (AI OCR, smart matching, notifications) is next
+**Current Phase:** Phase 4 COMPLETE, and Phase 3's test gap closed — the counter, the checkout write and the sale-return form are now tested
+**Overall Status:** Phases 0-4 done and gated, 382 tests. Phase 5 (AI OCR, smart matching, notifications, chatbot) is next
 
 ---
 
@@ -102,8 +102,9 @@
 | I-2 | A purchase return is two statements (header, then lines). The lines are one atomic INSERT, so stock moves for all of them or none - but a refused set can leave a header with no lines. Deliberately not rolled back: see `PurchaseReturnsRepository.create` | Low | An `RPC` wrapping both statements when Phase 4 touches the ledger |
 | I-3 | A return form offers at most `returnablePurchaseLimit` (200) received purchases | Low | A searchable purchase picker, as the product picker already is |
 | R-1 | `README.md` still describes the project as "Phase 0 (scaffold)" with Phase 1+ screens as placeholders | Low | Refresh it in Phase 6, which owns documentation |
-| T-2 | Phase 3 shipped with **no Dart tests** — `test/features/sales/` does not exist, so nothing exercises the POS cart, the `checkout_sale` write, printing or the sale-return screen. Its database behaviour *is* covered by `supabase/tests/phase3_sale_triggers.sql` | Medium | Add them before Phase 6's polish pass, or as the first task of any chat that touches sales |
 | T-3 | The ledger screen's entries failure path is only reachable on a **first** read: while no party is selected the entries provider holds an empty page, so a failure after a party is chosen keeps that empty page and reports itself through a SnackBar rather than replacing the body. A user who cannot load a party's ledger therefore has no retry control until they navigate away and back | Low | Either treat "no party selected" as no value rather than an empty page, or give the SnackBar a retry action |
+| T-4 | `sale_return_form_screen.dart` has two paths that cannot run: the bill picker's `'Choose a bill'` validator, and `if (saleId == null) _report('Choose the bill the goods were sold on.')`. The submit button is disabled while no bill is chosen (`onPressed: isSaving \|\| saleId == null ? null : _save`) and the picker offers no clear affordance, so `_save` never sees a null bill | Low | Either drop the dead branches or make the button live and let the validator speak, so the two do not have to be kept in step |
+| T-5 | `sale_return_form_screen.dart`'s bill picker renders `sales.value ?? const <Sale>[]`, so "the sales list is still loading" and "this pharmacy has no sales" look identical — an empty, disabled dropdown with no spinner and no explanation | Low | Distinguish the two the way the ledger's party picker does, or read the sales provider's `AsyncValue` states explicitly |
 
 **Resolved this chat:** P-1 / chat2b O-1 (editing an `ordered` purchase silently
 returned it to `draft` — now reverts only when the lines change, and says so:
@@ -111,6 +112,16 @@ see D-019). Chat 3 also closed the two defects the sale-side migration shipped
 with (an `anon` EXECUTE grant and an overpayment that stored a negative balance)
 and the purchase-return credit note Phase 2 left unposted — all three in
 migration 00020.
+
+**Resolved in chat 4: T-2.** Phase 3's missing Dart tests are written: 91 of them
+(55 for sales, 36 for sale returns), none changed. `test/features/sales/` now
+exists. Two smaller items were found while writing them and are recorded above as
+T-4 and T-5 — both dead or ambiguous UI in the sale-return form, neither a
+behavioural defect. **Two things T-2 named are still untested**, for reasons
+rather than for lack of trying: `invoice_printer.dart` (its `printReceipt` lays
+out the PDF *and* calls `Printing.layoutPdf` in one method, so a test would have to
+mock a platform channel rather than assert a document — the fix is to extract the
+document builder) and `sale_detail_screen.dart` (the bill the counter opens).
 
 ---
 
@@ -132,6 +143,72 @@ environment:
 Changing any pin above requires explicit user approval (see DECISIONS.md D-007).
 
 ---
+
+## Chat 4 Progress (T-2 closure — Phase 3's tests)
+
+Phase 3 shipped with no Dart tests at all. That gap is closed. **No product code
+changed**, so there is no migration and no new decision; the two items the work
+turned up are recorded as T-4 and T-5 above.
+
+### Sales — 55 tests
+
+- `sales/data/sale_totals_test.dart` — the money math: line and document totals,
+  the discount moving the taxable value, the intra/inter-state split, the two
+  halves adding back to the tax (the case where rounding each half independently
+  would charge a paisa that was never due), half-away-from-zero rounding at
+  `1.005`, and what a tender may record.
+- `sales/application/pos_controller_test.dart` — the basket: defaults from the
+  batch (counter price, MRP fallback, the common slab, the schedule snapshot), a
+  second scan merging into the line already there, a different batch of the same
+  product being a line of its own, every edit recomputing the totals, and
+  `withCustomer(null)` clearing (the `copyWith` trap).
+- `sales/application/sale_checkout_controller_test.dart` — the write: the payload's
+  lines and totals, the document totals deliberately **absent** from it,
+  availability re-read before the write (a short line never reaches the till), the
+  balance-with-no-customer refusal, a credit sale with a customer, an over-tender
+  clamped so no negative balance is stored, and a failed write leaving the basket.
+- `sales/presentation/pos_screen_test.dart` — the counter: the empty basket with no
+  till, the batch chooser (FEFO head marked, and a choice rather than an automatic
+  pick), the line rendering, quantity/rate/slab edits moving the bill, the change
+  on an over-tender, and a written sale opening its bill.
+- `sales/presentation/sales_screen_test.dart` — the list: empty state, rows with
+  their customer and status, search narrowing (past the debounce), a status chip,
+  the filtered empty state with Clear, and a failed read with a working retry.
+
+### Sale returns — 36 tests
+
+- `returns/application/sale_return_form_controller_test.dart` —
+  `SaleReturnableLine.returnable` as `qty - alreadyReturned` (a fully returned line,
+  and an over-returned one clamping to 0 rather than going negative), an empty
+  `batchId` blocking the line, the proportional slice from the line's **stored**
+  `totalAmount`/`taxAmount` (a discounted line, where `qty x rate` would give a
+  different and larger answer — D-020's rule), the write's refusals (over the cap,
+  empty set, cancelled bill), and restock / refund mode / reason reaching the row.
+- `returns/presentation/sale_return_form_screen_test.dart` — the form: the bill
+  lookup, the line list with what can still come back, the quantity cap reported at
+  the field, submit enabled/disabled, the restock switch, the refund mode, a
+  refused write left in place and retried, and a failed line read with a retry.
+
+### Support
+
+Four new doubles and two mini-routers in `test/support/`, all following the
+existing shape: `fake_sales_repository.dart` (whose `checkout` sums the payload's
+own lines into the document it returns, as `checkout_sale()` does),
+`fake_sale_returns_repository.dart` (which re-runs the real cap, blocked-line,
+empty-set and cancelled-sale rules), `sales_test_app.dart` and
+`sale_returns_test_app.dart`.
+
+### Gate output at completion
+
+```
+dart format lib test                      -> 0 changed (tree is formatter-clean)
+dart run build_runner build --delete...   -> Built with build_runner; wrote 22 outputs
+dart run custom_lint                      -> No issues found!
+flutter analyze                           -> No issues found!
+flutter test                              -> +382: All tests passed!
+```
+
+(291 before; 382 now — 91 added, none changed.)
 
 ## Chat 3 Progress (Phase 3 + Phase 4)
 
@@ -740,8 +817,8 @@ flutter test               -> +113: All tests passed!
 
 ## Next Action
 
-**Phase 5 — AI OCR + Smart Matching + Notifications.** Chat 4, per the plan:
-`context/chat2e-opening-prompt.md` carries the brief.
+**Phase 5 — AI OCR + Smart Matching + Notifications + Chatbot.** Chat 4, per the
+plan: `context/chat3-opening-prompt.md` carries the brief.
 
 What Phase 5 builds on, and must not break:
 
@@ -760,6 +837,8 @@ What Phase 5 builds on, and must not break:
   `PurchaseTotals.round2` as the shared rounding rule.
 - A document that has posted stock is corrected by a return, never by an edit
   (D-013 for purchases, and the sale side follows it: `sale_status` has no draft).
-- Two open items Phase 5 should not make worse: **T-2** (Phase 3 has no Dart
-  tests) and **T-3** (the ledger's failure path offers no retry after a party is
-  chosen). I-1 to I-3 and R-1 are still open from Phase 2.
+- Three open items Phase 5 should not make worse: **T-3** (the ledger's failure
+  path offers no retry after a party is chosen), and **T-4** / **T-5** (the
+  sale-return form's dead bill validator, and its picker where "loading" and
+  "nothing sold yet" look the same). I-1 to I-3 and R-1 are still open from
+  Phase 2.

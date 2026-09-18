@@ -209,12 +209,55 @@ context/chat2e-opening-prompt.md  the Phase 5 brief
 
 ## Still open
 
-- **T-2 (Medium)** — Phase 3 has **no Dart tests**: `test/features/sales/` does not
-  exist, so the POS cart, the `checkout_sale` write, printing and the sale-return
-  screen are unexercised. Its database behaviour *is* covered by
-  `supabase/tests/phase3_sale_triggers.sql`.
+- ~~**T-2 (Medium)** — Phase 3 has **no Dart tests**~~ — **RESOLVED**, see the
+  follow-up section at the end of this file.
 - **T-3 (Low)** — the ledger failure path above.
 - **I-1, I-2, I-3, R-1** — unchanged from Phase 2. Note I-2's suggested fix ("an
   RPC when Phase 4 touches the ledger") was *not* taken: Phase 4 posted the
   purchase-return credit note with a trigger on `purchase_returns`, so a refused
   purchase-return line set can still leave a header with no lines.
+
+---
+
+## Follow-up: T-2 closed (a later session)
+
+Phase 3's missing Dart tests are written — **91 of them, with no product code
+changed**, so there is no migration and no new decision:
+
+- **Sales (55)** — `test/features/sales/data/sale_totals_test.dart` (the money
+  math: line and document totals, the discount moving the taxable value, the
+  intra/inter-state split, the two halves adding back to the tax, half-away-from-
+  zero rounding at `1.005`, and what a tender may record);
+  `application/pos_controller_test.dart` (the basket: batch defaults, the merge
+  rule, every edit recomputing the totals, `withCustomer(null)` clearing);
+  `application/sale_checkout_controller_test.dart` (the payload, the document
+  totals deliberately absent from it, availability re-read before the write, the
+  balance-with-no-customer refusal, a credit sale, an over-tender clamped so no
+  negative balance is stored); plus widget tests for the counter and the list.
+- **Sale returns (36)** — `SaleReturnableLine.returnable` as
+  `qty - alreadyReturned` (a fully returned line, and an over-returned one
+  clamping to 0 rather than going negative), an empty `batchId` blocking the line,
+  the proportional slice from the line's **stored** `totalAmount`/`taxAmount` (a
+  discounted line, where `qty x rate` would give a different, larger answer —
+  D-020's rule), the write's refusals, and widget tests for the form.
+- **Support** — `fake_sales_repository.dart`, `fake_sale_returns_repository.dart`,
+  `sales_test_app.dart`, `sale_returns_test_app.dart`, following the existing
+  `test/support/` shape.
+
+Gates: `dart format` 0 changed, `dart run build_runner` wrote its outputs,
+`custom_lint` clean, `flutter analyze` clean, `flutter test` **+382** (291 before;
+91 added, none changed).
+
+**Still untested, and why:** `invoice_printer.dart` (its `printReceipt` lays out
+the PDF *and* calls `Printing.layoutPdf` in one method, so a test would have to
+mock a platform channel rather than assert a document) and
+`sale_detail_screen.dart` (the bill the counter opens). Two findings from the new
+tests are recorded in PROGRESS.md as **T-4** and **T-5** — both dead or ambiguous
+UI in `sale_return_form_screen.dart`, neither a behavioural defect.
+
+**One framework behaviour to know before writing another error-state widget
+test:** Riverpod 3 retries a failed provider *build* on its own backoff, so a test
+that clears a fake's failure flag and then `pumpAndSettle`s can find the retry
+already succeeded and the `ErrorView` gone. Keep the failure flag persistent, and
+clear it only immediately before the action that should recover.
+
