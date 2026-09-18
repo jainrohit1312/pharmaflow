@@ -693,3 +693,173 @@ figure and not the other), and a report nobody trusts is worse than no report.
   (`ExpenseFormController.createExpense`), because an expense moves the window it
   was recorded in.
 - Verified by `supabase/tests/phase4_report_summary.sql`.
+
+---
+
+## D-026 — The Chatbot Answers Through RPCs, Never Free-Form SQL
+
+**Date:** 2026-09-19
+
+**Status:** Active
+
+**Decision:** `chat-sql-agent` (Phase 5, Chunk E) does not generate SQL. The model
+classifies the question and extracts parameters; the answer comes from parameterised
+RPCs — `report_summary()` as it stands, plus four new ones the chatbot needs
+(`low_stock_products`, `expiring_batches`, `top_products`, `dead_stock`). Each is
+`security definer`, takes the tenant from `get_my_pharmacy_id()` rather than from an
+argument, and returns a `jsonb` envelope, the way `report_summary()` does (D-025).
+
+**Rationale:** A model that emits SQL against the caller's JWT is a prompt-injection
+runtime. Four separate reasons, any one of which is sufficient:
+
+- **Prompt injection.** The question text is user input, and the reply is a
+  statement. A pharmacy's own invoice text and product names are also attacker-
+  influenced input on the OCR path — an invoice line reading `'; drop …` should be
+  data everywhere, and in a whitelisted-RPC design it cannot be anything else.
+- **`security definer` escapes.** Every RPC in this schema runs with the owner's
+  rights. A generated statement is one more edge to reach a definer function from,
+  with arguments the model chose.
+- **Denial of service.** A conversational loop can be made to run an expensive query
+  repeatedly; a fixed RPC set has a fixed cost.
+- **Answer inconsistency.** The same question answered from two different generated
+  statements in two sessions is two answers, and a chatbot nobody can rely on is
+  worse than no chatbot.
+
+**Consequences:**
+
+- The set of questions the chatbot can answer equals the set of RPCs, so a new
+  question is a migration, reviewed like any other. That is the intended cost.
+- The four RPCs are the aggregates the reports screens want too, so they are not
+  chatbot-only work. `low_stock_products` in particular is the server-side fix for
+  **I-1** (the low-stock list currently compares `total_qty < min_stock_level` in
+  Dart over at most 500 candidates).
+- Every figure in an answer comes from the database, never from the model — the
+  model's job is to pick an RPC, fill its parameters, and phrase what came back.
+- A question that maps to no RPC is answered with "I cannot answer that" rather
+  than with a guess. The model is never asked for a number it did not receive.
+
+---
+
+## D-027 — The Embedding Is a pgvector Column the Client Never Selects
+
+**Date:** 2026-09-19
+
+**Status:** Active
+
+**Decision:** `products.embedding` is `extensions.vector(768)` (migration 00022):
+Gemini's `gemini-embedding-001` at 768 dimensions, indexed with HNSW over cosine
+distance and partial on `embedding is not null`. Every `products` read in the app
+sends an explicit projection — `ProductsRepository.projection`, built from
+`ProductsRepository.columns` — instead of PostgREST's default `*`.
+
+**Rationale:** Three parts, in order of permanence:
+
+- **768 dimensions** is ample for a catalogue of a few thousand SKUs and half the
+  row and index width of 1536. The dimension is a hard schema constant: changing it
+  later is a new column, a re-embed of the whole catalogue and a reindex.
+- **The partial index** holds only rows that can participate in a match, which is
+  what the backfill needs while it is catching up — `embedding is null` is the
+  backfill's work list, so it needs no separate marker column.
+- **`select=*` would be a payload regression.** A 768-float column serialised to
+  JSON is roughly 8 kB per row, and it would ride along on the product list, the
+  product detail and every picker that names a product, on the busiest screens in
+  the app, for data no screen displays.
+
+**Consequences:**
+
+- A rejected alternative, recorded because it is the better-looking one: hiding the
+  column from `authenticated` with column-level SELECT grants, the way D-017
+  protects `profiles.role`. It is more robust in principle (it constrains every
+  future client, including an Edge Function) and machine-checkable in the SQL test.
+  It was not taken because it rests on two behaviours that cannot be verified on
+  this host without Docker: that PostgREST expands `*` to exactly the granted
+  columns, and that `count(*)` still works for a role holding only column-level
+  SELECT. An unverifiable change on the critical master-data read path is a worse
+  trade than a payload that is merely too large. If this is revisited, revisit it
+  with a live REST call in hand.
+- The cost of the choice is a list somebody has to maintain.
+  `test/features/products/data/products_repository_columns_test.dart` keeps it in
+  step with what `Product` decodes: adding a column to the model and not to the
+  projection fails there rather than at runtime against the database.
+- Nothing in the app reads this column, and nothing in the app should. The
+  matching and backfill functions read and write it server-side, which is also why
+  D-026's RPCs are where a vector search will live.
+- The embedding's **input text** (name only, or name plus generic name and pack
+  size) is a Chunk C decision, not this one — but it must be one convention for
+  both the backfill and the live match, because two conventions produce vectors
+  that are not comparable.
+- Verified by `supabase/tests/phase5_ai_notifications.sql` (the type, the
+  dimension's enforcement by a 769-dimension refusal, and the index's method and
+  partial predicate).
+
+---
+
+## D-028 — OCR Bills Live in a Private, Path-Scoped Storage Bucket
+
+**Date:** 2026-09-19
+
+**Status:** Active
+
+**Decision:** Supplier bill images are uploaded to the private `purchase-bills`
+bucket under `<pharmacy_id>/<year>/<file>`, with four policies on `storage.objects`
+(SELECT, INSERT, UPDATE, DELETE for `authenticated`) comparing the object's first
+path segment with `get_my_pharmacy_id()`. The bucket caps uploads at 10 MB and
+allows `image/jpeg`, `image/png`, `image/webp` and `application/pdf`.
+
+**Rationale:** OCR needs bytes that both the tablet and the Edge Function can reach,
+and the function runs with the caller's JWT (D-004) — so a stored object has to be
+readable under the same tenant rule as every table. The tenant in the path is what
+makes that expressible as a single predicate, and keeps the rule in the same place
+as every other rule: the database. The size cap and the mime list are the bucket's
+own guard, so an oversized photo is refused at upload rather than by a function
+timeout half-way through a request.
+
+**Consequences:**
+
+- The bucket is created by the migration (`insert into storage.buckets …`) and not
+  by `config.toml`: a `[storage.buckets.*]` block only seeds a local stack, and this
+  project runs none (D-003).
+- No `anon` policy. A bill image requires a signed-in member of that tenant, which
+  is why the bucket is private rather than public-with-a-hard-to-guess-path.
+- The Edge Function must not *trust* a path it is handed: it reads the object with
+  the caller's JWT, so a path outside the tenant simply does not resolve. The
+  matching and OCR functions therefore take a path and re-derive its tenant, rather
+  than taking a URL.
+- A feature that needs a bill outside a signed-in session (a link for a supplier, a
+  public URL) is a signed-URL decision, not a relaxation of this policy.
+
+---
+
+## D-029 — Push Is Deferred to Phase 6; Phase 5 Stores Tokens and Dispatches Over WhatsApp/Email
+
+**Date:** 2026-09-19
+
+**Status:** Active
+
+**Decision:** Phase 5 registers device tokens in `device_tokens` and dispatches
+through `send-notification` over WhatsApp (Cloud API) and email (SendGrid), writing
+`notification_logs` for every attempt. No FCM SDK is added in Phase 5: the Firebase
+project, the web service worker and the platform credentials are Phase 6 work, which
+owns deployment. `NotificationService.getFcmToken()` returns `null` until then.
+
+**Rationale:** FCM on the web needs a Firebase project, a service-worker scope and a
+VAPID key before it needs a single line of application code, and all three have to
+be registered against a deploy target that does not exist yet. The parts a pharmacy
+uses in the meantime — an in-app notification list, a low-stock or expiry alert, a
+bill sent over WhatsApp — do not depend on push at all. Building push first would
+mean a dependency and a set of credentials chasing a deployment decision.
+
+**Consequences:**
+
+- `device_tokens` stays empty in production until Phase 6 wires registration. The
+  table, the `device_platform` enum and `notification_logs.channel = 'push'` all
+  exist now, so nothing has to be reinterpreted when it arrives.
+- `NotificationService`'s three-method surface stays as it is: `getFcmToken()`
+  returns `null`, and Chunk D decides what `init()` and `showLocal()` mean without a
+  push SDK (the in-app list is the surface that carries the message either way).
+- Phase 6's checklist gains: `firebase_core`/`firebase_messaging` (or the JS SDK and
+  a service worker for web), a VAPID key, and the registration call that fills
+  `device_tokens`.
+- The dispatch log is written for every channel from the start, so an operator
+  auditing "did we tell this supplier" gets the same answer before and after push
+  exists.

@@ -90,6 +90,42 @@ class ProductsRepository {
     'barcode',
   ];
 
+  /// The projection every `products` read uses.
+  ///
+  /// Spelled out rather than left as PostgREST's default `*` because the table
+  /// carries an `embedding` column (migration 00022): a 768-dimension vector no
+  /// screen displays, which `*` would return on every row - roughly 8 kB of floats
+  /// per product on the list, the detail screen, and every picker that names a
+  /// product. The matching functions read that column server-side; the client
+  /// never needs it.
+  ///
+  /// Add a column here when a screen needs it. Unlike `*`, this list is a
+  /// decision: a column missing from it reaches the app as an absent key, so the
+  /// test in `test/features/products/data/products_repository_columns_test.dart`
+  /// keeps it in step with what [Product] decodes.
+  static const List<String> columns = <String>[
+    'id',
+    'pharmacy_id',
+    'name',
+    'generic_name',
+    'brand',
+    'manufacturer',
+    'hsn_code',
+    'category',
+    'schedule_type',
+    'pack_size',
+    'unit',
+    'min_stock_level',
+    'rack_location',
+    'barcode',
+    'is_active',
+    'created_at',
+    'updated_at',
+  ];
+
+  /// [columns] as a PostgREST projection.
+  static String get projection => columns.join(',');
+
   /// Loads one page of products matching [query], ordered by name.
   Future<List<Product>> list({
     required String pharmacyId,
@@ -100,7 +136,7 @@ class ProductsRepository {
     try {
       var request = _client
           .from('products')
-          .select()
+          .select(projection)
           .eq('pharmacy_id', pharmacyId);
 
       final search = buildIlikeOrFilter(
@@ -145,7 +181,7 @@ class ProductsRepository {
     try {
       final row = await _client
           .from('products')
-          .select()
+          .select(projection)
           .eq('pharmacy_id', pharmacyId)
           .eq('id', productId)
           .maybeSingle();
@@ -175,7 +211,7 @@ class ProductsRepository {
             ...draft.toJson(),
             'pharmacy_id': pharmacyId,
           })
-          .select()
+          .select(projection)
           .single();
       return Product.fromJson(row);
     } on sb.PostgrestException catch (error) {
@@ -204,7 +240,7 @@ class ProductsRepository {
           .update(draft.toJson())
           .eq('pharmacy_id', pharmacyId)
           .eq('id', productId)
-          .select()
+          .select(projection)
           .single();
       return Product.fromJson(row);
     } on sb.PostgrestException catch (error) {

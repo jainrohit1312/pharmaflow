@@ -1,8 +1,8 @@
 # PharmaFlow — Progress Tracker
 
 **Last Updated:** 2026-09-19
-**Current Phase:** Phase 4 COMPLETE, and Phase 3's test gap closed — the counter, the checkout write and the sale-return form are now tested
-**Overall Status:** Phases 0-4 done and gated, 382 tests. Phase 5 (AI OCR, smart matching, notifications, chatbot) is next
+**Current Phase:** Phase 5 IN PROGRESS — Chunk A (database foundation) landed and verified on the hosted project
+**Overall Status:** Phases 0-4 done and gated; Phase 5's migration 00022, its SQL test and the two new models are in, 397 tests
 
 ---
 
@@ -15,7 +15,7 @@
 | 2 | Purchase + Inventory + Batch Tracking | COMPLETE | 2026-09-18 | 2026-09-18 |
 | 3 | Sales/POS + Returns + GST Billing | COMPLETE | 2026-09-18 | 2026-09-18 |
 | 4 | Ledger + Payments + Reports | COMPLETE | 2026-09-18 | 2026-09-19 |
-| 5 | AI OCR + Smart Matching + Notifications | PENDING | - | - |
+| 5 | AI OCR + Smart Matching + Notifications | IN PROGRESS (Chunk A done) | 2026-09-19 | - |
 | 6 | Testing + Deployment + Documentation | PENDING | - | - |
 
 ---
@@ -51,11 +51,12 @@
 
 ### Backend (Supabase Hosted)
 
-- 21 migrations applied, all idempotent (`supabase migration list`: 21/21 local
+- 22 migrations applied, all idempotent (`supabase migration list`: 22/22 local
   and remote match)
-- 22 tables and 2 views (`product_stock`, `batch_status`), RLS enforced on every
-  business table; migrations 00019-00021 added one table (`invoice_counters`)
-  and no view
+- 24 tables and 2 views (`product_stock`, `batch_status`), RLS enforced on every
+  business table; migration 00022 added `device_tokens`, `notification_logs`, the
+  `products.embedding` column and the private `purchase-bills` storage bucket
+  (00019-00021 added one table, `invoice_counters`, and no view)
 - Helper functions: `get_my_pharmacy_id()`, `get_my_role()`,
   `normalize_product_name()` (identity and scope); the automation layer
   (`ledger_auto_entry_*`, `stock_*`, `write_audit_log`, `set_updated_at`,
@@ -105,6 +106,7 @@
 | T-3 | The ledger screen's entries failure path is only reachable on a **first** read: while no party is selected the entries provider holds an empty page, so a failure after a party is chosen keeps that empty page and reports itself through a SnackBar rather than replacing the body. A user who cannot load a party's ledger therefore has no retry control until they navigate away and back | Low | Either treat "no party selected" as no value rather than an empty page, or give the SnackBar a retry action |
 | T-4 | `sale_return_form_screen.dart` has two paths that cannot run: the bill picker's `'Choose a bill'` validator, and `if (saleId == null) _report('Choose the bill the goods were sold on.')`. The submit button is disabled while no bill is chosen (`onPressed: isSaving \|\| saleId == null ? null : _save`) and the picker offers no clear affordance, so `_save` never sees a null bill | Low | Either drop the dead branches or make the button live and let the validator speak, so the two do not have to be kept in step |
 | T-5 | `sale_return_form_screen.dart`'s bill picker renders `sales.value ?? const <Sale>[]`, so "the sales list is still loading" and "this pharmacy has no sales" look identical — an empty, disabled dropdown with no spinner and no explanation | Low | Distinguish the two the way the ledger's party picker does, or read the sales provider's `AsyncValue` states explicitly |
+| N-1 | Push delivery is not wired: `device_tokens` stays empty and `NotificationService.getFcmToken()` returns `null`. Phase 5 dispatches over WhatsApp/Email and shows the in-app list; the Firebase project, the web service worker, the VAPID key and the registration call are Phase 6's (D-029) | Medium | Phase 6, which owns the deploy target the credentials must be registered against |
 
 **Resolved this chat:** P-1 / chat2b O-1 (editing an `ordered` purchase silently
 returned it to `draft` — now reverts only when the lines change, and says so:
@@ -143,6 +145,115 @@ environment:
 Changing any pin above requires explicit user approval (see DECISIONS.md D-007).
 
 ---
+
+## Chat 4 Progress — Chunk A: Phase 5 database foundation [DONE]
+
+Phase 5 is built in chunks, each ending gated. **Chunk A is the storage layer** —
+the objects the AI features read and write. No matching, OCR or dispatch logic
+yet; that is chunks B-E.
+
+### Migration `20260919000022_phase5_ai_notifications.sql`
+
+Applied and verified on the hosted project (`supabase migration list`: 22/22 local
+and remote match). A new file, never an edit to an applied one (D-013) — 00021 was
+the head.
+
+- **pgvector**, installed into the `extensions` schema and referenced qualified, so
+  nothing depends on `postgres`'s search_path.
+- **`products.embedding`** — `extensions.vector(768)`, nullable (`NULL` is the
+  backfill's work list), with an HNSW index over cosine distance, partial on
+  `embedding is not null`. `gemini-embedding-001`; the dimension is effectively
+  permanent (D-027).
+- **`device_tokens`** — one row per device a notification can reach. `token` is
+  unique table-wide, so a device that changes hands is re-pointed rather than
+  duplicated. RLS is both tenant- *and* user-scoped: a token is a way to reach a
+  physical device, so a colleague is not entitled to enumerate or revoke it. A
+  server-side fan-out will read tokens through a `security definer` RPC rather than
+  by widening that policy.
+- **`notification_logs`** — what was dispatched, to whom, over which channel, and
+  what the provider did with it: the delivery record an operator audits, beside
+  `notifications`, which is the user-addressed in-app list a recipient reads.
+  Select/insert/update policies and **no delete policy** — a log a client can erase
+  is not a log, and the assertion is that a delete affects 0 rows rather than that
+  it raises.
+- Three new enums (`device_platform`, `notification_status`,
+  `notification_recipient_type`); `notification_channel` from 00002 is reused so
+  the in-app list and the dispatch log cannot disagree about what `'whatsapp'`
+  means.
+- **The `purchase-bills` bucket** — private, capped at 10 MB, mime-restricted, with
+  four `storage.objects` policies comparing the object's first path segment with
+  `get_my_pharmacy_id()` (D-028). Created by the migration, because a
+  `config.toml` bucket block only seeds a local stack this project does not run.
+
+### Verified by `supabase/tests/phase5_ai_notifications.sql` — 29 assertions
+
+Atomic, self-rolling-back, and it impersonates the way `profile_privileges.sql`
+does. All 29 PASS against the live database, and the residue check afterwards
+reported zero ZZTEST pharmacies, zero device tokens, zero dispatch rows and zero
+stored objects. It proves, among others: the column really is
+`extensions.vector(768)` and a 769-dimension write is **refused by the type**;
+`product_stock` does **not** carry the new column yet still resolves for the caller
+(D-021's trap); a token cannot be registered twice, against another tenant, or on
+behalf of another user, and another user's token in the same pharmacy is invisible;
+a foreign tenant's dispatch history is invisible; a delivery record survives a
+client `DELETE` (0 rows deleted, still there); and an object is writable only under
+the caller's own pharmacy folder.
+
+Three facts the test needed were **probed rather than assumed**, in a throwaway
+script that raised and rolled back: the vector column's `atttypmod` is 768; an
+`auth.users` insert auto-creates a profile, which is how the test gets a second
+user in the same tenant; and `storage.objects` accepts a direct insert that the
+policy then filters. The probe file was deleted.
+
+### Flutter — two models, and one payload fix the migration caused
+
+- `data/models/device_token.dart` — `DeviceToken` plus the `DevicePlatform` enum,
+  its DB-literal round-trip and its converter, in the shape `ScheduleType` and
+  `LedgerReferenceType` already use.
+- `data/models/notification_log.dart` — `NotificationLog` plus
+  `NotificationChannel`, `NotificationStatus` (with `isSettled`) and
+  `NotificationRecipientType`. An unknown status decodes as `failed`, not `sent`:
+  the safe reading of an outcome this build does not understand is the one that
+  prompts a look.
+- **`ProductsRepository.columns` / `.projection`** — every `products` read now names
+  its columns instead of taking PostgREST's `*`, which would otherwise have
+  returned roughly 8 kB of floats per row on the product list, the product detail
+  and every picker that names a product. Four call sites changed (`list`, `byId`,
+  `create`, `update`); the two view reads are untouched because neither
+  `product_stock` nor `batch_status` carries the vector. Recorded, with the
+  alternative that was rejected and the reason, as D-027.
+
+### Tests
+
+15 added, none changed:
+
+- `test/data/models/device_token_test.dart` — the decode, the defaults, the enum's
+  round-trip and its case-insensitive fallback.
+- `test/data/models/notification_log_test.dart` — the decode, the defaults, the
+  three enums' round-trips, `in_app` as the stored literal, the unknown-status
+  fallback, and `isSettled`.
+- `test/features/products/data/products_repository_columns_test.dart` — the
+  projection never asks for `embedding`, and is exactly the set of keys
+  `Product.fromJson` decodes, so the two cannot drift apart silently.
+
+### Gate output at completion
+
+```
+dart format lib test                      -> 3 changed, then 0 (tree is formatter-clean)
+dart run build_runner build --delete...   -> wrote 164 outputs (T-1 SDK notice only)
+dart run custom_lint                      -> No issues found!
+flutter analyze                           -> No issues found!
+flutter test                              -> +397: All tests passed!
+```
+
+(382 before; 397 now — 15 added, none changed.)
+
+### Decisions added
+
+D-026 (the chatbot answers through RPCs, never free-form SQL — and the four RPCs it
+needs give **I-1** its server-side fix), D-027 (the embedding, and the explicit
+projection that keeps it off the wire), D-028 (the private, path-scoped bill
+bucket), D-029 (push deferred to Phase 6 — now open item **N-1**).
 
 ## Chat 4 Progress (T-2 closure — Phase 3's tests)
 
@@ -817,8 +928,14 @@ flutter test               -> +113: All tests passed!
 
 ## Next Action
 
-**Phase 5 — AI OCR + Smart Matching + Notifications + Chatbot.** Chat 4, per the
-plan: `context/chat3-opening-prompt.md` carries the brief.
+**Phase 5 Chunk B — the AI OCR core.** `context/chat3b-opening-prompt.md` is the
+brief: `supabase/functions/ocr-purchase-bill/` (Gemini Vision), a real `OcrService`,
+and `features/purchase_ocr/` — pick or capture a bill, upload it to
+`purchase-bills/<pharmacy_id>/…`, show what the OCR read, let the user correct it,
+and create the purchase **through `PurchasesRepository`** (D-011/D-013) rather than
+by inserting rows. It is the largest single feature of the phase and may split into
+B1 (the function, the service and the repository) and B2 (the verify UI and the
+save).
 
 What Phase 5 builds on, and must not break:
 
@@ -840,5 +957,10 @@ What Phase 5 builds on, and must not break:
 - Three open items Phase 5 should not make worse: **T-3** (the ledger's failure
   path offers no retry after a party is chosen), and **T-4** / **T-5** (the
   sale-return form's dead bill validator, and its picker where "loading" and
-  "nothing sold yet" look the same). I-1 to I-3 and R-1 are still open from
-  Phase 2.
+  "nothing sold yet" look the same). I-1 to I-3, R-1 and the new **N-1** are still
+  open.
+- The AI substrate now exists and is verified: `products.embedding` with its HNSW
+  index (D-027), the private path-scoped `purchase-bills` bucket (D-028), and
+  `device_tokens` / `notification_logs` (00022). Chunk B uploads to the bucket;
+  chunks C-E read the vector and write the log. Do not `select *` a table that has
+  an embedding on it.
