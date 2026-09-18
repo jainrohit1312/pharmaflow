@@ -24,6 +24,9 @@ abstract final class Formatters {
   /// Formats [d] as `14:05` using the 24-hour clock.
   static String timeHm(DateTime d) => _hm.format(d);
 
+  /// Formats [date] as `September 2026`, for a month heading.
+  static String monthYear(DateTime date) => _monthYear.format(date);
+
   /// Formats [d] as `18/09/2026`, or returns `null` when [d] is `null`.
   static String? dateDdMmYyyyOrNull(DateTime? d) =>
       d == null ? null : _ddMmYyyy.format(d);
@@ -48,4 +51,5 @@ abstract final class Formatters {
   static final DateFormat _ddMmmYyyy = DateFormat('dd MMM yyyy');
   static final DateFormat _ddMmmYyyyHm = DateFormat('dd MMM yyyy HH:mm');
   static final DateFormat _hm = DateFormat('HH:mm');
+  static final DateFormat _monthYear = DateFormat('MMMM yyyy');
 }

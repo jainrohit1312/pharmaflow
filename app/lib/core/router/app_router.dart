@@ -19,7 +19,8 @@ import 'package:app/features/customers/presentation/customers_form_screen.dart';
 import 'package:app/features/customers/presentation/customers_screen.dart';
 import 'package:app/features/dashboard/presentation/dashboard_home.dart';
 import 'package:app/features/dashboard/presentation/dashboard_shell.dart';
-import 'package:app/features/inventory/presentation/inventory_placeholder.dart';
+import 'package:app/features/inventory/presentation/expiry_calendar_screen.dart';
+import 'package:app/features/inventory/presentation/inventory_screen.dart';
 import 'package:app/features/ledger/presentation/ledger_placeholder.dart';
 import 'package:app/features/onboarding/presentation/onboarding_pharmacy_screen.dart';
 import 'package:app/features/products/presentation/products_detail_screen.dart';
@@ -30,7 +31,9 @@ import 'package:app/features/purchase/presentation/purchase_detail_screen.dart';
 import 'package:app/features/purchase/presentation/purchase_form_screen.dart';
 import 'package:app/features/purchase/presentation/purchases_screen.dart';
 import 'package:app/features/reports/presentation/reports_placeholder.dart';
-import 'package:app/features/returns/presentation/returns_placeholder.dart';
+import 'package:app/features/returns/presentation/purchase_return_detail_screen.dart';
+import 'package:app/features/returns/presentation/purchase_return_form_screen.dart';
+import 'package:app/features/returns/presentation/returns_screen.dart';
 import 'package:app/features/sales/presentation/sales_placeholder.dart';
 import 'package:app/features/settings/presentation/settings_placeholder.dart';
 import 'package:app/features/suppliers/presentation/suppliers_detail_screen.dart';
@@ -190,7 +193,16 @@ final appRouterProvider = Provider<GoRouter>((ref) {
           GoRoute(
             path: Routes.inventory,
             name: 'inventory',
-            builder: (context, state) => const InventoryPlaceholder(),
+            builder: (context, state) => const InventoryScreen(),
+          ),
+          // A child of the inventory destination, declared right after it: the
+          // two share a prefix and neither is a parameterised path, so order is
+          // only cosmetic here - but a reader looking for inventory routes finds
+          // them together.
+          GoRoute(
+            path: Routes.inventoryCalendar,
+            name: 'inventoryCalendar',
+            builder: (context, state) => const ExpiryCalendarScreen(),
           ),
           // Purchase: the list route first, then the routes whose first
           // segment is a literal, then the parameterised ones. Declaration
@@ -239,7 +251,21 @@ final appRouterProvider = Provider<GoRouter>((ref) {
           GoRoute(
             path: Routes.returns,
             name: 'returns',
-            builder: (context, state) => const ReturnsPlaceholder(),
+            builder: (context, state) => const ReturnsScreen(),
+          ),
+          // Before the parameterised pattern, so `/returns/new` is not read as
+          // the id of a return called "new".
+          GoRoute(
+            path: Routes.returnsForm,
+            name: 'returnsForm',
+            builder: (context, state) => const PurchaseReturnFormScreen(),
+          ),
+          GoRoute(
+            path: Routes.returnsDetailPattern,
+            name: 'returnDetail',
+            builder: (context, state) => PurchaseReturnDetailScreen(
+              returnId: state.pathParameters['returnId']!,
+            ),
           ),
           GoRoute(
             path: Routes.ledger,

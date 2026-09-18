@@ -92,8 +92,15 @@ abstract final class Routes {
   /// Path of the detail screen for [customerId].
   static String customerDetail(String customerId) => '/customers/$customerId';
 
-  /// Batch-level stock inventory (Phase 1 placeholder).
+  /// Stock, reorder levels and expiry. Also the shell's Inventory destination.
   static const String inventory = '/inventory';
+
+  /// Expiry calendar: a month of shelf life, by day.
+  ///
+  /// A child of the inventory destination rather than a shell destination of its
+  /// own: it answers a question about the inventory, and the shell has no room
+  /// for a twelfth entry that only reads the same rows.
+  static const String inventoryCalendar = '/inventory/calendar';
 
   /// Purchase document list. Also the shell's Purchase destination.
   static const String purchase = '/purchase';
@@ -133,7 +140,23 @@ abstract final class Routes {
   static const String sales = '/sales';
 
   /// Sales returns and credit notes (Phase 1 placeholder).
+  ///
+  /// Also the purchase returns list: a pharmacy has one Returns door, and the
+  /// sale side of it arrives in Phase 3.
   static const String returns = '/returns';
+
+  /// Create-purchase-return form.
+  ///
+  /// Declared before [returnsDetailPattern], for the same reason as
+  /// [productForm]: GoRouter matches in declaration order, so `/returns/new`
+  /// would otherwise be read as the id of a return called "new".
+  static const String returnsForm = '/returns/new';
+
+  /// Route pattern for one purchase return.
+  static const String returnsDetailPattern = '/returns/:returnId';
+
+  /// Path of the detail screen for [returnId].
+  static String returnDetail(String returnId) => '/returns/$returnId';
 
   /// Customer and supplier ledgers (Phase 1 placeholder).
   static const String ledger = '/ledger';

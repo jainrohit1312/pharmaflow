@@ -92,7 +92,7 @@ abstract final class PurchaseTotals {
     required int qty,
     required double rate,
     required double discountPercent,
-  }) => _round2(
+  }) => round2(
     qty * rate -
         _discount(qty: qty, rate: rate, discountPercent: discountPercent),
   );
@@ -102,24 +102,24 @@ abstract final class PurchaseTotals {
     required int qty,
     required double rate,
     required double discountPercent,
-  }) => _round2(qty * rate * discountPercent / 100);
+  }) => round2(qty * rate * discountPercent / 100);
 
   /// Tax charged on [taxable] at [gstPercent].
   static double tax({required double taxable, required double gstPercent}) =>
-      _round2(taxable * gstPercent / 100);
+      round2(taxable * gstPercent / 100);
 
   /// The full breakdown of one line.
   static PurchaseLineTotals forLine(
     PurchaseLineDraft line, {
     required TaxSplit split,
   }) {
-    final gross = _round2(line.qty * line.purchaseRate);
+    final gross = round2(line.qty * line.purchaseRate);
     final discount = _discount(
       qty: line.qty,
       rate: line.purchaseRate,
       discountPercent: line.discountPercent,
     );
-    final taxableValue = _round2(gross - discount);
+    final taxableValue = round2(gross - discount);
     final taxValue = tax(taxable: taxableValue, gstPercent: line.gstPercent);
 
     // The second half is the difference rather than its own division, so the two
@@ -127,8 +127,8 @@ abstract final class PurchaseTotals {
     // twice, which would charge a paisa that was never due.
     final (cgst, sgst, igst) = switch (split) {
       TaxSplit.intraState => () {
-        final half = _round2(taxValue / 2);
-        return (half, _round2(taxValue - half), 0.0);
+        final half = round2(taxValue / 2);
+        return (half, round2(taxValue - half), 0.0);
       }(),
       TaxSplit.interState => (0.0, 0.0, taxValue),
     };
@@ -140,7 +140,7 @@ abstract final class PurchaseTotals {
       cgst: cgst,
       sgst: sgst,
       igst: igst,
-      total: _round2(taxableValue + taxValue),
+      total: round2(taxableValue + taxValue),
     );
   }
 
@@ -163,10 +163,10 @@ abstract final class PurchaseTotals {
     }
 
     return PurchaseDocumentTotals(
-      subTotal: _round2(subTotal),
-      discountTotal: _round2(discountTotal),
-      taxTotal: _round2(taxTotal),
-      grandTotal: _round2(grandTotal),
+      subTotal: round2(subTotal),
+      discountTotal: round2(discountTotal),
+      taxTotal: round2(taxTotal),
+      grandTotal: round2(grandTotal),
     );
   }
 
@@ -190,15 +190,20 @@ abstract final class PurchaseTotals {
     }
     return pharmacy == supplier ? TaxSplit.intraState : TaxSplit.interState;
   }
-}
 
-/// Rounds [value] to two decimals, half away from zero.
-///
-/// The epsilon covers binary representation: `1.005 * 100` is
-/// `100.49999999999999`, so without it the value rounds down and the stored
-/// figure is a paisa short of what Postgres `numeric` would have made of it.
-double _round2(double value) {
-  final scaled = value * 100;
-  final adjusted = scaled + (scaled.isNegative ? -1e-9 : 1e-9);
-  return adjusted.roundToDouble() / 100;
+  /// Rounds [value] to two decimals, half away from zero.
+  ///
+  /// Public because a purchase return's money has to land in the same place: a
+  /// return line is a slice of a line the pharmacy already paid for, and two
+  /// rounding rules in one money path is how a credit note ends up a paisa away
+  /// from the invoice it credits.
+  ///
+  /// The epsilon covers binary representation: `1.005 * 100` is
+  /// `100.49999999999999`, so without it the value rounds down and the stored
+  /// figure is a paisa short of what Postgres `numeric` would have made of it.
+  static double round2(double value) {
+    final scaled = value * 100;
+    final adjusted = scaled + (scaled.isNegative ? -1e-9 : 1e-9);
+    return adjusted.roundToDouble() / 100;
+  }
 }

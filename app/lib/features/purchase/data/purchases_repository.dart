@@ -274,6 +274,14 @@ class PurchasesRepository {
   /// Refuses once the document is received: its lines are what produced the
   /// stock and the ledger entry, and the triggers deliberately do not reverse
   /// those, so editing them would leave the two disagreeing.
+  ///
+  /// **The status it leaves behind depends on what changed (D-019).** An
+  /// `ordered` document has been sent to the supplier, so a change to its lines
+  /// makes the copy the supplier confirmed stale and puts it back to `draft` -
+  /// which `PurchaseFormScreen` reports rather than letting the reset happen
+  /// quietly. A header-only edit (notes, invoice number, invoice date) leaves the
+  /// status alone, because nothing the supplier holds has changed.
+  /// [statusAfterEdit] is that decision.
   Future<Purchase> updateDraft({
     required String pharmacyId,
     required String purchaseId,
@@ -285,7 +293,21 @@ class PurchasesRepository {
     if (invalid != null) {
       throw ValidationException(message: invalid);
     }
-    await _requireEditable(pharmacyId: pharmacyId, purchaseId: purchaseId);
+    final existing = await _requireEditable(
+      pharmacyId: pharmacyId,
+      purchaseId: purchaseId,
+    );
+    // Read before the write, because the comparison is against the lines that
+    // are about to be replaced.
+    final stored = await itemsFor(
+      pharmacyId: pharmacyId,
+      purchaseId: purchaseId,
+    );
+    final status = statusAfterEdit(
+      current: existing.status,
+      lines: lines,
+      items: stored,
+    );
 
     try {
       final headerRow = await _client
@@ -294,7 +316,7 @@ class PurchasesRepository {
             ..._headerFields(header),
             ..._totalsPayload(
               PurchaseTotals.forLines(lines, split: split),
-              status: PurchaseStatus.draft,
+              status: status,
             ),
           })
           .eq('pharmacy_id', pharmacyId)
@@ -507,12 +529,132 @@ class PurchasesRepository {
     return null;
   }
 
+  /// The status an edit leaves behind (D-019).
+  ///
+  /// Only `ordered` is at stake, because it is the one status that means the
+  /// document has left the pharmacy's hands: the supplier holds a copy. Changing
+  /// what that copy says makes it stale, so the document goes back to `draft` to
+  /// be confirmed again; a header-only edit leaves the order standing.
+  ///
+  /// Pure and public for the same reason as [validateLines]: the fake repository
+  /// the screen tests run against calls this exact function, so a screen cannot
+  /// be tested against a friendlier rule than the one the real write applies.
+  static PurchaseStatus statusAfterEdit({
+    required PurchaseStatus current,
+    required List<PurchaseLineDraft> lines,
+    required List<PurchaseItem> items,
+  }) {
+    if (current == PurchaseStatus.ordered &&
+        linesDiffer(lines: lines, items: items)) {
+      return PurchaseStatus.draft;
+    }
+    return current;
+  }
+
+  /// Whether [lines] say something different from the stored [items].
+  ///
+  /// A value comparison, not an identity one: an edit rewrites the document's
+  /// lines wholesale, so the arriving drafts carry no ids to match on.
+  ///
+  /// It compares a *multiset* of per-line signatures, deliberately ignoring
+  /// order. `purchase_items.created_at` is a transaction timestamp, so rows
+  /// written in one statement share it and the order a read returns them in is
+  /// not the order they were written in - an order-sensitive comparison would
+  /// report a change on a document nobody touched, which is the false revert
+  /// D-019 exists to prevent.
+  static bool linesDiffer({
+    required List<PurchaseLineDraft> lines,
+    required List<PurchaseItem> items,
+  }) {
+    if (lines.length != items.length) {
+      return true;
+    }
+    final draftSignatures = lines.map(_draftSignature).toList(growable: false)
+      ..sort();
+    final itemSignatures = items.map(_itemSignature).toList(growable: false)
+      ..sort();
+    for (var index = 0; index < draftSignatures.length; index++) {
+      if (draftSignatures[index] != itemSignatures[index]) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   /// The key that ties a line to its batch row.
   static String _batchKey(String productId, String batchNo) =>
       '$productId|$batchNo';
 
-  /// Throws unless the document exists and is still editable.
-  Future<void> _requireEditable({
+  /// What a draft line contributes to [linesDiffer].
+  static String _draftSignature(PurchaseLineDraft line) => _signature(
+    productId: line.productId,
+    qty: line.qty,
+    freeQty: line.freeQty,
+    purchaseRate: line.purchaseRate,
+    mrp: line.mrp,
+    discountPercent: line.discountPercent,
+    gstPercent: line.gstPercent,
+    batchNo: line.batchNo,
+    expiryDate: line.expiryDate,
+  );
+
+  /// What a stored line contributes to [linesDiffer].
+  static String _itemSignature(PurchaseItem item) => _signature(
+    productId: item.productId,
+    qty: item.qty,
+    freeQty: item.freeQty,
+    purchaseRate: item.purchaseRate,
+    mrp: item.mrp,
+    discountPercent: item.discountPercent,
+    gstPercent: item.gstPercent,
+    batchNo: item.batchNo,
+    expiryDate: item.expiryDate,
+  );
+
+  /// The comparable text of one line, over the fields the supplier would have to
+  /// re-confirm: what was ordered, how many, at what price, and on which batch.
+  ///
+  /// `selling_rate` is absent on purpose - it is the pharmacy's own counter
+  /// price, so changing it says nothing about the order. `product_name_raw` and
+  /// `hsn_code` are absent for the same reason: they describe the invoice as
+  /// printed, not what was asked for.
+  static String _signature({
+    required String? productId,
+    required int qty,
+    required int freeQty,
+    required double purchaseRate,
+    required double mrp,
+    required double discountPercent,
+    required double gstPercent,
+    required String? batchNo,
+    required DateTime? expiryDate,
+  }) => <String>[
+    productId ?? '',
+    '$qty',
+    '$freeQty',
+    _amount(purchaseRate),
+    _amount(mrp),
+    _amount(discountPercent),
+    _amount(gstPercent),
+    batchNo?.trim() ?? '',
+    _date(expiryDate),
+  ].join('|');
+
+  /// An optional date as a comparable string, empty when there is none.
+  ///
+  /// Always an element, never omitted: the signature is positional, so a missing
+  /// value has to keep its slot.
+  static String _date(DateTime? value) =>
+      value == null ? '' : Formatters.dateIso(value);
+
+  /// A money or percentage value at the precision its column stores
+  /// (`numeric(12,2)`), with a near-zero value normalised so `-0.00` cannot
+  /// disagree with `0.00`.
+  static String _amount(double value) =>
+      (value.abs() < 0.005 ? 0.0 : value).toStringAsFixed(2);
+
+  /// The editable document with [purchaseId], or a throw if there is none.
+  Future<Purchase> _requireEditable({
     required String pharmacyId,
     required String purchaseId,
   }) async {
@@ -528,6 +670,7 @@ class PurchasesRepository {
             'return or a stock adjustment instead.',
       );
     }
+    return existing;
   }
 
   /// Deletes the document's lines and writes [lines] in their place.

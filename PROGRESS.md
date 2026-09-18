@@ -1,8 +1,8 @@
 # PharmaFlow — Progress Tracker
 
 **Last Updated:** 2026-09-18
-**Current Phase:** Phase 2 IN PROGRESS | purchase module COMPLETE
-**Overall Status:** Masters done and gated; Phase 2 DB layer live; purchase module (data, application and presentation) complete — inventory, batch tracking and purchase returns remain
+**Current Phase:** Phase 2 COMPLETE — purchase, inventory, batch tracking and purchase returns all built and gated
+**Overall Status:** Phases 0-2 done (masters, purchase, inventory, purchase returns); Phase 3 (sales/POS, sale returns, GST billing) is next
 
 ---
 
@@ -12,7 +12,7 @@
 |---|---|---|---|---|
 | 0 | Project Setup + Schema + Auth | COMPLETE | 2026-09-18 | 2026-09-18 |
 | 1 | Product + Supplier + Customer Master | COMPLETE | 2026-09-18 | 2026-09-18 |
-| 2 | Purchase + Inventory + Batch Tracking | IN PROGRESS (purchase complete; inventory next) | 2026-09-18 | - |
+| 2 | Purchase + Inventory + Batch Tracking | COMPLETE | 2026-09-18 | 2026-09-18 |
 | 3 | Sales/POS + Returns + GST Billing | PENDING | - | - |
 | 4 | Ledger + Payments + Reports | PENDING | - | - |
 | 5 | AI OCR + Smart Matching + Notifications | PENDING | - | - |
@@ -40,7 +40,7 @@
 ## Chat Strategy (1M Context Optimized)
 
 - **Chat 1:** Phase 0 [DONE]
-- **Chat 2:** Phase 1 + Phase 2 [target ~350k tokens]
+- **Chat 2:** Phase 1 + Phase 2 [DONE]
 - **Chat 3:** Phase 3 + Phase 4 [target ~390k tokens]
 - **Chat 4:** Phase 5 + Phase 6 [target ~280k tokens]
 - **Handoff trigger:** ~600k tokens used OR quality degrades OR both phases done
@@ -89,7 +89,14 @@
 | D-1 | 5 manual Providers remain (service stubs + router) | Low | Convert to `@riverpod` when the respective features are built |
 | T-1 | `dart run custom_lint` SDK language version notice (cosmetic) | Low | Wait for upstream analyzer fix |
 | A-1 | `anonKey` deprecated in supabase_flutter 2.17 | Low | Migrate to `publishableKey` in Phase 6 |
-| P-1 | Editing an `ordered` purchase silently returns it to `draft` — `PurchasesRepository.updateDraft` writes `status = 'draft'` unconditionally (`purchases_repository.dart`, `_totalsPayload(... status: PurchaseStatus.draft)`) | Low | Decide whether the reset is intended. If it is, the form should say so; if not, carry the status through. **Not changed** — the data layer was declared complete. |
+| I-1 | The low-stock list reads at most `InventoryRepository.lowStockScanLimit` (500) candidate rows and decides `total_qty < min_stock_level` in Dart, because PostgREST cannot compare two columns. A catalogue past that bound would silently omit rows. | Low | Add `is_low_stock` to the `product_stock` view (a migration: `create or replace view` may append a column), or move the comparison into an RPC |
+| I-2 | A purchase return is two statements (header, then lines). The lines are one atomic INSERT, so stock moves for all of them or none - but a refused set can leave a header with no lines. Deliberately not rolled back: see `PurchaseReturnsRepository.create` | Low | An `RPC` wrapping both statements when Phase 4 touches the ledger |
+| I-3 | A return form offers at most `returnablePurchaseLimit` (200) received purchases | Low | A searchable purchase picker, as the product picker already is |
+| R-1 | `README.md` still describes the project as "Phase 0 (scaffold)" with Phase 1+ screens as placeholders | Low | Refresh it in Phase 6, which owns documentation |
+
+**Resolved this chat:** P-1 / chat2b O-1 (editing an `ordered` purchase silently
+returned it to `draft` — now reverts only when the lines change, and says so:
+see D-019).
 
 ---
 
@@ -427,6 +434,110 @@ refused for a missing expiry the user had chosen), and the detail screen could
 show a stale document because the writing screen invalidated the list but not
 `purchaseWithLines(id)`.
 
+### P-1 fix — an edited order reverts to draft only when its lines change [DONE]
+
+`updateDraft` wrote `status = 'draft'` unconditionally, so saving an `ordered`
+purchase silently undid the transition. Decided and implemented as option 1 from
+the brief, recorded as **D-019**:
+
+- `PurchasesRepository.statusAfterEdit` / `.linesDiffer` — pure and public, so the
+  rule is unit-tested without a client and the test fake runs the same function.
+- The comparison is a multiset of per-line signatures over the fields a supplier
+  would have to re-confirm (product, qty, free qty, rate, mrp, discount, GST,
+  batch, expiry), compared at the precision the columns store. Order is ignored
+  on purpose: `purchase_items.created_at` is a transaction timestamp, so a read
+  can return rows in a different order than they were written, and an
+  order-sensitive comparison would revert a document nobody touched.
+- `PurchaseFormScreen` reports the revert with a SnackBar ("Order returned to
+  draft because lines changed — review and re-confirm"), driven by comparing the
+  status it loaded with the status it got back rather than by predicting it.
+- Tests: `purchase_edit_status_test.dart` (11, over both branches and the
+  boundaries) and two widget tests on the form.
+
+### Inventory module — complete [DONE]
+
+`features/inventory/` — data, application and presentation
+(`inventory_placeholder.dart` deleted).
+
+- `data/inventory_repository.dart` — the cross-product reads (`stockList` paged
+  and searchable with an in/out-of-stock filter, `lowStock`, `expiringBatches`,
+  `batchesExpiringBetween`, `namesFor`) and the `stock_adjustments` write.
+  `ProductsRepository` keeps the per-product reads it already had (`batchesFor`,
+  `stockFor`); the split is by question, not by table.
+- Screens: `inventory_screen.dart` (Stock / Low stock / Expiry tabs) and
+  `expiry_calendar_screen.dart` (a month grid with units per day, filtering the
+  list below by a tapped day). Route `/inventory/calendar` added; the shell is
+  unchanged.
+- Widgets: `product_stock_card.dart`, `expiry_batch_card.dart`,
+  `expiry_bucket_bar.dart`, `stock_level_badge.dart`,
+  `stock_adjustment_sheet.dart`.
+- The stock rows print the rollup's own `total_qty` and `stock_value_at_cost`, so
+  the screen cannot disagree with the view, and the valuation keeps the landed
+  cost (D-012) rather than a rate.
+- The expiry rows show units and value **at MRP**, not at cost: `batch_status`
+  does not carry `landed_cost_per_unit` (it was added to `product_batches` after
+  that view was created, and a view's `b.*` is expanded when it is created), and
+  `qty x purchase_rate` would overstate any batch that took in scheme stock.
+- Adjustments are batch-scoped and reachable from two places: the expiry list,
+  and the Batches tab of the product detail (extended rather than duplicated, as
+  the brief asked). The sheet caps a decrease at what the batch holds, and the
+  trigger's own `check_violation` is surfaced verbatim when a concurrent write
+  gets there first.
+- One shared rule was extracted rather than copied: `Validators.positiveInt`
+  (used by the adjustment sheet and the purchase line editor), and `ExpiryBadge`
+  moved to `core/widgets/expiry_badge.dart` so the product detail and the expiry
+  dashboard cannot disagree about which bucket is urgent.
+- Tests: 16 across `inventory_screen_test.dart` (list, filter, low stock, the
+  three buckets, a written adjustment, the at-the-field cap, a refused
+  correction) and `expiry_calendar_test.dart` (month arithmetic, the screen, the
+  day filter).
+
+### Purchase returns module — complete [DONE]
+
+`features/returns/` — `returns_placeholder.dart` deleted; routes `/returns`,
+`/returns/new`, `/returns/:returnId`. Sale returns stay Phase 3.
+
+- Models `purchase_return.dart`, `purchase_return_item.dart`; repository over
+  `purchase_returns` / `purchase_return_items`; list controller with paging; form
+  controller; detail controller.
+- `ReturnableLine` is the whole decision a return line makes: what the invoice
+  billed, what has already gone back (summed from this purchase's returns, keyed
+  by `purchase_item_id`), and what is in the batch right now. The form shows that
+  number and the write re-derives it, so the two cannot disagree and the supplier
+  cannot be credited twice for the same units.
+- The credit is a **proportional slice of the invoice line's own stored amounts**
+  (`PurchaseReturnTotals`), not `qty x rate`: `purchase_return_items` has no
+  discount column, so recomputing would credit the list price of discounted
+  goods. Recorded as D-020.
+- `create` takes only `(purchaseItemId -> qty)`: the amounts, the supplier and the
+  batch come from the invoice line.
+- Tests: `purchase_return_totals_test.dart` (5) and 11 widget tests over the list
+  and the form, including the credit preview and the cap.
+- Two bugs found by those tests: the return line's quantity field only reported
+  on submit (so a browser or desktop user's quantities never reached the parent —
+  or the credit preview), and a fixture without a `batch_id` showed how a
+  received line with no batch can never be returned.
+
+### PHASE 2 COMPLETE
+
+Delivered in this chat: the P-1 fix (D-019), the inventory module (stock, low
+stock, expiry dashboard, expiry calendar, stock adjustments) and the purchase
+returns module. Phase 2's DB automation was already live and verified; no
+migration was added or needed, so `supabase db push` was not part of this gate
+run.
+
+Gate output at completion:
+
+```
+dart format lib test                      -> 0 changed (tree is formatter-clean)
+dart run build_runner build --delete...   -> wrote 127 outputs (T-1 SDK notice only)
+dart run custom_lint                      -> No issues found!
+flutter analyze                           -> No issues found!
+flutter test                              -> +237: All tests passed!
+```
+
+(191 tests at the end of the purchase module; 237 now — 46 added, none changed.)
+
 ### PHASE 1 COMPLETE
 
 Delivered: three masters at full CRUD — products (multi-batch FEFO view,
@@ -512,20 +623,35 @@ flutter test               -> +113: All tests passed!
 
 ## Next Action
 
-Phase 2 — the remainder. The purchase module is done; build order from here:
+**Phase 3 — Sales/POS + Returns + GST Billing.** Chat 3, per the plan:
 
-1. Inventory (stock view over `product_stock`, low-stock list, expiry dashboard
-   over `batch_status`, stock adjustments), with the batch/expiry calendar
-   inside it.
-2. Batch tracking (batch list per product, expiry calendar, 30/90-day
-   near-expiry alerts).
-3. Purchase returns (extend `features/returns/`).
-4. Phase 2 gate + handoff.
+1. Enable the sale-side automation that is still commented out in migration
+   `00010`: `ledger_auto_entry_sale()`, `stock_update_on_sale()`, and
+   `write_audit_log()`. As with Phase 2 (D-013) that is a **new migration**, not
+   uncommenting in place - 00010 is already applied to the hosted project.
+2. Sales/POS: cart, FEFO batch selection (a sale must decrement the earliest
+   expiry first, which `batch_status` already orders for), GST invoice, thermal
+   print (web PDF / Windows native, per D-005).
+3. Sale returns and credit notes in `features/returns/` - **extend it, do not
+   rebuild it**: the purchase side is already there, and the two lists share one
+   route and one destination.
+4. Phase 3 gate, then the handoff.
 
-The Phase 2 DB automation is already live and verified, so inventory builds
-directly against it: `stock_apply_adjustment()` moves its batch and raises
-`check_violation` rather than going negative, and
-`stock_update_on_purchase_return()` refuses to oversell. Outbound movements
-change quantity only — the remaining units keep the batch's cost basis (D-012).
+What Phase 3 builds on, and must not break:
 
-`context/chat2c-opening-prompt.md` carries the brief.
+- `product_batches.qty` is the single running balance, and three writes move it:
+  a purchase receipt (D-011/D-012, landed cost), a stock adjustment, and a
+  purchase return (quantity only). Sales will be the fourth, and the only one
+  that reduces stock at the counter.
+- Every read of stock is a view (`product_stock`, `batch_status`) scoped by
+  `pharmacy_id`; a POS screen must not sum batches itself.
+- `features/inventory/` owns `stock_adjustments` and the two views; a sale that
+  moves stock should invalidate the same providers
+  (`stockListControllerProvider`, `lowStockListProvider`,
+  `expiryBoardControllerProvider`, `expiryMonthControllerProvider`) - see
+  `StockAdjustmentController._refreshStockReaders`.
+- `purchase_return_items` credits a supplier from the invoice line's stored
+  amounts (D-020); a sale return has its own equivalent question and should
+  answer it the same way rather than from `qty x rate`.
+
+`context/chat2d-opening-prompt.md` carries the brief.

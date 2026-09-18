@@ -221,7 +221,7 @@ class _PurchaseLineEditorState extends State<PurchaseLineEditor> {
                   label: 'Quantity',
                   hint: 'Units billed',
                   keyboardType: TextInputType.number,
-                  validator: _positiveInt,
+                  validator: Validators.positiveInt,
                 ),
                 AppTextField(
                   controller: _freeQty,
@@ -397,18 +397,6 @@ double _parseDouble(String raw) => double.tryParse(raw.trim()) ?? 0;
 String? _trimmedOrNull(String raw) {
   final value = raw.trim();
   return value.isEmpty ? null : value;
-}
-
-/// Requires a whole number of at least one.
-String? _positiveInt(String? value) {
-  final parsed = int.tryParse(value?.trim() ?? '');
-  if (parsed == null) {
-    return 'Enter a whole number';
-  }
-  if (parsed <= 0) {
-    return 'Must be more than zero';
-  }
-  return null;
 }
 
 /// Accepts a blank field, otherwise a percentage between 0 and 100.

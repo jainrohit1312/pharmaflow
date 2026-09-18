@@ -223,14 +223,19 @@ class FakePurchasesRepository implements PurchasesRepository {
     _record(header: header, lines: lines, split: split);
     _rejectInvalid(lines, requireBatches: false);
     _maybeThrow();
-    // Matching the real repository: an edited document goes back to `draft`.
-    final saved = _writeFrom(
-      _find(purchaseId),
-      header,
-      lines,
-      split,
-      status: PurchaseStatus.draft,
+    // The real rule, not a friendlier one: an edit returns an `ordered`
+    // document to `draft` only when it changed that document's lines (D-019).
+    // Read the status before `_replaceItems`, which is what the comparison is
+    // made against.
+    final current = _find(purchaseId);
+    final status = PurchasesRepository.statusAfterEdit(
+      current: current.status,
+      lines: lines,
+      items: items
+          .where((item) => item.purchaseId == purchaseId)
+          .toList(growable: false),
     );
+    final saved = _writeFrom(current, header, lines, split, status: status);
     _replace(purchaseId, saved);
     _replaceItems(purchaseId, lines, split);
     return saved;

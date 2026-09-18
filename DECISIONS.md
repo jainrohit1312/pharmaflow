@@ -403,3 +403,137 @@ every desktop window.
 - Mobile is unchanged, which means its drawer is still reachable only by edge
   swipe: there is no AppBar to carry a hamburger. The four bottom-bar
   destinations cover the phone flows, so this is accepted rather than fixed.
+
+---
+
+## D-019 — Editing an Ordered Purchase Reverts to Draft When Lines Change
+
+**Date:** 2026-09-18
+**Status:** Active
+
+**Decision:** `updateDraft` reverts `status` to `draft` only when line items
+change (product, qty, free qty, rate, mrp, discount, GST, batch, expiry).
+Metadata-only edits (notes, invoice number, invoice date) preserve the current
+status.
+
+**Rationale:** An `ordered` purchase has been sent to the supplier. If lines
+change, the supplier's confirmed order is stale and needs re-confirmation.
+Metadata changes do not invalidate the order.
+
+**Consequences:**
+
+- UI must surface the revert with a clear message. If the user wants to cancel
+  an order entirely, `setStatus` is the explicit path. `PurchaseFormScreen`
+  raises a SnackBar ("Order returned to draft because lines changed — review and
+  re-confirm") when the status of the document it wrote differs from the one it
+  loaded, so it reports what actually happened rather than predicting it.
+- The rule lives in `PurchasesRepository.statusAfterEdit` and
+  `PurchasesRepository.linesDiffer`, both pure and public, so it is unit-tested
+  without a client and the test fake calls the *same* function the real write
+  applies.
+- The comparison is a **multiset** of per-line signatures, not an ordered list.
+  `purchase_items.created_at` is a transaction timestamp: rows written in one
+  statement share it, so the order a read returns them in is not the order they
+  were written in, and an order-sensitive comparison would revert a document
+  nobody had touched.
+- Fields are compared at the precision their column stores (`numeric(12,2)`), so
+  a difference the database would round away is not a revert.
+- `selling_rate`, `product_name_raw` and `hsn_code` are deliberately **not**
+  compared: the first is the pharmacy's own counter price and the others
+  describe the invoice as printed, so none of them says anything about what was
+  asked of the supplier.
+- The document header (supplier, invoice number, invoice date, notes) is not
+  compared either, so changing the supplier on an ordered document keeps it
+  ordered. That follows the rule as written above, which is about line items;
+  it is recorded here so it is a decision rather than an oversight.
+- Supersedes the unconditional `status = 'draft'` write this replaced, which
+  returned an `ordered` document to draft silently on any edit (PROGRESS.md
+  P-1 / chat2b O-1).
+
+---
+
+## D-020 — A Purchase Return Credits a Slice of the Invoice Line
+
+**Date:** 2026-09-18
+**Status:** Active
+
+**Decision:** A purchase return line's `tax_amount` and `total_amount` are the
+proportional share - by returned quantity - of the purchase line's **stored**
+`tax_amount` and `total_amount`, not a figure recomputed from
+`qty x purchase_rate`. Implemented in
+`features/returns/data/purchase_return_totals.dart`; the header's `sub_total`,
+`tax_total` and `grand_total` are the sums of those lines.
+
+**Rationale:** `purchase_return_items` has no `discount_percent` column, so
+recomputing would credit the supplier the list price of goods they had already
+discounted: ten units at 100 with a 10% discount cost 900, and returning four of
+them is 360, not 400. Scaling the stored amounts also keeps a return equal to a
+slice of what the invoice says, which is what a credit note has to reconcile
+against, and it inherits the receipt's own rounding.
+
+**Consequences:**
+
+- The client sends only `(purchaseItemId -> qty)` in
+  `PurchaseReturnsRepository.create`; the amounts, the supplier and the batch all
+  come from the invoice line, so a stale or hostile form cannot enlarge a credit.
+- `PurchaseTotals.round2` is public for the same reason: one rounding rule in the
+  money path, shared by the purchase and the return.
+- How much of a line may go back is `min(billed - already returned, on hand in the
+  batch)`. "Already returned" is summed from this purchase's returns by
+  `purchase_item_id`, because a batch balance alone would allow the same units to
+  be credited twice - a batch can hold stock from more than one receipt.
+- The batch balance is still the hard limit: `stock_update_on_purchase_return()`
+  raises `check_violation` rather than overselling, and that error is surfaced
+  verbatim (`mapPostgrestException` keeps the database's message for `23514`).
+- Outbound movements change quantity only. The units left in the batch keep the
+  batch's cost basis (D-012) - that is correct for a write-off, so do not "fix"
+  it.
+- A sale return (Phase 3) has the same question to answer and should answer it
+  the same way, from the sale line's stored amounts rather than from the rate.
+
+---
+
+## D-021 — Inventory Reads the Views Directly; the Expiry Value Is MRP, Not Cost
+
+**Date:** 2026-09-18
+**Status:** Active
+
+**Decision:** The inventory module adds **no migration**. It reads
+`product_stock` and `batch_status` as they are, and:
+
+- the stock list shows the view's own `total_qty` and `stock_value_at_cost`
+  (so the valuation keeps landed cost, D-012);
+- an expiring batch shows units and value **at MRP**, not at cost;
+- the low-stock comparison `total_qty < min_stock_level` happens in Dart, over
+  rows the server has already narrowed to `min_stock_level > 0`.
+
+**Rationale:**
+
+- `batch_status` is `select b.*` from `product_batches` **as that view was
+  created**, and `landed_cost_per_unit` was added to the table afterwards
+  (migration 00016) - so the view does not carry it. Showing a cost per expiring
+  batch would need a new migration, and the obvious substitute
+  (`qty x purchase_rate`) is exactly the overstatement D-011/D-012 exist to
+  prevent on scheme stock. MRP is the one figure on the row that needs no cost
+  basis, and it is what `product_stock.stock_value_at_mrp` already means.
+- PostgREST cannot compare two columns, so `total_qty < min_stock_level` cannot be
+  a server-side filter. The candidate set is narrowed server-side to products
+  that *have* a reorder level - a threshold is set by hand, per product - and the
+  comparison runs in Dart. The bound is `InventoryRepository.lowStockScanLimit`
+  (500 candidates), the same trade-off `supplierOptionsLimit` makes; see PROGRESS
+  item I-1 for the migration that would remove it.
+
+**Consequences:**
+
+- Inventory has two repositories reading two views, split by question rather
+  than by table: `ProductsRepository` answers "what about *this* product"
+  (`batchesFor`, `stockFor`) for the product detail screen, and
+  `InventoryRepository` answers "what about the whole pharmacy".
+- `ExpiryBadge` moved to `core/widgets/expiry_badge.dart` when the second screen
+  needed it, so both agree on which bucket is urgent.
+- Stock adjustments are batch-scoped: `stock_adjustments.batch_id` stays nullable
+  in the schema, but nothing in the app writes a product-level row, because such a
+  row records a correction that moves no stock.
+- The four providers a batch balance feeds are invalidated in one place,
+  `StockAdjustmentController._refreshStockReaders`. A future write that moves
+  stock (a sale) must invalidate the same set.

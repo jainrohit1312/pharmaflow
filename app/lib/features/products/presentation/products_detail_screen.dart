@@ -11,12 +11,14 @@ import 'package:app/core/widgets/app_empty_view.dart';
 import 'package:app/core/widgets/app_scaffold.dart';
 import 'package:app/core/widgets/confirm_dialog.dart';
 import 'package:app/core/widgets/error_view.dart';
+import 'package:app/core/widgets/expiry_badge.dart';
 import 'package:app/core/widgets/loading_view.dart';
 import 'package:app/core/widgets/section_card.dart';
 import 'package:app/core/widgets/status_badge.dart';
 import 'package:app/data/models/batch_status.dart';
 import 'package:app/data/models/product.dart';
 import 'package:app/data/models/product_alias.dart';
+import 'package:app/features/inventory/presentation/widgets/stock_adjustment_sheet.dart';
 import 'package:app/features/products/application/products_detail_controller.dart';
 import 'package:app/features/products/application/products_form_controller.dart';
 import 'package:app/features/products/presentation/widgets/product_badges.dart';
@@ -94,7 +96,11 @@ class ProductsDetailScreen extends ConsumerWidget {
               child: TabBarView(
                 children: <Widget>[
                   _InfoTab(data: data),
-                  _BatchesTab(data: data),
+                  _BatchesTab(
+                    productId: productId,
+                    productName: product.name,
+                    data: data,
+                  ),
                   _AliasesTab(productId: productId, aliases: data.aliases),
                 ],
               ),
@@ -306,14 +312,24 @@ class _StockBadge extends StatelessWidget {
 }
 
 /// Batches in FEFO order.
-class _BatchesTab extends StatelessWidget {
-  const _BatchesTab({required this.data});
+class _BatchesTab extends ConsumerWidget {
+  const _BatchesTab({
+    required this.productId,
+    required this.productName,
+    required this.data,
+  });
+
+  /// The product these batches belong to.
+  final String productId;
+
+  /// Its name, for the adjustment sheet's heading.
+  final String productName;
 
   /// The loaded detail.
   final ProductDetailData data;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
     final batches = data.batches;
 
@@ -338,22 +354,59 @@ class _BatchesTab extends StatelessWidget {
             style: theme.textTheme.bodySmall,
           );
         }
-        return _BatchCard(batch: batches[index - 1]);
+        final batch = batches[index - 1];
+        return _BatchCard(
+          batch: batch,
+          onAdjust: () => _adjust(context, ref, batch),
+        );
       },
     );
+  }
+
+  /// Opens the stock correction sheet for one batch.
+  ///
+  /// The sheet belongs to the inventory feature, which owns `stock_adjustments`;
+  /// this screen is where every batch of a product is listed, so it is the one
+  /// place a batch that is *not* expiring soon can be corrected. The reload is
+  /// this screen's job rather than the sheet's, which keeps the dependency one
+  /// way - inventory knows nothing about products.
+  Future<void> _adjust(
+    BuildContext context,
+    WidgetRef ref,
+    BatchStatus batch,
+  ) async {
+    final written = await showStockAdjustmentSheet(
+      context,
+      productId: productId,
+      productName: productName,
+      batchId: batch.id,
+      batchNo: batch.batchNo,
+      onHand: batch.qty,
+    );
+    if (!written || !context.mounted) {
+      return;
+    }
+    ref.invalidate(productDetailControllerProvider(productId));
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(const SnackBar(content: Text('Stock adjusted.')));
   }
 }
 
 /// One batch row.
 class _BatchCard extends StatelessWidget {
-  const _BatchCard({required this.batch});
+  const _BatchCard({required this.batch, this.onAdjust});
 
   /// The batch to show.
   final BatchStatus batch;
 
+  /// Called when the user wants to correct this batch's quantity.
+  final VoidCallback? onAdjust;
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final adjust = onAdjust;
 
     return Card(
       child: Padding(
@@ -367,6 +420,12 @@ class _BatchCard extends StatelessWidget {
                   child: Text(batch.batchNo, style: theme.textTheme.titleSmall),
                 ),
                 ExpiryBadge(status: batch.expiryStatus),
+                if (adjust != null)
+                  IconButton(
+                    icon: const Icon(Icons.tune),
+                    tooltip: 'Adjust this batch',
+                    onPressed: adjust,
+                  ),
               ],
             ),
             const SizedBox(height: 8),

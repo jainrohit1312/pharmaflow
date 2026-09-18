@@ -37,10 +37,11 @@ import 'package:go_router/go_router.dart';
 /// *receipt* creates, and the receipt has its own screen (`GrnScreen`) reachable
 /// from the document's detail page.
 ///
-/// One consequence of that split is worth knowing: the repository rewrites an
-/// edited document back to `draft` (see `PurchasesRepository.updateDraft`), so
-/// saving changes to an `ordered` purchase returns it to draft and it has to be
-/// marked ordered again.
+/// One consequence of that split is worth knowing: saving changes to an
+/// `ordered` purchase returns it to `draft` **when the lines changed**, because
+/// the supplier is holding a copy of what the lines used to say (D-019). The
+/// screen reports that revert instead of letting it happen quietly; editing only
+/// the notes, invoice number or invoice date leaves the order standing.
 class PurchaseFormScreen extends ConsumerWidget {
   /// Creates the purchase form screen.
   const PurchaseFormScreen({super.key, this.purchaseId});
@@ -267,16 +268,32 @@ class _PurchaseFormState extends ConsumerState<_PurchaseForm> {
           status: PurchaseStatus.ordered,
         );
       }
+      // The repository decided this, so ask it what happened rather than
+      // guessing: an `ordered` document comes back as a draft exactly when the
+      // edit changed its lines (D-019), and a status reset the user did not ask
+      // for has to be said out loud.
+      final reverted =
+          existing != null &&
+          existing.status == PurchaseStatus.ordered &&
+          saved.status == PurchaseStatus.draft;
       if (!mounted) {
         return;
       }
       // Both the list and this document have to be re-read: the write changed the
-      // totals, and an edit also puts an ordered document back to draft, so a
-      // cached copy would show the detail screen something the database no longer
-      // holds.
+      // totals, and an edit may also have put an ordered document back to draft,
+      // so a cached copy would show the detail screen something the database no
+      // longer holds.
       ref
         ..invalidate(purchasesListControllerProvider)
         ..invalidate(purchaseWithLinesProvider(saved.id));
+      if (reverted) {
+        // Reported before navigating, not after: the messenger belongs to the
+        // app rather than to this route, so the message survives the `go`.
+        _report(
+          'Order returned to draft because lines changed — '
+          'review and re-confirm.',
+        );
+      }
       context.go(Routes.purchaseDetail(saved.id));
     } on Object catch (error, stackTrace) {
       // The controller has already put the failure in its state, which the

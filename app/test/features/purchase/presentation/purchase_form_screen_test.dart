@@ -167,4 +167,78 @@ void main() {
       reason: 'there is no form to save',
     );
   });
+
+  testWidgets('returns an ordered purchase to draft when its lines change', (
+    tester,
+  ) async {
+    final repository = FakePurchasesRepository(
+      purchases: <Purchase>[buildPurchase(status: PurchaseStatus.ordered)],
+      items: <PurchaseItem>[buildItem()],
+    );
+    await pumpPurchaseApp(
+      tester,
+      repository: repository,
+      suppliers: <Supplier>[buildSupplier()],
+      initialLocation: Routes.purchaseEdit('purchase-1'),
+    );
+
+    await tester.enterText(
+      find.widgetWithText(TextFormField, 'Quantity'),
+      '11',
+    );
+    await tester.pump();
+    await tapVisible(
+      tester,
+      find.widgetWithText(ElevatedButton, 'Save changes'),
+    );
+
+    expect(repository.purchases.first.status, PurchaseStatus.draft);
+    expect(
+      find.text(
+        'Order returned to draft because lines changed — '
+        'review and re-confirm.',
+      ),
+      findsOneWidget,
+      reason: 'a silent status reset is the defect, so it has to be said',
+    );
+    expect(find.text('Next step'), findsOneWidget);
+  });
+
+  testWidgets(
+    'keeps an ordered purchase ordered when only the header changed',
+    (tester) async {
+      final repository = FakePurchasesRepository(
+        purchases: <Purchase>[buildPurchase(status: PurchaseStatus.ordered)],
+        items: <PurchaseItem>[buildItem()],
+      );
+      await pumpPurchaseApp(
+        tester,
+        repository: repository,
+        suppliers: <Supplier>[buildSupplier()],
+        initialLocation: Routes.purchaseEdit('purchase-1'),
+      );
+
+      await tester.enterText(
+        find.widgetWithText(TextFormField, 'Notes'),
+        'Delivered to the back gate',
+      );
+      await tester.pump();
+      await tapVisible(
+        tester,
+        find.widgetWithText(ElevatedButton, 'Save changes'),
+      );
+
+      expect(
+        repository.purchases.first.status,
+        PurchaseStatus.ordered,
+        reason: 'the supplier holds the same lines he was sent (D-019)',
+      );
+      expect(
+        repository.purchases.first.notes,
+        'Delivered to the back gate',
+        reason: 'the edit still lands, only the status is left alone',
+      );
+      expect(find.textContaining('returned to draft'), findsNothing);
+    },
+  );
 }

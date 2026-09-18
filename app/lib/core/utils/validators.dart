@@ -163,6 +163,22 @@ abstract final class Validators {
     return null;
   }
 
+  /// Validates a whole number of at least one, e.g. a quantity.
+  ///
+  /// Distinct from [nonNegativeInt] because zero is not a valid quantity
+  /// anywhere in the schema: `purchase_items.qty`, `purchase_return_items.qty`
+  /// and `stock_adjustments.qty` all carry `check (qty > 0)`.
+  static String? positiveInt(String? value) {
+    final parsed = int.tryParse(value?.trim() ?? '');
+    if (parsed == null) {
+      return 'Enter a whole number';
+    }
+    if (parsed <= 0) {
+      return 'Must be more than zero';
+    }
+    return null;
+  }
+
   /// Validates a decimal amount that is zero or greater, e.g. opening balance.
   static String? nonNegativeDecimal(String? value) {
     final raw = value?.trim() ?? '';
