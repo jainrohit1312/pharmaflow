@@ -1,8 +1,8 @@
 # PharmaFlow — Progress Tracker
 
 **Last Updated:** 2026-09-19
-**Current Phase:** Phase 5 IN PROGRESS — Chunk A done, Chunk B1 done (the OCR function is deployed and live-verified), Chunk B2a done (the Dart seam: envelope, service, repository, controller)
-**Overall Status:** Phases 0-4 done and gated; Phase 5's AI substrate, its first Edge Function and the client-side seam in front of it are in — 442 Flutter tests, 45 Deno tests
+**Current Phase:** Phase 5 IN PROGRESS — **Chunk B is COMPLETE** (B1 the Edge Function, B2a the Dart seam, B2b the verify screen and the save); chunk C (smart matching) is next
+**Overall Status:** Phases 0-4 done and gated; Phase 5 has its database substrate, a deployed and live-verified OCR function, and a working end-to-end bill-reading flow — 453 Flutter tests, 45 Deno tests
 
 ---
 
@@ -15,7 +15,7 @@
 | 2 | Purchase + Inventory + Batch Tracking | COMPLETE | 2026-09-18 | 2026-09-18 |
 | 3 | Sales/POS + Returns + GST Billing | COMPLETE | 2026-09-18 | 2026-09-18 |
 | 4 | Ledger + Payments + Reports | COMPLETE | 2026-09-18 | 2026-09-19 |
-| 5 | AI OCR + Smart Matching + Notifications | IN PROGRESS (Chunk B2a done) | 2026-09-19 | - |
+| 5 | AI OCR + Smart Matching + Notifications | IN PROGRESS (chunk B complete) | 2026-09-19 | - |
 | 6 | Testing + Deployment + Documentation | PENDING | - | - |
 
 ---
@@ -158,6 +158,80 @@ environment:
 Changing any pin above requires explicit user approval (see DECISIONS.md D-007).
 
 ---
+
+## Chat 4 Progress — Chunk B2b: the verify screen and the save [DONE]
+
+**Chunk B is complete.** B2b is the part a user touches: choose a bill, check what
+was read, and save a draft through the manual form's own controller.
+
+### What B2b delivered
+
+- **`features/purchase_ocr/presentation/purchase_ocr_screen.dart`** — three states,
+  each with something to say:
+  - **Choose a bill** — *Take a photo* / *Choose a file*, the 10 MB and file-type
+    facts, and the one instruction that matters: *fill the frame with the item
+    table*. It also says plainly which of the two failures happened — "that bill
+    did not upload" versus "that bill could not be read" — because the retry
+    differs and only one of them is worth retrying.
+  - **Reading** — "Reading the bill…" and, when the reader was busy and the retry
+    is running, **"The bill reader is busy — retrying…"** (D-033's visible wait).
+  - **Verify** — the image beside what was read, `meta.warnings` and the
+    truncation note shown rather than logged, the header editable (supplier,
+    invoice number, invoice date, notes), a line editor per line with the batch and
+    expiry fields a receipt needs, a product picker on every line (matching is
+    Chunk C, so a human chooses), the totals from `PurchaseTotals`, and the
+    reader's own total shown *beside* them, labelled as what was printed rather
+    than what will be saved.
+  - The save calls `purchaseFormControllerProvider.createPurchase(header:, lines:)`
+    — the same controller the manual form uses — which writes a **draft**; it then
+    invalidates the list and the document and goes to `Routes.purchaseDetail`, where
+    the existing GRN step is one tap away. Nothing in this feature writes a purchase
+    row itself (D-011/D-013).
+- **`data/bill_picker.dart`** — `BillPicker` + `PickedBill` + `billPickerProvider`,
+  the seam `image_picker` sits behind (D-035). `PurchaseOcrController.pickBill`
+  now owns the decisions that were tempting to put in the widget: an untyped file
+  is typed from its name (`mimeForFileName`, added to the repository with tests),
+  and a file the bucket would refuse is turned away before the round trip.
+- **`Routes.purchaseOcr = '/purchase/ocr'`**, declared in `app_router.dart` ahead of
+  the parameterised purchase routes (so `ocr` is never read as a purchase id) and
+  offered on the purchase screen as a third way in, beside *Receive goods* and
+  *New* (D-022: the rail stays on Purchase).
+- **A correctness fix the screen exposed:** a *first* read that failed used to lose
+  the uploaded path, so "read it again" had nothing to read. `OcrScan.bill` is now
+  nullable and the scan survives the failure, which is what makes D-033's "never
+  uploads a second copy" true for that case too (recorded in D-033's consequences).
+
+### Tests — 11 added, none changed
+
+`test/features/purchase_ocr/presentation/purchase_ocr_screen_test.dart` (the two
+ways in and what the screen warns about, a picked bill read into a correctable form,
+warnings and truncation shown, **the retrying state caught mid-flight**, a busy
+reader offered another go without being called an unreadable bill, a file the reader
+cannot open turned away before any upload, and the save's payload — supplier,
+invoice number, the line's product, quantity, free quantity, batch and expiry —
+followed by the navigation to the document); one test on the purchase screen for the
+new entry point; `mimeForFileName` at its boundaries; and a controller test for the
+failure-then-retry path above. `test/support/fake_bill_picker.dart` and
+`test/support/purchase_ocr_test_app.dart` follow the existing support shape, and
+`purchase_test_app.dart` gained the OCR overrides a tap on its new action now needs.
+
+### Gate output at completion
+
+```
+deno test supabase/functions                    -> ok | 45 passed | 0 failed
+deno check supabase/functions/ocr-purchase-bill/index.ts -> clean
+dart format lib test                            -> 372 files, 0 changed
+dart run custom_lint                            -> No issues found!
+flutter analyze                                 -> No issues found!
+flutter test                                    -> +453: All tests passed!
+```
+
+(442 before; 453 now — 11 added, none changed.)
+
+### Decisions added
+
+D-035 (a platform capability the app cannot fake gets a seam), and D-033 gained the
+consequence that a failed first read still leaves the bill uploaded.
 
 ## Chat 4 Progress — Chunk B2a: the OCR Dart seam [DONE]
 
@@ -1139,23 +1213,23 @@ flutter test               -> +113: All tests passed!
 
 ## Next Action
 
-**Phase 5 Chunk B2b — the OCR verify screen, the save and the route.**
-`context/chat3d-opening-prompt.md` is the brief. Everything below the UI is done,
-tested and green (B2a); what is left is what the user touches:
+**Phase 5 Chunk C — smart matching.** `context/chat3e-opening-prompt.md` is the
+brief. Chunk B is complete: a bill reads end to end and saves as a draft, and the
+only thing a human still does by hand on every line is choose the product. Chunk C
+makes that cheap:
 
-- `features/purchase_ocr/presentation/purchase_ocr_screen.dart` — pick or capture a
-  bill (`image_picker`'s **first use in this repo**; Web must work first, D-005),
-  show the image beside what was read, and show `meta.warnings` — they are the
-  difference between a parse somebody can check and one they have to trust;
-- the "the reader is busy — **retrying…**" state (D-033) and a retry control on
-  every failure (T-3's shape: a second failure must not leave the first parse on
-  screen with no way forward);
-- the editable header + a product per line (the existing `ProductPickerField`,
-  `PurchaseLineEditor` with `showBatchFields: true`, money from `PurchaseTotals`),
-  and the save through `PurchaseFormController.createPurchase` → a **draft** → the
-  existing GRN step, never a second write path (D-011/D-013, I-2);
-- the `/purchase/ocr` route (D-022), reached from the purchase screen;
-- `test/support/purchase_ocr_test_app.dart` + widget tests.
+- `match-product` — the reader's `raw_name` (and the chosen supplier) in, ranked
+  catalogue candidates out, over `product_aliases` (pg_trgm, the index has existed
+  since migration 00015) and `products.embedding` (pgvector, D-027). Per D-026 it
+  is a server-side capability, so the model's own output never becomes SQL;
+- **alias learning** — when a human picks a product for a line whose invoice text
+  is not yet an alias, record it in `product_aliases` (the table, its
+  `normalize_product_name()` helper and its unique key all predate this phase), so
+  the second bill from that supplier needs no help;
+- **the embedding backfill** — `products.embedding is null` is the work list, and
+  nothing vector-searches until it has run;
+- the verify screen's per-line picker gaining suggestions, which its design makes a
+  change in one place (`ProductPickerField` per line).
 
 What Phase 5 builds on, and must not break:
 

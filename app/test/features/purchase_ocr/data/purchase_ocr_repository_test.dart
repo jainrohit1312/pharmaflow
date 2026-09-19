@@ -122,5 +122,25 @@ void main() {
       expect(PurchaseOcrRepository.extensionFor('image/webp'), 'webp');
       expect(PurchaseOcrRepository.extensionFor('application/pdf'), 'pdf');
     });
+
+    test('a file with no reported type is typed from its name', () {
+      expect(
+        PurchaseOcrRepository.mimeForFileName('IMG_0042.JPG'),
+        'image/jpeg',
+      );
+      expect(PurchaseOcrRepository.mimeForFileName('scan.jpeg'), 'image/jpeg');
+      expect(PurchaseOcrRepository.mimeForFileName('bill.png'), 'image/png');
+      expect(PurchaseOcrRepository.mimeForFileName('bill.webp'), 'image/webp');
+      expect(
+        PurchaseOcrRepository.mimeForFileName('bill.pdf'),
+        'application/pdf',
+      );
+    });
+
+    test('a name that says nothing useful is not guessed at', () {
+      expect(PurchaseOcrRepository.mimeForFileName('IMG_0042.HEIC'), isNull);
+      expect(PurchaseOcrRepository.mimeForFileName('bill'), isNull);
+      expect(PurchaseOcrRepository.mimeForFileName(''), isNull);
+    });
   });
 }

@@ -11,6 +11,7 @@ import 'package:app/data/models/purchase.dart';
 import 'package:app/data/models/purchase_item.dart';
 import 'package:app/data/models/supplier.dart';
 import 'package:app/features/purchase/presentation/widgets/purchase_card.dart';
+import 'package:app/features/purchase_ocr/presentation/purchase_ocr_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -18,6 +19,20 @@ import '../../../support/fake_purchases_repository.dart';
 import '../../../support/purchase_test_app.dart';
 
 void main() {
+  testWidgets('offers reading a bill, beside the other two ways in', (
+    tester,
+  ) async {
+    await pumpPurchaseApp(
+      tester,
+      repository: FakePurchasesRepository(purchases: <Purchase>[]),
+    );
+
+    await tester.tap(find.byTooltip('Read a bill'));
+    await tester.pumpAndSettle();
+
+    expect(find.byType(PurchaseOcrScreen), findsOneWidget);
+  });
+
   testWidgets('lists every purchase with the supplier it came from', (
     tester,
   ) async {

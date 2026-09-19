@@ -49,6 +49,11 @@ class PurchasesScreen extends ConsumerWidget {
       title: 'Purchase',
       actions: <Widget>[
         IconButton(
+          icon: const Icon(Icons.document_scanner_outlined),
+          tooltip: 'Read a bill',
+          onPressed: () => context.go(Routes.purchaseOcr),
+        ),
+        IconButton(
           icon: const Icon(Icons.inventory_2_outlined),
           tooltip: 'Receive goods',
           onPressed: () => context.go(Routes.purchaseGrnForm),

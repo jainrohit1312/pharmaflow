@@ -1020,6 +1020,53 @@ inside the same minute buys another wait and nothing else.
 - A third failure mode is now distinct too: an answer cut short
   (`finish_reason != STOP`) is not a failure at all — it is a partial read with a
   warning attached, which the verify screen shows.
+- **A first read that fails still leaves the bill uploaded.** `OcrScan.bill` is
+  nullable for exactly this: the upload is what puts the object in the bucket, so
+  the scan exists from that moment even when nothing was read from it. Without
+  that, "read it again" after a failed first read would have had no path to read
+  and would have had to upload a second copy — the case this decision's own
+  wording rules out. `PurchaseOcrState.hasBill` (nothing read yet) is therefore
+  distinct from `hasScan` (nothing uploaded yet), and the screen shows the two as
+  different situations with different retries.
+
+---
+
+## D-035 — A Platform Capability the App Cannot Fake Gets a Seam
+
+**Date:** 2026-09-19
+
+**Status:** Active
+
+**Decision:** Choosing a bill goes through `BillPicker` and
+`billPickerProvider` (`features/purchase_ocr/data/bill_picker.dart`), whose real
+implementation wraps `image_picker` and whose `PickedBill` carries `bytes`,
+`mimeType` and `fileName` — not `image_picker`'s `XFile`.
+
+**Rationale:** `ImagePicker` is a concrete class that talks to a platform channel,
+so a widget test cannot drive it, and a screen that called it directly would be a
+screen whose pick path could only be tested by hand. `XFile` cannot be constructed
+either, which is why `PickedBill` exists: a test hands the fake a real 1×1 PNG's
+bytes, and the screen renders them for the same reason it would render a photo.
+
+The rules that were tempting to put in the widget went to where the rest of the
+feature's rules live: `PurchaseOcrController.pickBill` types an untyped file from
+its name (`XFile.mimeType` is null off the browser) and refuses a file the bucket
+would refuse *before* the round trip, using `PurchaseOcrRepository.validatePick` —
+the same rule the write enforces. The widget's job is one line: ask the seam.
+
+**Consequences:**
+
+- Chunk D's push token and permission prompts, and Phase 6's printing, have the
+  same shape waiting for them: an interface in the feature that needs it, a
+  Riverpod provider, a fake in `test/support/`, and every rule above the seam.
+- `test/support/fake_bill_picker.dart` carries a real PNG rather than filler
+  bytes, because `Image.memory` on non-image bytes fails the widget tree with a
+  decode error that has nothing to do with the test's subject. The verify screen
+  still has an `errorBuilder`, so a file the platform cannot decode is a sentence
+  rather than a crash.
+- A seam is only worth it where the platform is otherwise unreachable. Wrapping
+  something the app can already construct and compare in a test would be ceremony,
+  not testability.
 
 ---
 

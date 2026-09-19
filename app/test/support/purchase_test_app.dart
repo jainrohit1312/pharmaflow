@@ -14,13 +14,18 @@ import 'package:app/features/purchase/presentation/grn_screen.dart';
 import 'package:app/features/purchase/presentation/purchase_detail_screen.dart';
 import 'package:app/features/purchase/presentation/purchase_form_screen.dart';
 import 'package:app/features/purchase/presentation/purchases_screen.dart';
+import 'package:app/features/purchase_ocr/data/bill_picker.dart';
+import 'package:app/features/purchase_ocr/data/purchase_ocr_repository.dart';
+import 'package:app/features/purchase_ocr/presentation/purchase_ocr_screen.dart';
 import 'package:app/features/suppliers/application/supplier_options.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 
+import 'fake_bill_picker.dart';
 import 'fake_products_repository.dart';
+import 'fake_purchase_ocr_repository.dart';
 import 'fake_purchases_repository.dart';
 
 /// A router carrying only the purchase screens.
@@ -38,6 +43,10 @@ GoRouter purchaseTestRouter({
     GoRoute(
       path: Routes.purchase,
       builder: (context, state) => const PurchasesScreen(),
+    ),
+    GoRoute(
+      path: Routes.purchaseOcr,
+      builder: (context, state) => const PurchaseOcrScreen(),
     ),
     GoRoute(
       path: Routes.purchaseGrnForm,
@@ -103,6 +112,13 @@ Future<GoRouter> pumpPurchaseApp(
         purchaseTaxSplitProvider.overrideWith(
           (ref, supplierId) => TaxSplit.intraState,
         ),
+        // The purchase screen now offers the bill reader, so a test that taps
+        // that action builds the OCR screen: both of its seams are faked here
+        // rather than left to reach `Supabase.instance` and a real file dialog.
+        purchaseOcrRepositoryProvider.overrideWithValue(
+          FakePurchaseOcrRepository(),
+        ),
+        billPickerProvider.overrideWithValue(FakeBillPicker()),
         if (products != null)
           productsRepositoryProvider.overrideWithValue(products),
       ],

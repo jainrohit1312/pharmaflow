@@ -31,6 +31,7 @@ import 'package:app/features/purchase/presentation/grn_screen.dart';
 import 'package:app/features/purchase/presentation/purchase_detail_screen.dart';
 import 'package:app/features/purchase/presentation/purchase_form_screen.dart';
 import 'package:app/features/purchase/presentation/purchases_screen.dart';
+import 'package:app/features/purchase_ocr/presentation/purchase_ocr_screen.dart';
 import 'package:app/features/reports/presentation/reports_screen.dart';
 import 'package:app/features/returns/presentation/purchase_return_detail_screen.dart';
 import 'package:app/features/returns/presentation/purchase_return_form_screen.dart';
@@ -216,6 +217,11 @@ final appRouterProvider = Provider<GoRouter>((ref) {
             path: Routes.purchase,
             name: 'purchase',
             builder: (context, state) => const PurchasesScreen(),
+          ),
+          GoRoute(
+            path: Routes.purchaseOcr,
+            name: 'purchaseOcr',
+            builder: (context, state) => const PurchaseOcrScreen(),
           ),
           GoRoute(
             path: Routes.purchaseGrnForm,

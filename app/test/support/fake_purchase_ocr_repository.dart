@@ -127,7 +127,7 @@ OcrPurchaseBill buildOcrBill({
   OcrMeta? meta,
 }) {
   final defaultLines = lines.isEmpty
-      ? const <OcrLine>[
+      ? <OcrLine>[
           OcrLine(
             rawName: 'Dolo 650 Tab 15s',
             qty: 10,
@@ -136,6 +136,9 @@ OcrPurchaseBill buildOcrBill({
             mrp: 150,
             gstPercent: 12,
             batchNo: 'D650-A21',
+            // A real bill prints an expiry, and the verify screen's line editor
+            // requires one: a bill without it is a bill nobody could receive.
+            expiryDate: DateTime(2027, 6, 30),
             hsnCode: '3004',
             confidence: 0.95,
           ),

@@ -57,6 +57,15 @@ class PurchaseOcrRepository {
     'application/pdf': 'pdf',
   };
 
+  /// The same table the other way round, for a file that arrived untyped.
+  static const Map<String, String> _mimeByExtension = <String, String>{
+    'jpg': 'image/jpeg',
+    'jpeg': 'image/jpeg',
+    'png': 'image/png',
+    'webp': 'image/webp',
+    'pdf': 'application/pdf',
+  };
+
   final sb.SupabaseClient _client;
   final OcrService _ocr;
 
@@ -92,6 +101,19 @@ class PurchaseOcrRepository {
   /// Only called with a mime type [validatePick] has already accepted.
   static String extensionFor(String mimeType) =>
       _extensionByMime[mimeType] ?? 'bin';
+
+  /// The mime type [fileName] suggests, or `null` for an unknown extension.
+  ///
+  /// `image_picker` reports a file's type only on some platforms (`XFile.mimeType`
+  /// is frequently null outside a browser), so a bill that arrives without a type
+  /// is typed from its extension rather than refused as "no type at all". `jpeg`
+  /// and `jpg` are both accepted because both are common.
+  static String? mimeForFileName(String fileName) {
+    final dot = fileName.lastIndexOf('.');
+    return dot < 0
+        ? null
+        : _mimeByExtension[fileName.substring(dot + 1).toLowerCase()];
+  }
 
   /// A collision-resistant file name for a newly picked bill.
   ///

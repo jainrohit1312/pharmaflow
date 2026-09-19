@@ -53,7 +53,7 @@ void main() {
       expect(state.isBusy, isFalse);
       expect(state.error, isNull);
       expect(state.hasScan, isTrue);
-      expect(state.scan!.bill.document.supplierName, 'ARIHANT DISTRIBUTORS');
+      expect(state.scan!.bill!.document.supplierName, 'ARIHANT DISTRIBUTORS');
       expect(state.scan!.mimeType, 'image/jpeg');
     });
 
@@ -163,7 +163,12 @@ void main() {
         expect(state.error, isA<ServerException>());
         expect(state.errorIsRetryable, isTrue);
         expect(state.isBusy, isFalse);
-        expect(state.hasScan, isFalse);
+        expect(
+          state.hasScan,
+          isTrue,
+          reason: 'it uploaded, so the bill is up there and can be read again',
+        );
+        expect(state.hasBill, isFalse);
         expect(
           describeError(state.error!),
           'The bill reader is busy right now. Try again in a moment.',
@@ -283,13 +288,52 @@ void main() {
 
       final state = container.read(purchaseOcrControllerProvider);
       expect(state.hasScan, isTrue);
-      expect(state.scan!.bill.lines, isNotEmpty);
+      expect(state.scan!.bill!.lines, isNotEmpty);
       expect(
         state.error,
         isNotNull,
         reason: 'the stale parse must not be mistaken for a fresh one (T-3)',
       );
     });
+
+    test(
+      'a first read that failed keeps the bill, so it can be read again',
+      () async {
+        final repository = FakePurchaseOcrRepository();
+        repository.parseFailures.add(unreadableBillFailure());
+        final container = _container(repository);
+        final controller = container.read(
+          purchaseOcrControllerProvider.notifier,
+        );
+
+        await controller.pickAndScan(
+          bytes: List<int>.filled(64, 1),
+          mimeType: 'image/jpeg',
+        );
+
+        final failed = container.read(purchaseOcrControllerProvider);
+        expect(
+          failed.hasScan,
+          isTrue,
+          reason: 'it uploaded, so there is a path',
+        );
+        expect(failed.hasBill, isFalse, reason: 'and nothing was read from it');
+        expect(failed.error, isNotNull);
+
+        repository.parseFailures.clear();
+        await controller.rescan();
+
+        final retried = container.read(purchaseOcrControllerProvider);
+        expect(
+          repository.uploads,
+          1,
+          reason: 'reading again is not uploading again',
+        );
+        expect(repository.parses, 2);
+        expect(retried.hasBill, isTrue);
+        expect(retried.error, isNull);
+      },
+    );
   });
 
   group('clear', () {

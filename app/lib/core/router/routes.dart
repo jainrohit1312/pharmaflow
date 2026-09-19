@@ -105,6 +105,13 @@ abstract final class Routes {
   /// Purchase document list. Also the shell's Purchase destination.
   static const String purchase = '/purchase';
 
+  /// Reads a supplier bill into a purchase draft (Phase 5's OCR flow).
+  ///
+  /// Before [purchaseDetailPattern], like [purchaseGrnForm]: GoRouter matches in
+  /// declaration order, so `/purchase/ocr` must not be read as the id of a
+  /// document called "ocr".
+  static const String purchaseOcr = '/purchase/ocr';
+
   /// Standalone goods receipt, for goods that arrive without a purchase order.
   ///
   /// Declared before [purchaseDetailPattern], for the same reason as

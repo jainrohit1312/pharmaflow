@@ -4,8 +4,10 @@ library;
 
 import 'dart:typed_data';
 
+import 'package:app/core/errors/app_exception.dart';
 import 'package:app/data/models/ocr_purchase_bill.dart';
 import 'package:app/features/auth/application/pharmacy_scope.dart';
+import 'package:app/features/purchase_ocr/data/bill_picker.dart';
 import 'package:app/features/purchase_ocr/data/purchase_ocr_repository.dart';
 import 'package:app/services/ocr_service.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
@@ -20,7 +22,7 @@ part 'purchase_ocr_controller.g.dart';
 @riverpod
 Duration ocrRetryDelay(Ref ref) => const Duration(seconds: 3);
 
-/// A bill that has been picked, uploaded and read.
+/// A bill that has been picked and uploaded, and what the reader made of it.
 ///
 /// Plain rather than Freezed for `PosCart`'s reason: it is a screen's working
 /// state, not a table row, and no migration owns its shape. All three parts are
@@ -47,8 +49,15 @@ class OcrScan {
   /// re-read does not upload a second copy of the same bill.
   final String storagePath;
 
-  /// What the reader made of it.
-  final OcrPurchaseBill bill;
+  /// What the reader made of it, or `null` while it is being read — or after a
+  /// read that failed.
+  ///
+  /// Nullable rather than absent on purpose: the bill is *up there* from the
+  /// moment the upload returns, and a first read that fails must still be
+  /// retryable from the stored object (D-033). Without this, "read it again"
+  /// after a failure would have nothing to read and would have to upload a second
+  /// copy of the same bill.
+  final OcrPurchaseBill? bill;
 }
 
 /// What the OCR screen is showing.
@@ -84,6 +93,13 @@ class PurchaseOcrState {
 
   /// Whether anything can be shown yet.
   bool get hasScan => scan != null;
+
+  /// Whether the bill has actually been read.
+  ///
+  /// Distinct from [hasScan]: a bill can be up in the bucket with a failed read
+  /// behind it, which the screen shows as "we could not read it" plus a retry
+  /// rather than as an empty form.
+  bool get hasBill => scan?.bill != null;
 
   /// A copy holding [value], with nothing in flight and no failure.
   PurchaseOcrState withSuccess(OcrScan value) => PurchaseOcrState(scan: value);
@@ -123,6 +139,39 @@ class PurchaseOcrController extends _$PurchaseOcrController {
   @override
   PurchaseOcrState build() => const PurchaseOcrState();
 
+  /// Asks the platform for a bill, checks it, uploads it and reads it.
+  ///
+  /// The whole decision lives here rather than in the widget, including the two
+  /// things that are easy to get wrong on the screen side: a file whose type the
+  /// platform did not report is typed from its name (rather than refused as "no
+  /// type at all"), and a file the bucket would refuse is turned away before the
+  /// round trip, in the same words the write would use.
+  Future<void> pickBill({required bool fromCamera}) async {
+    final picked = await ref
+        .read(billPickerProvider)
+        .pick(fromCamera: fromCamera);
+    if (picked == null) {
+      return; // The user changed their mind, which is not a failure.
+    }
+
+    final mimeType =
+        picked.mimeType ??
+        PurchaseOcrRepository.mimeForFileName(picked.fileName ?? '');
+    final refusal = PurchaseOcrRepository.validatePick(
+      mimeType: mimeType,
+      sizeInBytes: picked.bytes.length,
+    );
+    if (refusal != null) {
+      if (!ref.mounted) {
+        return;
+      }
+      state = state.withError(ValidationException(message: refusal));
+      return;
+    }
+
+    await pickAndScan(bytes: picked.bytes, mimeType: mimeType!);
+  }
+
   /// Uploads a picked bill, reads it, and stores the result.
   ///
   /// The upload happens once. A retry re-reads the object that is already there.
@@ -147,6 +196,17 @@ class PurchaseOcrController extends _$PurchaseOcrController {
       if (!ref.mounted) {
         return;
       }
+      // The bill is up in the bucket from here, even if the read that follows
+      // fails: that is what makes a first-read failure retryable without a second
+      // upload (D-033).
+      state = state.withSuccess(
+        OcrScan(
+          bytes: image,
+          mimeType: mimeType,
+          storagePath: path,
+          bill: null,
+        ),
+      );
       await _read(storagePath: path, bytes: image, mimeType: mimeType);
     } on Object catch (error) {
       // A screen that navigated away mid-upload stops watching this provider, and
