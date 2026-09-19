@@ -11,8 +11,8 @@ Flutter + Supabase (hosted).
 > + Phase 6**.
 >
 > The handoff files after this chunk are `context/chat3i-summary.md` and
-> `context/chat3j-opening-prompt.md`. New decisions continue at **D-048** (D-038 to
-> D-047 are taken).
+> `context/chat3j-opening-prompt.md`. New decisions continue at **D-049** (D-038 to
+> D-048 are taken).
 
 ---
 
@@ -23,9 +23,10 @@ Flutter + Supabase (hosted).
    it deliberately left
 3. `DECISIONS.md` — especially **D-029** (no FCM in Phase 5), **D-046** (alerts
    surface in-app, dispatch in Phase 6), **D-047** (an alert is a question, a
-   notification is an event), **D-045** (measurements never mutate production),
-   **D-004** (the caller's JWT), and **D-042** (one reader of a function's error
-   envelope)
+   notification is an event), **D-048** (**notifications are a top-level utility**:
+   the route, the rail entry, the dashboard widget — settle nothing here, it is
+   decided), **D-045** (measurements never mutate production), **D-004** (the
+   caller's JWT), and **D-042** (one reader of a function's error envelope)
 4. `HANDOFF_PROTOCOL.md` — the gate list, one `deno check` per entry point
 5. `MASTER_PLAN.md` — Phase 5/6 scope
 6. `context/chat3i-opening-prompt.md` — this file
@@ -154,17 +155,31 @@ POST { "channel": "whatsapp" | "email",
 - Reuse `_shared/errors.ts`, `_shared/response.ts`, `_shared/client.ts`. No second
   envelope, no second error vocabulary.
 
-### 2. The in-app list
+### 2. The in-app list — **the placement is decided (D-048); do not re-open it**
 
-- A screen (or the smallest surface that fits): this user's `notifications`, newest
-  first, with the unread state visible and a way to mark read (`read_at`), plus the
-  two **alert sections** rendered from the RPCs part 1 built.
-- Tenant/user scope: `notifications` is addressed by `user_id` (RLS enforces it), and
-  anything read from a tenant table keeps the `pharmacy_id` scope (D-015).
-- Where it lives in the shell is a decision: the settings surface, the dashboard, or a
-  destination. Look at how `/inventory/calendar` and `/reports/expenses` were nested
-  (a child of the destination it serves, so the rail highlights correctly) before
-  adding a thirteenth destination.
+- **`/notifications` is a top-level shell destination**, not nested under a domain
+  module: `Routes.notifications = '/notifications'`, declared in `app_router.dart` as
+  a shell child.
+- **A twelfth entry in `_navDestinations`**, placed **after Reports and before
+  Settings**, with `inBottomBar: false` — and the matching path in `Routes.shellPaths`.
+  The two lists move together and `dashboard_shell_test.dart` already asserts they
+  agree, so a half-added destination fails there.
+- **The bottom bar stays at four**: `_bottomBarDestinations` filters on
+  `inBottomBar`, so nothing leaks into it.
+- **The dashboard widget** shows the unread count — *Notifications (N)* — tappable
+  through to the route, and **always visible**: at zero it reads *No new
+  notifications* rather than hiding. (A surface that vanishes when it has nothing to
+  say is one the user forgets exists.)
+- **A bell in `AppScaffold` is deferred to Phase 6** (a scaffold change touches twenty
+  screens; the rail entry already carries the affordance).
+- The screen itself: this user's `notifications` (user-addressed; RLS enforces
+  `user_id = auth.uid()`), newest first, the unread state visible and markable read
+  through `read_at`, plus the two **alert sections** rendered live from
+  `low_stock_products()` and `expiring_batches()` (D-047 — never re-derive an alert in
+  Dart). Anything read from a tenant table keeps the `pharmacy_id` scope (D-015).
+- The empty and failure states must be distinguishable (T-5's lesson): *"still
+  loading"*, *"nothing yet"* and *"could not load"* are three different sentences
+  with three different affordances.
 
 ### 3. The Dart seams
 

@@ -1742,3 +1742,52 @@ where they did not.
   ways, and that reading them moves nothing.
 - **The notifications half of Chunk D is not built yet**: `send-notification`, the
   in-app list screen and the Dart seams are briefed in `context/chat3i-opening-prompt.md`.
+
+---
+
+## D-048 — Notifications Are a Top-Level Utility, Not a Domain Module
+
+**Date:** 2026-09-19
+
+**Status:** Active
+
+**Decision:** `/notifications` is a **top-level shell destination**, treated as a
+cross-cutting utility in the way `/settings` is, and nested under no domain module.
+The desktop navigation rail gets a twelfth entry, placed **after Reports and before
+Settings**; the mobile drawer gets the same entry; the **bottom bar stays at four**
+(`inBottomBar: false`, the D-022 flag). The dashboard carries a small widget showing
+the unread count — *Notifications (N)*, tappable through to the route, and **always
+visible**: at zero it reads *No new notifications* rather than disappearing. A bell in
+`AppScaffold` is **deferred to Phase 6**.
+
+**Rationale:** Notifications span every domain — a low-stock alert is inventory, an
+expiry alert is stock, a payable reminder is a purchase or a ledger entry, a payment
+receipt is sales — so no single module owns them, and nesting the list under whichever
+one was chosen first would make the other four look like second-class answers. Twelve
+rail entries is still a list a person reads rather than scans, and the bottom bar's
+four are the trading surfaces a counter actually taps, which is exactly the
+distinction `inBottomBar` exists for (D-022). The bell is deferred because it is a
+change to the scaffold every screen is built on — twenty-odd screens — for a
+convenience the rail entry already provides.
+
+**Consequences:**
+
+- **Two lists have to move together, and a test already enforces it**: adding the
+  destination means an entry in `_navDestinations` *and* a path in `Routes.shellPaths`,
+  and `DashboardShell.destinationPaths` exists so a test can assert the two agree
+  (`dashboard_shell_test.dart`). A half-added destination fails there rather than
+  showing a rail entry that navigates nowhere.
+- The bottom bar is untouched: `_bottomBarDestinations` filters on `inBottomBar`, so
+  the twelfth entry cannot leak into it.
+- The dashboard widget is **visible at zero on purpose**: a notification surface that
+  vanishes when there is nothing to say is one a user forgets exists, and the first
+  time they need it is the time they would not find it. *"No new notifications"* is
+  the honest empty state, and it is the same rule T-5 records for the sale-return
+  picker — "nothing here" and "still loading" must not look alike.
+- **Where Phase 6 and later nest**: dispatch settings and per-user notification
+  preferences go under `/notifications/*`, the way `/inventory/calendar` and
+  `/reports/expenses` sit under the destination they serve, so the rail keeps
+  highlighting the parent.
+- The route is declared in `app_router.dart` as a shell child, and the health of the
+  arrangement is asserted by the shell's existing destination test rather than by a
+  new one.

@@ -1726,6 +1726,11 @@ sources, `low_stock_products` + `expiring_batches`) is done and its SQL test ass
 - **The in-app list**: `notifications` (user-addressed, `read_at` for the read
   state — migration 00008), newest first, with the two alert sections rendered live
   from the RPCs above (D-047: an alert is a question, a notification is an event).
+  **Placement is decided (D-048)**: a top-level `/notifications` shell destination —
+  a twelfth rail entry after Reports and before Settings, `inBottomBar: false` so the
+  bottom bar stays at four, a drawer entry, and a dashboard widget showing the unread
+  count that stays visible at zero ("No new notifications"). The `AppScaffold` bell
+  is Phase 6's.
 - **The Dart seams and `NotificationService`'s Phase 5 meaning**: `getFcmToken()`
   stays `null`, and `init()`/`showLocal()` get an honest definition without a push
   SDK (D-029) — a platform capability behind a seam and a fake (D-035).
