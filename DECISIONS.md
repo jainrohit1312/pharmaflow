@@ -983,3 +983,80 @@ their bill is unreadable.
 - The distinction is carried in the envelope, not guessed: `finish_reason` and the
   provider's status both travel with the answer, so a screen can say which kind of
   failure it is looking at.
+
+---
+
+## D-033 — The Retry Lives in the App, With a Visible Wait
+
+**Date:** 2026-09-19
+
+**Status:** Active
+
+**Decision:** The function still makes one attempt (D-032). The **app** retries
+once: `PurchaseOcrController` reads the bill again after
+`ocrRetryDelayProvider` (3 seconds) and says it is doing so — `isRetrying` is part
+of its state, distinct from "busy", so the screen can show *"the reader is busy —
+retrying…"* rather than a bare spinner. `isRetryableOcrError` is the single place
+that decides what deserves a second attempt: the code `provider_unavailable`
+(the free-tier `503`) or `unreachable` (nothing came back at all). A retry re-reads
+the object already in the bucket; it never uploads a second copy.
+
+**Rationale:** D-032 left this open on purpose — "either the key moves to a paid
+tier or a deliberate retry-once policy is added *with* a visible waiting state" —
+and this is that choice, made in the client because the client is where a wait can
+be *explained*. A user who sees nothing retries by tapping, which is the one thing
+a five-requests-a-minute budget cannot afford; a user who is told to wait is a user
+who waits. Two attempts, not more: the budget is per minute, so a third attempt
+inside the same minute buys another wait and nothing else.
+
+**Consequences:**
+
+- The failure that survives the retry is presented as **retryable** — "the reader
+  is busy, try again in a moment" — and never as "that bill could not be read".
+  Those are different claims about the same bill, and only one of them is true.
+- A manual retry is `rescan()`: the same object, read again, no second upload.
+- The wait is a provider rather than a constant, so tests assert the *behaviour*
+  (one retry, visible, then a retryable error) without spending real seconds.
+- A third failure mode is now distinct too: an answer cut short
+  (`finish_reason != STOP`) is not a failure at all — it is a partial read with a
+  warning attached, which the verify screen shows.
+
+---
+
+## D-034 — A Controller Checks `ref.mounted` After an Await Before Writing State
+
+**Date:** 2026-09-19
+
+**Status:** Active
+
+**Decision:** A Riverpod controller that awaits and then assigns `state` checks
+`ref.mounted` first, and returns when it is false.
+
+**Rationale:** Riverpod 3 disposes a provider that has no listeners, and a screen
+that navigates away stops being a listener — so a write after an await can land on
+a disposed provider. It surfaced while testing the OCR controller, as
+
+```
+Cannot use the Ref of purchaseOcrControllerProvider after it has been disposed.
+  ... check `ref.mounted` after async gaps or anything that could invalidate the provider.
+```
+
+and the production shape of it is ordinary: pick a bill, change your mind about the
+screen while the upload is in flight, and the app throws from a future nobody is
+awaiting. The guard is one line, and it is the difference between a discarded
+result and an unhandled error.
+
+**Consequences:**
+
+- The guard sits after **every** await, not only the last one. In the OCR
+  controller's retry loop that also means a screen that has gone away does not
+  spend a second call from a shared quota on an answer nobody will see.
+- Tests that drive a controller directly must keep it alive the way a screen does
+  — `container.listen(provider, (_, __) {})` — otherwise they measure disposal
+  rather than behaviour. `purchase_ocr_controller_test.dart` does this in its
+  container helper, and has one test that deliberately does *not*, to pin the
+  guard.
+- The same pattern exists in `PurchaseFormController` and `GrnController` (await,
+  then write): their tests pass because a screen watches them throughout. They
+  were not changed here — recording it so the next person to touch a controller
+  does not have to rediscover it.

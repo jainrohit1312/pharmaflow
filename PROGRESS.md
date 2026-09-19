@@ -1,8 +1,8 @@
 # PharmaFlow — Progress Tracker
 
 **Last Updated:** 2026-09-19
-**Current Phase:** Phase 5 IN PROGRESS — Chunk A done, Chunk B1 done: the OCR function is deployed and verified against the live model
-**Overall Status:** Phases 0-4 done and gated; Phase 5's AI substrate and its first Edge Function are in — 397 Flutter tests, 45 Deno tests
+**Current Phase:** Phase 5 IN PROGRESS — Chunk A done, Chunk B1 done (the OCR function is deployed and live-verified), Chunk B2a done (the Dart seam: envelope, service, repository, controller)
+**Overall Status:** Phases 0-4 done and gated; Phase 5's AI substrate, its first Edge Function and the client-side seam in front of it are in — 442 Flutter tests, 45 Deno tests
 
 ---
 
@@ -15,7 +15,7 @@
 | 2 | Purchase + Inventory + Batch Tracking | COMPLETE | 2026-09-18 | 2026-09-18 |
 | 3 | Sales/POS + Returns + GST Billing | COMPLETE | 2026-09-18 | 2026-09-18 |
 | 4 | Ledger + Payments + Reports | COMPLETE | 2026-09-18 | 2026-09-19 |
-| 5 | AI OCR + Smart Matching + Notifications | IN PROGRESS (Chunk B1 done) | 2026-09-19 | - |
+| 5 | AI OCR + Smart Matching + Notifications | IN PROGRESS (Chunk B2a done) | 2026-09-19 | - |
 | 6 | Testing + Deployment + Documentation | PENDING | - | - |
 
 ---
@@ -66,8 +66,8 @@
 - **One Edge Function deployed**: `ocr-purchase-bill`, with
   `supabase/functions/_shared/` (errors, the JSON envelope + CORS, the
   caller-scoped client, base64) for the functions still to come. It is verified
-  against the live model, not just locally — see the Chunk B1 section. Its **45
-  Deno tests are not part of the five gates** (open item N-3)
+  against the live model, not just locally — see the Chunk B1 section. Its 45 Deno
+  tests are gates now (**N-3 resolved**), and `make test-functions` runs them
 - Indexes and triggers per migration: `set_updated_at` on every business table,
   and every stock and ledger effect attached as a trigger rather than left to a
   client (D-013, D-023)
@@ -112,9 +112,14 @@
 | T-4 | `sale_return_form_screen.dart` has two paths that cannot run: the bill picker's `'Choose a bill'` validator, and `if (saleId == null) _report('Choose the bill the goods were sold on.')`. The submit button is disabled while no bill is chosen (`onPressed: isSaving \|\| saleId == null ? null : _save`) and the picker offers no clear affordance, so `_save` never sees a null bill | Low | Either drop the dead branches or make the button live and let the validator speak, so the two do not have to be kept in step |
 | T-5 | `sale_return_form_screen.dart`'s bill picker renders `sales.value ?? const <Sale>[]`, so "the sales list is still loading" and "this pharmacy has no sales" look identical — an empty, disabled dropdown with no spinner and no explanation | Low | Distinguish the two the way the ledger's party picker does, or read the sales provider's `AsyncValue` states explicitly |
 | N-1 | Push delivery is not wired: `device_tokens` stays empty and `NotificationService.getFcmToken()` returns `null`. Phase 5 dispatches over WhatsApp/Email and shows the in-app list; the Firebase project, the web service worker, the VAPID key and the registration call are Phase 6's (D-029) | Medium | Phase 6, which owns the deploy target the credentials must be registered against |
-| N-2 | The Gemini key is on a **free tier: 5 requests per minute**, and a burst is shed as `503 UNAVAILABLE` rather than `429`, so a busy counter (or a double-tapped retry) meets "the reader is busy" with no queue behind it. `ocr-purchase-bill` makes one attempt and reports it as retryable on purpose (D-032) | Medium | A paid tier, or a deliberate retry-once policy with a visible waiting state — decide before the OCR flow meets a real counter |
-| N-3 | The 45 Deno tests for `supabase/functions/` are not in `HANDOFF_PROTOCOL`'s five gates, and nothing runs `deno test` for them, so they will rot silently. They are also the only tests covering the functions at all | Low | Add `deno test supabase/functions` (and `deno check`) to the gate list, or find a way to run them from the Flutter suite — needs a decision, as it changes the handoff contract |
+| N-2 | The Gemini key is on a **free tier: 5 requests per minute**, and a burst is shed as `503 UNAVAILABLE` rather than `429`, so a busy counter (or a double-tapped retry) meets "the reader is busy" with no queue behind it. `ocr-purchase-bill` makes one attempt and reports it as retryable on purpose (D-032); the app retries once, visibly (D-033) | Medium | A paid tier, or a deliberate retry-once policy with a visible waiting state — decide before the OCR flow meets a real counter |
 | N-4 | A deployed function's `console.error` is only visible in the Supabase dashboard: CLI 2.113.0 has no `functions logs` subcommand (only list/delete/download/deploy/new/serve) and there is no container to serve one locally. Debugging a function is therefore a deploy-and-probe cycle | Low | Accept it and probe deliberately (D-031 records the practice), or find a log path for the CLI version in use |
+
+**Resolved in chat 4 (continued): N-3.** The Edge Functions' tests are gates now:
+`HANDOFF_PROTOCOL`'s gate block gained `deno test supabase/functions` (which
+type-checks and runs all 45) and `deno check supabase/functions/ocr-purchase-bill/index.ts`
+(the entry point and its wiring, which no test imports), and `make test-functions`
+runs both. Neither needs Docker or a secret.
 
 **Resolved this chat:** P-1 / chat2b O-1 (editing an `ordered` purchase silently
 returned it to `draft` — now reverts only when the lines change, and says so:
@@ -153,6 +158,99 @@ environment:
 Changing any pin above requires explicit user approval (see DECISIONS.md D-007).
 
 ---
+
+## Chat 4 Progress — Chunk B2a: the OCR Dart seam [DONE]
+
+Chunk B's second half split again at its own natural seam: **B2a is everything
+below the HTTP boundary and above the UI** — the envelope, the service, the
+repository (upload + invoke) and the controller — and **B2b is the verify screen,
+the save, the route and the widget tests.** No widget was added in B2a, and nothing
+in the Flutter tree calls the reader yet.
+
+### What B2a delivered
+
+- **`data/models/ocr_purchase_bill.dart`** — `OcrPurchaseBill`, `OcrDocument`,
+  `OcrLine`, `OcrMeta` as **plain classes** (`ReportSummary`'s precedent: an RPC
+  envelope, no migration owns its shape). `fromJson` is the decode the function's
+  200 body gets, and it is as tolerant as the function's own normalizer: a number
+  may arrive as `num` or as text — including `1,25,000`, read with the *same*
+  separator rule the function uses, because two sides that disagree about a number
+  are two answers to one question (D-030) — a blank string is no value, an
+  unreadable date is `null` rather than a guess, and junk where a part should be
+  never throws. `toLineDrafts()` turns the lines into the `PurchaseLineDraft`s the
+  purchase form already uses, with `productId: null` (matching is Chunk C, so a
+  human picks) and `qty: 0` where the reader read nothing — so the form's own rule
+  refuses the line until somebody says what it was.
+- **`services/ocr_service.dart`** — the stub implemented (and its hand-written
+  `Provider` converted to codegen, which D-1's list asked for). The wire mapping is
+  **two pure functions**, which is where the interesting behaviour lives:
+  `decodeOcrBill` for the 200 body and `ocrException` for a failure, which keeps
+  the function's sentence and code verbatim (`check_violation`'s rule, one layer
+  out) and maps them onto the app's exception types. `isRetryableOcrError` is the
+  single place that decides what deserves another try.
+- **`features/purchase_ocr/data/purchase_ocr_repository.dart`** — the upload
+  (`<pharmacy_id>/<year>/<file>`, D-028) and the call. The bucket's limits are
+  mirrored as **tested statics** (`validatePick`, `maxBillBytes`,
+  `allowedMimeTypes`, `storagePath`, `newBillFileName`), enforced inside the write
+  as well as available to a screen, so a screen that forgets to ask cannot upload
+  something the bucket will refuse afterwards; the bucket stays the authority and
+  its refusal is surfaced verbatim.
+- **`features/purchase_ocr/application/purchase_ocr_controller.dart`** — the flow
+  and **the retry (D-033)**: `attempts = 2`, `isRetrying` as state distinct from
+  "busy" so a screen can say *"the reader is busy — retrying…"*, a wait that is a
+  provider (`ocrRetryDelayProvider`, 3 s) so tests do not sleep, and `rescan()`
+  which re-reads the stored object rather than uploading a second copy.
+
+### The finding that came with it
+
+**D-034: a controller must check `ref.mounted` after an await before writing
+state.** Riverpod 3 disposes a provider with no listeners, so a screen that
+navigates away mid-upload stops being a listener and the next `state = …` throws
+from a future nobody awaits — which is exactly what three of the new tests caught:
+
+```
+Cannot use the Ref of purchaseOcrControllerProvider after it has been disposed.
+```
+
+Every guard now sits after each await (in the retry loop that also stops a second
+call being spent on a shared quota for nobody), and the tests keep the provider
+alive the way a screen does — `container.listen(...)` in the container helper, plus
+one test that deliberately does **not**, to pin the guard.
+
+### Tests — 13 added, none changed
+
+`test/data/models/ocr_purchase_bill_test.dart` (the decode against **Chunk B1's
+observed wire body**, text numbers, the Indian separator, nulls staying null, junk
+tolerated, `toLineDrafts`), `test/services/ocr_service_test.dart` (both pure
+mappers, every code the deployed function and the platform produced, retryability),
+`test/features/purchase_ocr/data/purchase_ocr_repository_test.dart` (the mirrored
+limits at their boundaries, the path shape, the file name), and
+`test/features/purchase_ocr/application/purchase_ocr_controller_test.dart` (the
+upload-then-read flow, the file the bucket would refuse never reaching the reader,
+**the retry being visible while it waits**, a third attempt *not* happening, the
+non-retryable failures not being retried, `rescan` not re-uploading, a failed
+re-read keeping the first parse on screen with its error set — T-3's shape — and
+the disposed-provider guard). Plus `test/support/fake_purchase_ocr_repository.dart`,
+which runs the real upload rule and builds the real path shape.
+
+### Gate output at completion
+
+```
+deno test supabase/functions                    -> ok | 45 passed | 0 failed
+deno check supabase/functions/ocr-purchase-bill/index.ts -> clean
+dart format lib test                            -> 0 changed
+flutter analyze                                 -> No issues found!
+flutter test                                    -> +442: All tests passed!
+make test-functions                             -> both of the above
+```
+
+(397 before; 442 now — 45 added across B2a: 32 for the envelope, the mappers and
+the upload rules, then 13 for the controller. No existing test changed.)
+
+### Decisions added
+
+D-033 (the retry lives in the app, with a visible wait) and D-034 (`ref.mounted`
+after an await).
 
 ## Chat 4 Progress — Chunk B1: the OCR Edge Function [DONE, live-verified]
 
@@ -1041,24 +1139,23 @@ flutter test               -> +113: All tests passed!
 
 ## Next Action
 
-**Phase 5 Chunk B2 — the OCR Flutter seam and the verify screen.**
-`context/chat3c-opening-prompt.md` is the brief. The server side is done, deployed
-and live-verified (Chunk B1); what remains is everything the user touches:
+**Phase 5 Chunk B2b — the OCR verify screen, the save and the route.**
+`context/chat3d-opening-prompt.md` is the brief. Everything below the UI is done,
+tested and green (B2a); what is left is what the user touches:
 
-- the envelope's Dart models (plain classes, `ReportSummary`'s precedent) for
-  `document` / `lines` / `meta`, including the tolerant decode of a reply whose
-  numbers may arrive as text;
-- `OcrService` implemented over `supabase.functions.invoke` (its stub still throws
-  `UnimplementedError('TODO(phase-5)')`) and a `features/purchase_ocr/` repository
-  that uploads the picked image to `purchase-bills/<pharmacy_id>/…` and invokes the
-  function;
-- the pick/capture screen, the verify form (image beside editable fields, a product
-  per line, money from `PurchaseTotals`), the save **through the existing
-  `PurchaseFormController.createPurchase` → draft → the GRN screen**, the
-  `/purchase/ocr` route, and the widget tests.
-
-Nothing in the Flutter tree changed in B1, so B2 starts from a green 397-test tree
-and adds the first Dart code for this feature.
+- `features/purchase_ocr/presentation/purchase_ocr_screen.dart` — pick or capture a
+  bill (`image_picker`'s **first use in this repo**; Web must work first, D-005),
+  show the image beside what was read, and show `meta.warnings` — they are the
+  difference between a parse somebody can check and one they have to trust;
+- the "the reader is busy — **retrying…**" state (D-033) and a retry control on
+  every failure (T-3's shape: a second failure must not leave the first parse on
+  screen with no way forward);
+- the editable header + a product per line (the existing `ProductPickerField`,
+  `PurchaseLineEditor` with `showBatchFields: true`, money from `PurchaseTotals`),
+  and the save through `PurchaseFormController.createPurchase` → a **draft** → the
+  existing GRN step, never a second write path (D-011/D-013, I-2);
+- the `/purchase/ocr` route (D-022), reached from the purchase screen;
+- `test/support/purchase_ocr_test_app.dart` + widget tests.
 
 What Phase 5 builds on, and must not break:
 

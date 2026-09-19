@@ -7,7 +7,7 @@
 # `supabase start`. Migrations reach the linked hosted project via
 # `supabase db push`.
 
-.PHONY: help setup migrate migrate-dry link gen watch lint format test run run-android run-web clean
+.PHONY: help setup migrate migrate-dry link gen watch lint format test test-functions run run-android run-web clean
 
 help:
 	@echo "PharmaFlow targets:"
@@ -20,6 +20,7 @@ help:
 	@echo "  lint          custom_lint + flutter analyze"
 	@echo "  format        dart format lib test"
 	@echo "  test          flutter test"
+	@echo "  test-functions  deno test + deno check for the Edge Functions"
 	@echo "  run           run the app on Windows"
 	@echo "  run-android   run the app on the attached Android device"
 	@echo "  run-web       run the app in Chrome"
@@ -51,6 +52,13 @@ format:
 
 test:
 	cd app && flutter test
+
+# The Edge Functions' gates (N-3). No Docker and no secrets: `deno test`
+# type-checks and runs every function test, and `deno check` covers the entry
+# point and its wiring, which no test imports.
+test-functions:
+	deno test supabase/functions
+	deno check supabase/functions/ocr-purchase-bill/index.ts
 
 run:
 	cd app && flutter run -d windows

@@ -1,33 +1,215 @@
-/// Purchase-bill OCR contract (phase 5) — abstract surface, not yet wired up.
+/// The bill reader, as the app sees it: one function call and one envelope.
 library;
 
-import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'dart:convert';
 
-// TODO(phase-5): parse supplier purchase bills from images.
+import 'package:app/core/errors/app_exception.dart';
+import 'package:app/data/datasources/supabase_client.dart';
+import 'package:app/data/models/ocr_purchase_bill.dart';
+import 'package:riverpod_annotation/riverpod_annotation.dart';
+import 'package:supabase_flutter/supabase_flutter.dart' as sb;
 
-/// Turns a purchase-bill image into structured draft data.
+part 'ocr_service.g.dart';
+
+/// The code a transport failure carries: the request never reached the reader.
+const String unreachableOcrCode = 'unreachable';
+
+/// The code the function gives a provider failure worth trying again (D-032).
+const String providerUnavailableOcrCode = 'provider_unavailable';
+
+/// The app-wide [OcrService].
 ///
-/// Deliberately a single-method interface: it is a forward-looking service
-/// boundary that phase 5 will widen (line items, supplier matching, totals).
+/// A generated provider rather than the hand-written one the stub carried: D-1
+/// listed the manual service providers as "convert to `@riverpod` when the
+/// respective feature is built", and this is that feature's turn.
+@riverpod
+OcrService ocrService(Ref ref) =>
+    SupabaseOcrService(ref.watch(supabaseClientProvider));
+
+/// Turns a purchase-bill image into the data a purchase can be built from.
+///
+/// Deliberately a single-method interface: it is the boundary between the app and
+/// one deployed function, and Chunk C widens it (product matching) rather than
+/// this chunk inventing methods nothing calls.
 // ignore: one_member_abstracts
 abstract class OcrService {
-  /// Extracts the bill at [imageUrl] into a map of parsed fields.
-  Future<Map<String, dynamic>> parsePurchaseBill({required String imageUrl});
+  /// Reads the bill stored at [storagePath] and returns what it says.
+  ///
+  /// [storagePath] is an object in the `purchase-bills` bucket
+  /// (`<pharmacy_id>/<year>/<file>`, D-028), not a URL: the function reads the
+  /// bytes with the caller's own credentials, so nothing has to be public.
+  ///
+  /// Throws an [AppException]: a [ValidationException] for a bill the reader
+  /// refused to look at, a [NotFoundException] for one it could not read, an
+  /// [AuthException] for a caller with no pharmacy, and a [ServerException] —
+  /// code [providerUnavailableOcrCode] — when the reader is busy. That last one
+  /// is the only failure worth retrying; [isRetryableOcrError] is the one place
+  /// that decides.
+  Future<OcrPurchaseBill> parsePurchaseBill({required String storagePath});
 }
 
-/// An [OcrService] whose only method throws [UnimplementedError].
-class UnimplementedOcrService implements OcrService {
-  /// Creates the placeholder implementation.
-  const UnimplementedOcrService();
+/// An [OcrService] backed by the deployed `ocr-purchase-bill` function.
+class SupabaseOcrService implements OcrService {
+  /// Creates the service over the shared Supabase client.
+  SupabaseOcrService(this._client);
 
-  /// Throws [UnimplementedError] until phase 5 lands.
+  /// The name of the deployed function.
+  static const String functionName = 'ocr-purchase-bill';
+
+  final sb.SupabaseClient _client;
+
   @override
-  Future<Map<String, dynamic>> parsePurchaseBill({required String imageUrl}) {
-    throw UnimplementedError('TODO(phase-5)');
+  Future<OcrPurchaseBill> parsePurchaseBill({
+    required String storagePath,
+  }) async {
+    try {
+      final response = await _client.functions.invoke(
+        functionName,
+        body: <String, dynamic>{'path': storagePath},
+      );
+      return decodeOcrBill(response.data);
+    } on sb.FunctionsFetchException catch (error) {
+      // Status 0: nothing came back at all, which is a connection problem rather
+      // than the reader's answer, so it has its own code.
+      throw NetworkException(
+        message:
+            'Could not reach the bill reader. Check the connection and try '
+            'again.',
+        code: unreachableOcrCode,
+        cause: error,
+      );
+    } on sb.FunctionException catch (error) {
+      throw ocrException(
+        error.details,
+        status: error.status,
+        fallbackMessage: 'Unable to read that bill.',
+      );
+    } on Object catch (error) {
+      if (error is AppException) {
+        rethrow;
+      }
+      throw ServerException(message: 'Unable to read that bill.', cause: error);
+    }
   }
 }
 
-/// The app-wide [OcrService].
-final Provider<OcrService> ocrServiceProvider = Provider<OcrService>(
-  (ref) => const UnimplementedOcrService(),
-);
+/// The bill inside a successful response.
+///
+/// Pure, so a test can drive it with the bodies that matter: the one the function
+/// promises, and the ones it might send anyway.
+OcrPurchaseBill decodeOcrBill(Object? data) {
+  if (data is Map) {
+    return OcrPurchaseBill.fromJson(data.cast<String, dynamic>());
+  }
+  throw const ServerException(
+    message: 'The bill reader answered with something unexpected. Try again.',
+    code: 'unexpected_response',
+  );
+}
+
+/// The exception for a failure the function described.
+///
+/// The function's own sentence is kept verbatim: it is written for the user, the
+/// way a `check_violation` from Postgres is (the same rule, one layer out), and
+/// a screen that rewrites it would be inventing a message for a situation it
+/// does not know.
+AppException ocrException(
+  Object? details, {
+  required String fallbackMessage,
+  int? status,
+}) {
+  final failure = _readFailure(details);
+
+  if (failure == null) {
+    return ServerException(
+      message: fallbackMessage,
+      code: status == null ? null : 'http_$status',
+    );
+  }
+
+  return switch (failure.code) {
+    'unauthorized' => AuthException(
+      message: failure.message,
+      code: failure.code,
+    ),
+    'invalid_request' || 'forbidden' || 'too_large' => ValidationException(
+      message: failure.message,
+      code: failure.code,
+    ),
+    'not_found' => NotFoundException(
+      message: failure.message,
+      code: failure.code,
+    ),
+    // `provider_unavailable`, `not_configured`, `internal` and anything a later
+    // chunk adds: a server-side problem, reported in the server's words.
+    _ => ServerException(message: failure.message, code: failure.code),
+  };
+}
+
+/// Whether [error] is worth waiting a moment and trying again.
+///
+/// Only two things are: the reader being busy (D-032's `provider_unavailable`,
+/// which the free-tier quota produces as a `503`), and the request never reaching
+/// it. Everything else — a bill the reader refused, a bill it could not find, a
+/// missing secret — will fail the same way twice, and a retry would only make the
+/// user wait for the same sentence.
+bool isRetryableOcrError(Object? error) =>
+    error is AppException &&
+    (error.code == providerUnavailableOcrCode ||
+        error.code == unreachableOcrCode);
+
+/// The code and message inside an error body, when it holds one.
+_OcrFailure? _readFailure(Object? details) {
+  final body = _asObject(details);
+  if (body == null) {
+    return null;
+  }
+
+  final error = _asObject(body['error']);
+  final message = error == null ? null : _asText(error['message']);
+  if (message == null) {
+    return null;
+  }
+
+  return _OcrFailure(
+    code: _asText(error?['code']) ?? 'unknown',
+    message: message,
+  );
+}
+
+/// [value] as a JSON object, decoding it first when it arrived as text.
+///
+/// The client library hands back the decoded body for a non-2xx from the
+/// function — but "the function" is not the only thing that can answer (a gateway
+/// rejection has its own shape), so both forms are accepted rather than assumed.
+Map<String, dynamic>? _asObject(Object? value) {
+  if (value is Map) {
+    return value.cast<String, dynamic>();
+  }
+  if (value is String && value.trim().isNotEmpty) {
+    try {
+      final decoded = jsonDecode(value);
+      return decoded is Map ? decoded.cast<String, dynamic>() : null;
+    } on FormatException {
+      return null;
+    }
+  }
+  return null;
+}
+
+/// A trimmed string, or `null`.
+String? _asText(Object? value) {
+  if (value is String) {
+    final trimmed = value.trim();
+    return trimmed.isEmpty ? null : trimmed;
+  }
+  return null;
+}
+
+/// A failure the function described.
+class _OcrFailure {
+  const _OcrFailure({required this.code, required this.message});
+
+  final String code;
+  final String message;
+}
