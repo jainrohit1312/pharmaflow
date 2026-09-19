@@ -1,4 +1,4 @@
-# Chat 4 / Phase 6, chunk 4 — the first deploy, I-3, and the credentials
+# Chat 4 / Phase 6, chunk 4 — the first deploy and the credentials
 
 You are continuing work on PharmaFlow, a production-grade Pharmacy ERP built with
 Flutter + Supabase (hosted).
@@ -10,14 +10,14 @@ Flutter + Supabase (hosted).
 > **COMPLETE** and Phase 6 is **IN PROGRESS (chunks 1-3 done and gated)**.
 >
 > The handoff files after this chunk are `context/chat3o-summary.md` and
-> `context/chat3p-opening-prompt.md`. New decisions continue at **D-064** (D-038 to
-> D-063 are taken).
+> `context/chat3p-opening-prompt.md`. New decisions continue at **D-065** (D-038 to
+> D-064 are taken).
 >
-> **What is left in Phase 6 is three things of different kinds**: one deploy that needs
-> the **user at a dashboard** (Vercel), one defect that needs **nobody** (I-3), and a set
-> of features that need **provider credentials** (dispatch, auto-send PO, push). Do I-3
-> while waiting on the others. **The one thing Phase 6 cannot fake is a deploy** — if the
-> user has not run it, say so and do the part that does not need it.
+> **What is left in Phase 6 is two things of different kinds**: one deploy that needs the
+> **user at a dashboard** (Vercel), and a set of features that need **provider
+> credentials** (dispatch, auto-send PO, push). Everything that needed no external input
+> has been done. **The one thing Phase 6 cannot fake is a deploy** — if the user has not
+> run it, say so and do the part that does not need it.
 
 ---
 
@@ -33,7 +33,7 @@ Flutter + Supabase (hosted).
    explains the `vercel.json` placement
 4. `docs/DEPLOYMENT.md` — the wider runbook (§1 gates, §2.3 the `curl` checks, §6 secrets)
 5. `MASTER_PLAN.md` — Phase 6's deliverables
-6. `DECISIONS.md` — especially **D-056**–**D-063**: the alias key, the bill's two steps, a
+6. `DECISIONS.md` — especially **D-056**–**D-064**: the alias key, the bill's two steps, a
    failure outranking a retained value, the platform scope, confirmation by hand, the
    sideload APK, three reads per bill, and where `vercel.json` goes. Also **D-007** (the
    pins), **D-015**/**D-004** (tenant scope), **D-036** (the matcher's one request per
@@ -98,7 +98,7 @@ is what chunk 3 used to syntax-check the Vercel build command.
 
 ## WHAT CHUNK 3 LEFT YOU (do not re-do, and do not re-open)
 
-- **637 Flutter tests, 181 Deno tests**, all green; `custom_lint` and `flutter analyze`
+- **664 Flutter tests, 181 Deno tests**, all green; `custom_lint` and `flutter analyze`
   clean; **30 migrations, 30/30 local and remote**; **five Edge Functions deployed**.
 - **The Vercel deploy is configured and has never been run**: `app/vercel.json` (build
   config) and `docs/DEPLOY_VERCEL.md` (runbook), both written from Vercel's own
@@ -107,11 +107,17 @@ is what chunk 3 used to syntax-check the Vercel build command.
   3"), a confirmation dialog ("Re-read? Uses one AI call."), **three reads per bill per
   session**, disabled while a read is out, "Max attempts reached" after the third (D-062).
   N-8's transition is now reachable through the UI.
+- **I-3 is done** (D-064), in a commit of its own: the return form's invoice picker is a
+  three-way search (invoice number, notes, **distributor name**) with a date window and
+  twenty-at-a-time paging; `returnablePurchaseLimit` and its dropdown are gone. **Read
+  `context/chat3n-summary.md` §4 before touching it** — the chunk-2 message had claimed
+  this shipped, and that misreport cost a chunk, which is why `HANDOFF_PROTOCOL.md` rule 7
+  now exists. Do not treat a commit message as evidence about the tree; run the command.
 - **N-13 is new**: the three-read limit is enforced on the verify screen and **not** on
   `_ChooseBill`'s failure card, deliberately (that is the D-033 recovery for a first read
   that never succeeded). Closing it is one screen's work.
-- **⚠️ I-3 is still open.** The chunk-2 commit message says it shipped; the diff and the
-  code say otherwise (see `context/chat3n-summary.md`). Do not plan around the message.
+- **The picker's `or=(…)` query has never been sent to a live PostgREST** (no local stack).
+  One `curl` with a signed-in token would settle it (D-064).
 - **N-12 was reviewed and deliberately deferred** (the user's instruction, twice).
 - **The two permanent probe rows stay** (D-049). Do not delete them.
 
@@ -142,35 +148,7 @@ they have the Vercel account, and the import is three fields. What this chunk do
 If the deploy does not happen this chunk, **say so** — "configured, not run" is the honest
 status, and it is what `PROGRESS.md` already says.
 
-### 2. I-3 — the searchable purchase picker (no external input; do this first)
-
-**This is still open** even though the chunk-2 commit message claims it shipped. The
-purchase-return form offers at most `returnablePurchaseLimit` (200) received purchases in
-a plain `AppDropdownField<String>`
-(`app/lib/features/returns/presentation/purchase_return_form_screen.dart:234`, fed by
-`purchase_return_form_controller.dart:36`), so a pharmacy with more than 200 received
-invoices cannot return goods against an older one — and `_purchaseLabel`'s fallback
-("Another purchase") is the code admitting the page bound out loud.
-
-The fix is the pattern the product picker already uses:
-`app/lib/features/purchase/presentation/widgets/product_picker_field.dart` — a tappable
-field, a dialog with an `AppSearchField`, a debounced term feeding a provider, and three
-states for the results (has-value, has-error, loading).
-
-What to watch:
-
-- **Reuse the search that exists.** `PurchasesRepository.list` already takes a search term
-  (the purchase list screen has a search field) — check what is there before writing a new
-  provider. The purchase list's own search is the thing to reuse, not to re-implement.
-- **The three states, told apart** (T-5's lesson, D-058's family): "still searching" and
-  "nothing matches" must not look alike, and a failed search is its own state with its own
-  sentence.
-- **What a choice has to carry**: the form derives its label from the list it holds, so a
-  picker that fetches its own page has to carry the chosen purchase's own label — invoice
-  number, supplier and date.
-- Tests in `test/features/returns/presentation/`, plus whatever the search itself needs.
-
-### 3. The credentials — needs provider accounts
+### 2. The credentials — needs provider accounts
 
 - **D-046's alert dispatch**: the triggers that call `send-notification` for the low-stock
   and expiry alerts. Built, deployed and live-probed as far as a missing credential allows
@@ -198,7 +176,7 @@ the missing secret.
 | N-12 | A Flutter upgrade will fail the Android build (`mobile_scanner` applies KGP) | Reviewed in chunk 3 and deferred; check that plugin's changelog when the SDK is next bumped |
 | D-1 | Remaining hand-written providers | Convert as features are touched |
 
-### 4. N-9 — needs a real catalogue
+### 3. N-9 — needs a real catalogue
 
 The vector floor (**0.78**) was measured against a **one-product** catalogue, so the window
 it sits in rests on one vector and nine query texts. Re-tune it once the catalogue has
@@ -251,7 +229,8 @@ the tests move with it.
 
 ## CONTEXT MANAGEMENT
 
-1. **Do I-3 first**, then the deploy when the user's half lands, then the credentials.
+1. **The deploy first** — it is the phase's last real deliverable and it needs the user,
+   so ask for their half early. Then the credential work, then N-13 if it is asked for.
 2. **Hand off at ~60-70% context**, or earlier if quality degrades. A PARTIAL chunk with a
    clean tree beats a rushed one.
 3. **Each chunk gets its own handoff files:** update `PROGRESS.md`; create
@@ -270,8 +249,8 @@ the tests move with it.
 ## BEGIN
 
 Read the files in STEP 0, output the 5-line understanding check, then say **how you intend
-to sequence this chunk** — what you can do with no external input (I-3, N-13, the review
-items, the manual's screenshot pass once a URL exists) and what blocks on the user (the
-Vercel import and its two environment variables, the credential accounts, N-9's real
-catalogue); what you will ask for and when; and what you will verify and paste. **Wait for
-approval before starting.**
+to sequence this chunk** — what you can do with no external input (N-13, the review items,
+the manual's screenshot pass once a URL exists) and what blocks on the user (the Vercel
+import and its two environment variables, the credential accounts, N-9's real catalogue);
+what you will ask for and when; and what you will verify and paste. **Wait for approval
+before starting.**

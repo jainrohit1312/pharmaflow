@@ -1,8 +1,8 @@
 # PharmaFlow — Progress Tracker
 
 **Last Updated:** 2026-09-20
-**Current Phase:** **PHASE 6 IN PROGRESS** (chunk 3 of n, done; `context/chat3n-summary.md`). Phase 5 is complete. Phase 6 chunk 1 closed everything needing no account (W-1, A-1, I-1, N-5, T-3/T-4/T-5/T-6, the printer and bill-screen coverage, R-1, `docs/`); chunk 2 shipped the **Android APK** and settled **N-7**/**N-8**; **chunk 3 wrote the Vercel deploy** (`app/vercel.json` + `docs/DEPLOY_VERCEL.md` — configured and **not run**) and **exposed the re-read** the N-8 fix made safe (D-062). Next: **import the repo into Vercel and run the first deploy** (the account exists; the project does not), **I-3** — still open, contrary to the chunk-2 commit message — then the credentials behind D-046/D-052/N-1, N-9's re-measurement, and the manual's screenshot pass (`context/chat3o-opening-prompt.md`)
-**Overall Status:** Phases 0-5 done and gated; Phase 6 chunks 1-3 done and gated — Phase 5 closed with its database substrate, **five deployed Edge Functions**, a bill that reads and saves end to end, a matcher that suggests and learns, a backfilled catalogue with a measured similarity floor, its alert sources, the notification function and inbox, and a chatbot a person can type into. Phase 6 added one migration since Phase 5 closed (the alias key, N-5), the Android sideload APK (D-061), a Vercel build config for the web app, and the bill re-read with its three-read limit (D-062) — **637 Flutter tests, 181 Deno tests**
+**Current Phase:** **PHASE 6 IN PROGRESS** (chunk 3 of n, done; `context/chat3n-summary.md`). Phase 5 is complete. Phase 6 chunk 1 closed everything needing no account (W-1, A-1, I-1, N-5, T-3/T-4/T-5/T-6, the printer and bill-screen coverage, R-1, `docs/`); chunk 2 shipped the **Android APK** and settled **N-7**/**N-8**; **chunk 3 wrote the Vercel deploy** (`app/vercel.json` + `docs/DEPLOY_VERCEL.md` — configured and **not run**) and **exposed the re-read** the N-8 fix made safe (D-062), and then **implemented I-3** in a commit of its own (D-064) once it turned out the chunk-2 message had claimed it against no diff at all. Next: **import the repo into Vercel and run the first deploy** (the account exists; the project does not), then the credentials behind D-046/D-052/N-1, N-9's re-measurement, and the manual's screenshot pass (`context/chat3o-opening-prompt.md`)
+**Overall Status:** Phases 0-5 done and gated; Phase 6 chunks 1-3 done and gated — Phase 5 closed with its database substrate, **five deployed Edge Functions**, a bill that reads and saves end to end, a matcher that suggests and learns, a backfilled catalogue with a measured similarity floor, its alert sources, the notification function and inbox, and a chatbot a person can type into. Phase 6 added one migration since Phase 5 closed (the alias key, N-5), the Android sideload APK (D-061), a Vercel build config for the web app, the bill re-read with its three-read limit (D-062), and the purchase picker's three-way search (I-3, D-064) — **664 Flutter tests, 181 Deno tests**
 
 ---
 
@@ -148,7 +148,6 @@
 | A-1 | `anonKey` deprecated in supabase_flutter 2.17 | Low | Migrate to `publishableKey` in Phase 6 |
 | I-1 | The low-stock list reads at most `InventoryRepository.lowStockScanLimit` (500) candidate rows and decides `total_qty < min_stock_level` in Dart, because PostgREST cannot compare two columns. A catalogue past that bound would silently omit rows. **D-part-1 built the server-side answer** (`low_stock_products()`, D-047 — same `<` rule, same shortfall, tenant-scoped, asserted by `phase5_alerts.sql`); what is left is switching the inventory screen onto it | Low | Switch `InventoryRepository.lowStock` to the RPC (the alert list already reads it), and delete the Dart comparison and its scan bound |
 | I-2 | A purchase return is two statements (header, then lines). The lines are one atomic INSERT, so stock moves for all of them or none - but a refused set can leave a header with no lines. Deliberately not rolled back: see `PurchaseReturnsRepository.create` | Low | An `RPC` wrapping both statements when Phase 4 touches the ledger |
-| I-3 | A return form offers at most `returnablePurchaseLimit` (200) received purchases | Low | A searchable purchase picker, as the product picker already is |
 | R-1 | `README.md` still describes the project as "Phase 0 (scaffold)" with Phase 1+ screens as placeholders | Low | Refresh it in Phase 6, which owns documentation |
 | T-3 | The ledger screen's entries failure path is only reachable on a **first** read: while no party is selected the entries provider holds an empty page, so a failure after a party is chosen keeps that empty page and reports itself through a SnackBar rather than replacing the body. A user who cannot load a party's ledger therefore has no retry control until they navigate away and back | Low | Either treat "no party selected" as no value rather than an empty page, or give the SnackBar a retry action |
 | T-4 | `sale_return_form_screen.dart` has two paths that cannot run: the bill picker's `'Choose a bill'` validator, and `if (saleId == null) _report('Choose the bill the goods were sold on.')`. The submit button is disabled while no bill is chosen (`onPressed: isSaving \|\| saleId == null ? null : _save`) and the picker offers no clear affordance, so `_save` never sees a null bill | Low | Either drop the dead branches or make the button live and let the validator speak, so the two do not have to be kept in step |
@@ -165,14 +164,17 @@
 | N-12 | **A future Flutter upgrade will fail the Android build**, and say so only as advice: `flutter build apk --release` warns *"Your app uses the following plugins that apply Kotlin Gradle Plugin (KGP): mobile_scanner. **Future versions of Flutter will fail to build** if your app uses plugins that apply KGP."* `mobile_scanner` is pinned `^5.2.3`. Today it is a warning and the APK builds (verified 2026-09-19, D-061); the trap is that the failure arrives on a Flutter upgrade as an unrelated-looking Gradle error, in the same shape N-10 has for web debugging | Low | When the SDK is next upgraded: check `mobile_scanner`'s changelog for a Built-in Kotlin release and bump it, or make the scan path switchable if no such release exists. Nothing is blocked until then. **Chunk 3 reviewed it at the user's request and left it deferred** — it is a warning today and the trigger is an SDK upgrade, so there is nothing to do until one happens |
 | N-13 | **The three-read limit is enforced where a bill has been *read*, not where it has only been *uploaded*.** `_ChooseBill`'s failure card ("That bill could not be read" → "Read it again") calls `rescan()`, which does not refuse past `PurchaseOcrState.maxReads` — deliberately, because that card is the D-033 recovery for a first read that never succeeded: nothing on that screen can be saved, and refusing the last retry would strand the file. The consequence is that a bill whose reads keep failing can be sent to the reader more than three times, and the cap is a *cost* fence with a gate on one side of it. Found and recorded while building the re-read button (D-062) | Low | Show the same cap on that card — the button disabled with the same sentence the verify form's failure card uses — or decide that an unread bill's recovery is worth unlimited reads and say so where the cap is defined. One screen's worth of work |
 
-**Resolved in chat 4 (Phase 6, chunk 3 — `context/chat3n-summary.md`):** **none — the
-list got one longer.** Chunk 3 **added N-13** (the three-read limit has a gate on the
-side of the screen where a bill has been read, and not on the side where it has only
-been uploaded) while closing nothing: **N-8 was already closed in chunk 2**, and what
-chunk 3 did was make it *reachable* — the re-read button (D-062) is the tap that
+**Resolved in chat 4 (Phase 6, chunk 3 — `context/chat3n-summary.md`):** **I-3**, in a
+commit of its own after chunk 3's (the chunk-2 message had claimed it shipped when it had
+not — see that section) — the purchase-return form's 200-row dropdown is a **search**
+covering the invoice number, the notes and the **distributor's name**, with a date window
+and twenty-at-a-time paging (**D-064**). **N-13 was added** by the same chunk (the
+three-read cap has a gate on the side of the screen where a bill has been read, and not on
+the side where it has only been uploaded), and **N-8 was already closed in chunk 2** —
+what chunk 3 did was make it *reachable*: the re-read button (D-062) is the tap that
 transition never had. **N-11's Vercel half is configured but not run** (D-063), and
 **N-12 was reviewed at the user's request and deliberately left deferred**. Still open
-above: I-2, I-3, N-1, N-2, N-4, N-9, N-10, N-11, N-13, D-027's residual, and T-1.
+above: I-2, N-1, N-2, N-4, N-9, N-10, N-11, N-13, D-027's residual, and T-1.
 
 **Resolved in chat 4 (Phase 6, chunk 2 — `context/chat3m-summary.md`):** **N-7** —
 a decision rather than a workaround: confirmation stays on and accounts are confirmed by
@@ -274,10 +276,13 @@ Changing any pin above requires explicit user approval (see DECISIONS.md D-007).
 
 ---
 
-## Chat 4 Progress — Phase 6, chunk 3: the Vercel config and the re-read button [DONE — PHASE 6 OPEN]
+## Chat 4 Progress — Phase 6, chunk 3: the Vercel config, the re-read button and I-3 [DONE — PHASE 6 OPEN]
 
-Two jobs of different kinds: **the deploy written but not run** (D-063) and **the button
-the N-8 fix was waiting for** (D-062). The full account is `context/chat3n-summary.md`.
+Three jobs of different kinds: **the deploy written but not run** (D-063), **the button
+the N-8 fix was waiting for** (D-062), and **I-3**, which turned out never to have been
+done at all despite the previous chunk's message saying otherwise — so it landed in a
+commit of its own that corrects the record (D-064). The full account is
+`context/chat3n-summary.md`.
 
 ### What this chunk delivered
 
@@ -317,6 +322,23 @@ the N-8 fix was waiting for** (D-062). The full account is `context/chat3n-summa
   - **The verify form's own failure card is capped with it** (a failure does not earn a
     bill a fourth read) and says why when the allowance is spent — two re-read controls on
     one screen disagreeing would have been worse than either choice.
+- **I-3 is implemented (D-064), in a commit of its own after this chunk's.** The
+  purchase-return form's invoice picker is a **search dialog** on the repository call the
+  list screen already pages with: **one box covering the invoice number, the notes and the
+  distributor's name**, an invoice-date window, **twenty at a time with "Load more"**, four
+  states told apart (rows / nothing matched / nothing there / failed-with-retry), and a
+  field that **carries the choice's own label** — so `_purchaseLabel`'s "Another purchase"
+  branch, the old code admitting it could not name a purchase outside the page it had
+  loaded, is deleted rather than worked around.
+  - **Why it needed its own commit**: the chunk-2 message listed I-3 as shipped and the
+    diff contains no file under `app/lib/features/returns/`. `returnablePurchaseLimit`
+    (200) and its dropdown were both still there. `HANDOFF_PROTOCOL.md` gained a rule so
+    the next message is checked against the diff before it is written.
+  - **Supplier names are resolved by a second query**, not a join: the term goes to
+    `SuppliersRepository.list` and the ids it returns go into `PurchasesQuery.supplierIds`,
+    which `PurchasesRepository.list` ORs with the text branches. A filtered join would be
+    one round trip, but its PostgREST support varies by version and there is no local stack
+    here to try it against.
 
 ### Files
 
@@ -330,22 +352,35 @@ app/test/features/purchase_ocr/presentation/purchase_ocr_screen_test.dart   5 ne
 app/test/features/purchase_ocr/application/purchase_ocr_controller_test.dart  4 new controller tests
 app/test/support/fake_purchase_ocr_repository.dart               a `gate` to hold a read in flight
 app/test/support/purchase_ocr_test_app.dart                      the `configure:` comment, corrected
-DECISIONS.md                                                     D-062, D-063
-PROGRESS.md, README.md, context/chat3n-summary.md, context/chat3o-opening-prompt.md
+app/lib/core/utils/postgrest_search.dart                         buildInFilter + buildAnyOfFilter (I-3)
+app/lib/features/purchase/data/purchases_repository.dart         PurchasesQuery.supplierIds, hasSearch, the OR branch
+app/lib/features/purchase/application/purchase_picker_controller.dart  the picker's filter + paged results (new)
+app/lib/features/returns/presentation/widgets/purchase_picker_field.dart  the field and its search sheet (new)
+app/lib/features/returns/presentation/purchase_return_form_screen.dart  on the picker; the 200-row dropdown deleted
+app/lib/features/returns/application/purchase_return_form_controller.dart  returnablePurchaseLimit + provider deleted
+app/test/core/utils/postgrest_search_test.dart                   8 tests over the three filter builders
+app/test/features/purchase/application/purchase_picker_controller_test.dart  10 tests (new)
+app/test/features/returns/presentation/widgets/purchase_picker_field_test.dart  9 tests (new)
+app/test/features/returns/presentation/purchase_return_form_screen_test.dart  `_choosePurchase` drives the picker
+app/test/support/fake_purchases_repository.dart                  the OR branch, sanitised term, lastLimit/lastOffset
+app/test/support/returns_test_app.dart                           a suppliers-repository fake for the name lookup
+HANDOFF_PROTOCOL.md                                              the commit-message-vs-diff rule
+DECISIONS.md                                                     D-062, D-063, D-064
+PROGRESS.md, README.md, docs/USER_MANUAL.md, context/chat3n-summary.md, context/chat3o-opening-prompt.md
 ```
 
 ### Verification evidence
 
 ```
-dart format lib test                      -> 421 files, 1 changed (the new controller test), then 0
+dart format lib test                      -> 426 files, 1 changed (the new controller test), then 0
 dart run build_runner build --delete-conflicting-outputs
-                                          -> exit 0 (run twice, before and after the final
-                                             refactor); its outputs are the gitignored
+                                          -> exit 0; its outputs are the gitignored
                                              .g.dart/.freezed.dart files; only the known
                                              "SDK language version 3.12.0 is newer than analyzer" notice (T-1)
 dart run custom_lint                      -> No issues found!
 flutter analyze                           -> No issues found!
-flutter test                              -> +637: All tests passed!   (628 -> 637)
+flutter test                              -> +664: All tests passed!   (628 -> 664, over this chunk's
+                                             two commits: 9 for the re-read, 27 for I-3)
 deno test supabase/functions              -> ok | 181 passed | 0 failed (2s)
 deno check <each of the five entry points> -> exit 0 (no output)
 flutter build web --release               -> exit 0; built build\web in ~5 min, with index.html,
@@ -375,14 +410,18 @@ bash <the ".env" step, extracted, SUPABASE_URL/ANON_KEY set>
   never been read by Vercel and `docs/DEPLOY_VERCEL.md` has never been followed — the
   first deploy is the test of both, which is why §7 of that document lists the failures
   worth recognising.
-- **No I-3, and it is still open.** ⚠️ *The chunk-2 commit message claims otherwise* —
-  it lists "I-3: purchase return form's 200-row limit replaced with a searchable picker",
-  but `git show --stat 25615b0` touches no file under `features/returns/`, and the code
-  still caps the list at `returnablePurchaseLimit` (`purchase_return_form_controller.dart:36`)
-  and renders an `AppDropdownField<String>` (`purchase_return_form_screen.dart:234`). The
-  same message also describes N-8 backwards ("preserves … invoice date, invoice number");
-  the code replaces those and preserves the supplier and the notes. Neither inaccuracy
-  changed the tree — both are worth knowing before the next chunk plans around them.
+- **I-3 was implemented in a commit of its own, and the earlier draft of this section said
+  it had not been touched at all.** ⚠️ *The record, plainly:* the chunk-2 commit message
+  lists *"I-3: purchase return form's 200-row limit replaced with a searchable picker"*, but
+  `git show --stat 25615b0` touches **no file** under `app/lib/features/returns/`, and the
+  code still capped the list at `returnablePurchaseLimit`
+  (`purchase_return_form_controller.dart:36`) behind an `AppDropdownField<String>`
+  (`purchase_return_form_screen.dart:234`). The same message described N-8 backwards
+  ("preserves … invoice date, invoice number") where the code replaces those and preserves
+  the supplier and the notes. **Neither inaccuracy changed the tree**, and both were
+  believed for a chunk — which is why `HANDOFF_PROTOCOL.md` now requires a commit message
+  to be checked against the diff (`git show --stat`) before it is written, and why the
+  correction is a commit of its own rather than an amend.
 - **N-12 was reviewed and left deferred** (the user's instruction): it is a warning today,
   and its trigger is an SDK upgrade that has not happened. The row above records the review.
 - **Nothing was made worse.** N-1, N-2, N-4, N-9, N-10, I-2, T-1 and D-027's residual are

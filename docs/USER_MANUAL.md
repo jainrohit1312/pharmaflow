@@ -144,6 +144,12 @@ with a discount credits what the invoice charged for 4 units, not the list price
 You cannot return more than was billed, less what has already come back, and you
 cannot return more than the batch holds.
 
+Picking the invoice is a **search** rather than a list to scroll: type any part of the
+invoice number, a note you wrote on the purchase, or the distributor's name — "arihant"
+finds their invoices even though no invoice number contains it — and narrow it further
+with a date range if you want. Twenty invoices arrive at a time, with **Load more** for
+the rest, so an invoice from years back is a search away rather than out of reach.
+
 ---
 
 ## Reading a supplier bill from a photo

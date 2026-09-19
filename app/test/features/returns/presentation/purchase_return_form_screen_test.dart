@@ -6,6 +6,7 @@ import 'package:app/data/models/purchase.dart';
 import 'package:app/data/models/purchase_item.dart';
 import 'package:app/data/models/supplier.dart';
 import 'package:app/features/returns/data/purchase_returns_repository.dart';
+import 'package:app/features/returns/presentation/widgets/purchase_picker_field.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -53,12 +54,14 @@ FakePurchaseReturnsRepository _repository({
 }
 
 /// Picks the one received purchase the form offers.
+///
+/// Through the picker: a tap on the field, a tap on the invoice. It is a search
+/// now rather than a dropdown (I-3), and the dialog lists what is there as soon as
+/// it opens, so no term is needed.
 Future<void> _choosePurchase(WidgetTester tester) async {
-  await tester.tap(find.byType(DropdownButtonFormField<String>));
+  await tester.tap(find.byType(PurchasePickerField));
   await tester.pumpAndSettle();
-  // `.last`, because the closed button keeps every item in its own tree and the
-  // open menu's copy is what a tap has to land on.
-  await tester.tap(find.text('INV-1 · 01 Jan 2026').last);
+  await tester.tap(find.text('INV-1 · 01 Jan 2026'));
   await tester.pumpAndSettle();
 }
 

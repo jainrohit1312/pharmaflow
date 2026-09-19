@@ -1,41 +1,14 @@
-/// Filters, received purchases and the return write.
+/// What one invoice can still give back, and the return write.
 library;
 
-import 'package:app/data/models/purchase.dart';
 import 'package:app/data/models/purchase_return.dart';
 import 'package:app/features/auth/application/pharmacy_scope.dart';
 import 'package:app/features/inventory/application/stock_readers.dart';
-import 'package:app/features/purchase/data/purchases_repository.dart';
 import 'package:app/features/returns/application/purchase_returns_list_controller.dart';
 import 'package:app/features/returns/data/purchase_returns_repository.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 part 'purchase_return_form_controller.g.dart';
-
-/// How many received purchases a return form offers to choose from.
-///
-/// The same trade-off as `supplierOptionsLimit`: the picker answers "which
-/// invoice are these goods from", and an invoice old enough to fall past this
-/// bound is unlikely to be the one being returned today. Past it, the fix is the
-/// searchable picker the products already have.
-const int returnablePurchaseLimit = 200;
-
-/// Purchases a return may be raised against: received ones, newest first.
-///
-/// Only `received` documents: a draft has no batches and nothing has moved, and
-/// `stock_update_on_purchase_return()` would have no batch to decrement - so
-/// offering one would only produce a refusal at the end of the form.
-@riverpod
-Future<List<Purchase>> returnablePurchases(Ref ref) async {
-  final pharmacyId = ref.watch(requirePharmacyIdProvider);
-  return ref
-      .watch(purchasesRepositoryProvider)
-      .list(
-        pharmacyId: pharmacyId,
-        query: const PurchasesQuery(status: PurchaseStatus.received),
-        limit: returnablePurchaseLimit,
-      );
-}
 
 /// The lines of one received purchase, with how much of each can go back.
 @riverpod

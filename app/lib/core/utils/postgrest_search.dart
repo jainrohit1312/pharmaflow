@@ -5,6 +5,11 @@
 /// escaping. Getting it wrong is silent rather than loud: a stray `,` inside an
 /// `or=()` filter splits it into extra conditions (changing the query), and a
 /// `%` turns user text into a wildcard.
+///
+/// The three builders here compose: [buildIlikeOrFilter] for the text branches,
+/// [buildInFilter] for an equality branch, and [buildAnyOfFilter] to put them
+/// together into one disjunction — which is how a single search box can cover
+/// both a document's own text and the rows it points at.
 library;
 
 /// Characters that carry meaning inside a PostgREST `or=(...)` filter, an
@@ -66,3 +71,45 @@ String? buildIlikeOrFilter({
   }
   return columns.map((column) => '$column.ilike.%$sanitized%').join(',');
 }
+
+/// Builds one `column.in.(…)` condition, or `null` when [values] holds nothing
+/// usable.
+///
+/// The counterpart of [buildIlikeOrFilter] for an equality branch: a search that
+/// also covers "any of these rows" rather than "this text appears somewhere".
+///
+/// The values are **checked rather than sanitised**, because they come from a
+/// column rather than from a user: a value carrying a comma or a parenthesis
+/// would split the list into extra conditions — the same silent failure
+/// [sanitizeSearchTerm] exists to prevent — and such a value is a bug worth
+/// dropping rather than rewriting into a different row's id.
+String? buildInFilter({required String column, required List<String> values}) {
+  final safe = values.where(_isPlainFilterValue).toList(growable: false);
+  if (safe.isEmpty) {
+    return null;
+  }
+  return '$column.in.(${safe.join(',')})';
+}
+
+/// Joins [conditions] into one value for PostgREST's `or()` filter — a row that
+/// matches **any** of them — or `null` when there are none.
+///
+/// This is what lets one search box answer more than one question: a purchase is
+/// the invoice number somebody typed, a note they wrote on it, **or** a document
+/// that came from one of the suppliers whose name they typed. `null` rather than
+/// an empty group, because an empty `or=()` is a filter that has quietly stopped
+/// filtering.
+String? buildAnyOfFilter(Iterable<String?> conditions) {
+  final present = conditions.whereType<String>().where(
+    (condition) => condition.isNotEmpty,
+  );
+  return present.isEmpty ? null : present.join(',');
+}
+
+/// Whether [value] can go into an `in.(…)` list as it stands.
+///
+/// Every character that structures the filter (or the SQL literal inside it) is
+/// refused: a comma separates values, a parenthesis closes the list, a quote
+/// starts a literal, and a backslash or wildcard changes how a value is read.
+bool _isPlainFilterValue(String value) =>
+    value.isNotEmpty && !RegExp(r'''[,\s()"'\\%*]''').hasMatch(value);

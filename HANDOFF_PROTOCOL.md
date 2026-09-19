@@ -54,6 +54,19 @@ chat starts by reading the handoff files and ends by writing them.
    container. A new function adds a `deno check` line here and in the Makefile.
    Verified from the repository root; all three need no Docker and no secrets.
 6. Output a numbered list of all files created/modified
+7. **Before signing a commit message, verify every item in it is actually in the
+   diff — `git show --stat`, and read the lines rather than only the paths.**
+
+   This is a rule because it was broken: chunk 2's commit message listed
+   *"I-3: purchase return form's 200-row limit replaced with a searchable picker"*,
+   and `git show --stat` on that commit touches **no file** under
+   `app/lib/features/returns/` — the limit and the dropdown were both still there.
+   The same message described N-8 backwards ("preserves … invoice date, invoice
+   number") where the code replaces those and preserves the supplier and the notes.
+   Neither mistake changed the tree, and both were believed: a whole chunk was
+   planned around a defect that had never been fixed, and I-3 had to be implemented
+   as a *new* commit that corrects the record. A message is the part of the work
+   that outlives the diff, so it gets checked against the diff before it is written.
 
 ---
 

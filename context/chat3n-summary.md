@@ -1,13 +1,16 @@
-# Chat 4 / Phase 6, chunk 3 — the Vercel config and the re-read button (COMPLETE)
+# Chat 4 / Phase 6, chunk 3 — the Vercel config, the re-read button and I-3 (COMPLETE)
 
-**Status:** **COMPLETE** (chunk 3 of n). Phase 6 stays open. This chunk did the two
-things the spec asked for: it **wrote the web deploy** — a build config for Vercel and
-the runbook that goes with it, neither of which has been run — and it **exposed the
-re-read** on the bill reader's verify screen, which is the tap the N-8 fix had been
-waiting for since chunk 2. `context/chat3o-opening-prompt.md` is the next chunk.
+**Status:** **COMPLETE** (chunk 3 of n). Phase 6 stays open. This chunk did three things:
+it **wrote the web deploy** — a build config for Vercel and the runbook that goes with it,
+neither of which has been run — it **exposed the re-read** on the bill reader's verify
+screen, which is the tap the N-8 fix had been waiting for since chunk 2, and it
+**implemented I-3 in a commit of its own** after establishing that the previous chunk's
+message had claimed it against no diff at all. Two commits: chunk 3's, then I-3's.
+`context/chat3o-opening-prompt.md` is the next chunk.
 **Date:** 2026-09-20
 **Decisions:** **D-062** (a bill gets three reads, and the first one counts),
-**D-063** (`vercel.json` lives in the Root Directory, not the repository root).
+**D-063** (`vercel.json` lives in the Root Directory, not the repository root), **D-064**
+(a purchase is found by its number, its notes, or its distributor).
 
 ---
 
@@ -88,6 +91,57 @@ Gradle Plugin), its trigger is a Flutter SDK upgrade that has not happened, and 
 already records what to check when one does. The row in `PROGRESS.md` now says the review
 happened.
 
+### 4. I-3 — implemented, in a commit of its own (D-064)
+
+**The correction first.** The chunk-2 commit message lists *"I-3: purchase return form's
+200-row limit replaced with a searchable picker"*. `git show --stat 25615b0` touches **no
+file** under `app/lib/features/returns/`; `returnablePurchaseLimit` (200) and its
+`AppDropdownField<String>` were both still there
+(`purchase_return_form_controller.dart:36`, `purchase_return_form_screen.dart:234`). The
+same message describes N-8 backwards ("preserves … invoice date, invoice number") where
+the code replaces those and preserves the supplier and the notes. Neither mistake changed
+the tree, and both were believed — which is why **`HANDOFF_PROTOCOL.md` gained a rule**:
+before signing a commit message, check every item in it against the diff
+(`git show --stat`). The correction is a **new commit**, not an amend, as instructed.
+
+**What it builds.** The purchase-return form's invoice picker is a search dialog on the
+call the list screen already pages with:
+
+- **One box, three questions.** The term is one disjunction —
+  `invoice_no.ilike.…,notes.ilike.…,supplier_id.in.(…)` — so it finds an invoice by its
+  number, by a note written on it, **or by the distributor's name**. The supplier branch is
+  resolved by a **second query** (`SuppliersRepository.list`, which already searches name,
+  GSTIN and phone) rather than a filtered join, whose PostgREST support varies by deployed
+  version and cannot be checked without a local stack.
+- **The filter builders are pure and tested** (`core/utils/postgrest_search.dart`:
+  `buildIlikeOrFilter` + the new `buildInFilter` and `buildAnyOfFilter`), because getting
+  that string wrong is silent (D-014's reasoning, extended from `ilike` to `in.(…)`).
+- **Twenty at a time, with "Load more"**, paging the *resolved* query so the supplier
+  branch is resolved once per result set — a second resolution between two pages would
+  duplicate or skip rows.
+- **Four states, told apart** (T-5/D-058): rows, "no invoice matches this search",
+  "no received purchases yet", and a *failed* search with its own sentence and retry. The
+  empty-state test is `PurchasesQuery.hasSearch`, not `isFiltered` — this picker is scoped
+  to received invoices from the moment it opens, so the coarser question would tell
+  somebody who typed nothing that nothing matched. (The widget test caught exactly that.)
+- **The field owns its label.** `_purchaseLabel`'s `'Another purchase'` branch — the old
+  code admitting it could not name a purchase outside the page it had loaded — is deleted,
+  and the label is built from the row the user tapped, with the distributor's name resolved
+  through `supplierOptionsProvider` (the `PurchaseCard` idiom) and simply left off when it
+  is unknown.
+- **`returnablePurchaseLimit` and `returnablePurchasesProvider` are deleted** — their own
+  doc comment predicted this, and the form was their only consumer.
+- **Bounds are stated, not hidden**: 20 rows a page, the supplier branch capped at 25 ids
+  (it becomes an `in.(…)` list inside the filter), and the displayed name bounded by
+  `supplierOptionsLimit` (500). Each narrows the answer rather than failing it.
+
+**Honest limit.** With fakes there is no 200-row cliff, so "finds a purchase beyond the
+200th" is asserted as *the query the picker issues* (no 200-row cap, term applied, offset
+paging) and as paging past page one — not as a real 201st row. And the assembled `or=(…)`
+string has never been sent: no local stack exists, so its shape rests on the builders'
+unit tests and a documented reading of PostgREST's syntax. One live session would settle
+both.
+
 ---
 
 ## Files
@@ -123,6 +177,44 @@ app/test/support/purchase_ocr_test_app.dart
     the `configure:` doc comment, corrected
 ```
 
+**I-3's commit (the second one) — modified:**
+
+```
+app/lib/core/utils/postgrest_search.dart
+    buildInFilter + buildAnyOfFilter, and the library doc that ties the three together
+app/lib/features/purchase/data/purchases_repository.dart
+    PurchasesQuery.supplierIds + withSupplierIds + hasSearch; `list` builds one
+    disjunction out of the text branches and the supplier branch
+app/lib/features/returns/application/purchase_return_form_controller.dart
+    returnablePurchaseLimit and returnablePurchasesProvider deleted
+app/lib/features/returns/presentation/purchase_return_form_screen.dart
+    the dropdown replaced by the picker; the form holds the chosen Purchase
+app/test/core/utils/postgrest_search_test.dart
+    8 tests: the in-list, the dropped values, the joining, and the I-3 shape
+app/test/features/purchase/application/purchase_picker_controller_test.dart
+    10 tests (new)
+app/test/features/returns/presentation/purchase_return_form_screen_test.dart
+    `_choosePurchase` drives the picker instead of a dropdown
+app/test/support/fake_purchases_repository.dart
+    the OR semantics, a sanitised term, lastLimit/lastOffset
+app/test/support/returns_test_app.dart
+    a suppliers-repository fake behind the name lookup (the same fixture list)
+HANDOFF_PROTOCOL.md
+    rule 7: verify a commit message against the diff before writing it
+DECISIONS.md, PROGRESS.md, README.md, docs/USER_MANUAL.md
+```
+
+**I-3's commit — created:**
+
+```
+app/lib/features/purchase/application/purchase_picker_controller.dart
+    the picker's filter + paged results (auto-disposed, picker-scoped)
+app/lib/features/returns/presentation/widgets/purchase_picker_field.dart
+    the field, the search sheet, the four states, the Load more tile
+app/test/features/returns/presentation/widgets/purchase_picker_field_test.dart
+    9 tests (new)
+```
+
 No migration, and nothing under `supabase/` changed at all this chunk.
 
 ---
@@ -130,7 +222,7 @@ No migration, and nothing under `supabase/` changed at all this chunk.
 ## Verification evidence
 
 ```
-dart format lib test                      -> 421 files, 1 changed, then 0
+dart format lib test                      -> 426 files, 1 changed, then 0
 dart run build_runner build --delete-conflicting-outputs
                                           -> exit 0 (run twice, before and after the final
                                              refactor); its outputs are the gitignored
@@ -139,7 +231,8 @@ dart run build_runner build --delete-conflicting-outputs
                                              language version 3.11.0" notice (T-1)
 dart run custom_lint                      -> No issues found!
 flutter analyze                           -> No issues found!
-flutter test                              -> +637: All tests passed!   (628 -> 637)
+flutter test                              -> +664: All tests passed!   (628 -> 664: 9 for the
+                                             re-read, 27 for I-3)
 deno test supabase/functions              -> ok | 181 passed | 0 failed (2s)
 deno check <each of the five entry points> -> exit 0 (no output)
 flutter build web --release               -> exit 0; built build\web in ~5 min, with index.html,
@@ -192,6 +285,12 @@ the test of all three; `docs/DEPLOY_VERCEL.md` §7 is the recovery map.
   does not; records the correction to `docs/DEPLOYMENT.md` §2.2's older
   `outputDirectory: app/build/web` snippet (right only for the empty-Root-Directory
   arrangement) and the build-time `build_runner` requirement.
+- **D-064 — a purchase is found by its number, its notes, or its distributor.** The picker
+  is a search dialog on the call the list screen already pages with; the supplier branch is
+  a second query ORed into the same disjunction rather than a filtered join; twenty rows a
+  page; the field carries its own label. Records the three bounds, the four states, the
+  deletion of `returnablePurchaseLimit`, the tests, and — in as many words — that the
+  assembled `or=(…)` string has never been sent to a live PostgREST.
 
 ---
 
@@ -200,16 +299,16 @@ the test of all three; `docs/DEPLOY_VERCEL.md` §7 is the recovery map.
 - **Nothing was deployed.** `app/vercel.json` has never been read by Vercel and
   `docs/DEPLOY_VERCEL.md` has never been followed. The account exists; the project does
   not. **This is the one deliverable Phase 6 cannot fake** — say so rather than tick it.
-- **⚠️ I-3 is still open, and the chunk-2 commit message says it is not.** The message
-  lists *"I-3: purchase return form's 200-row limit replaced with a searchable picker"*,
-  but `git show --stat 25615b0` touches **no file** under `app/lib/features/returns/`, and
-  the code still caps at `returnablePurchaseLimit = 200`
-  (`purchase_return_form_controller.dart:36`) and renders an `AppDropdownField<String>`
-  (`purchase_return_form_screen.dart:234`). The same message describes N-8 backwards
-  ("preserves … invoice date, invoice number") where the code replaces those and preserves
-  the supplier and the notes. **Neither inaccuracy changed the tree**; both matter because
-  a plan built on "I-3 is done" would skip a live defect, and a 200-row cap is a real one
-  for any pharmacy with more than 200 received invoices.
+- **⚠️ I-3 was claimed by chunk 2 and never done — it is done now.** The message lists
+  *"I-3: purchase return form's 200-row limit replaced with a searchable picker"*, but
+  `git show --stat 25615b0` touches **no file** under `app/lib/features/returns/`; the cap
+  and the dropdown were both still there. It is closed in the second commit of this chunk
+  (D-064), and `HANDOFF_PROTOCOL.md` rule 7 exists so the next message is checked against
+  its diff before it is written. **The lesson is the load-bearing part**: the misreport was
+  believed, and a whole chunk was planned around a defect that had never been fixed.
+- **The picker's query has never been sent.** The `or=(…)` string is assembled by unit-tested
+  builders, but no live request has carried it: there is no local stack, and the hosted
+  project needs a session. One `curl` with a signed-in token would settle it.
 - **N-13 is new** (above): the three-read limit is enforced where a bill has been *read*,
   not where it has only been *uploaded*.
 - **N-11's Vercel half is configured, not run** — see `docs/DEPLOY_VERCEL.md`.
@@ -223,7 +322,6 @@ the test of all three; `docs/DEPLOY_VERCEL.md` §7 is the recovery map.
 
 **Phase 6's remaining work** — `context/chat3o-opening-prompt.md`. In short: **the first
 Vercel deploy**, which needs the user at the dashboard (import, environment variables,
-then the `curl` checks); then **I-3**, which needs nobody; then the credential work
-(D-046's triggers, D-052's auto-send PO, N-1's push); then **N-9**'s re-measurement once
-the catalogue has 50+ products; and the user manual's screenshot pass once there is a
-deployed URL to point at.
+then the `curl` checks); then the credential work (D-046's triggers, D-052's auto-send PO,
+N-1's push); then **N-9**'s re-measurement once the catalogue has 50+ products; and the
+user manual's screenshot pass once there is a deployed URL to point at.

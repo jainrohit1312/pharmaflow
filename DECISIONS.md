@@ -2497,3 +2497,77 @@ so a fresh clone has none) and an empty `.env` left behind by the env-var step.
   project has not been imported and no deploy has been made. The first deploy is the test
   of both, and `docs/DEPLOY_VERCEL.md` §7 lists the failures worth recognising when it
   runs.
+
+---
+
+## D-064 — A Purchase Is Found by Its Number, Its Notes, or Its Distributor
+
+**Date:** 2026-09-20
+
+**Status:** Active
+
+**Decision:** The purchase-return form's invoice picker (I-3) is a **search dialog** built
+on the same repository call the list screen pages with, not a list to scroll. One text
+box covers **three things at once** — the invoice number, the notes written on the
+purchase, and **the distributor's name** — alongside an invoice-date window; results
+arrive **twenty at a time** with a "Load more" tile; and the field **carries the chosen
+purchase** rather than deriving its label from whatever list it happens to hold.
+
+The supplier branch is resolved by a **second query**, not a join: the term goes to
+`SuppliersRepository.list` (which already searches name, GSTIN and phone), those ids go
+into `PurchasesQuery.supplierIds`, and `PurchasesRepository.list` ORs them with the text
+branches in **one disjunction** — `invoice_no.ilike.…,notes.ilike.…,supplier_id.in.(…)` —
+while the status and date window keep ANDing as they always have. The three filter
+builders live in `core/utils/postgrest_search.dart`, where a mistake is testable rather
+than silent (D-014's reasoning, extended from `ilike` to `in.(…)`).
+
+**Rationale:**
+
+- **The 200-row bound was not a bug in a list; it was the wrong interaction.** A dropdown
+  over received invoices works until a pharmacy has two hundred, and then a document that
+  exists cannot be returned against. Search is what makes the list unbounded in practice.
+- **One box beats three controls** for the question asked here ("which invoice are these
+  goods from"): the person remembers an invoice *number*, a scribbled *note*, or *who it
+  came from*, and not which of those they remember.
+- **The two-query resolution is the version of this that could be verified from here.** A
+  filtered join (`suppliers!inner(name)` inside `or=()`) would be one round trip, but its
+  availability depends on the deployed PostgREST version and this project has no local
+  stack to try it against; a maintained `search_text` column would need a migration, a
+  backfill and a trigger that also fires when a supplier is *renamed*. The extra lookup is
+  one indexed `ilike` per searched term.
+- **A picker is not a browsing context.** The providers are the picker's own and
+  auto-disposed (unlike the list screen's `keepAlive` filter), so a term typed here
+  neither inherits nor disturbs the list screen's filters, and closing the dialog forgets
+  it.
+
+**Consequences:**
+
+- **`returnablePurchaseLimit` and `returnablePurchasesProvider` are deleted.** Their own
+  doc comment predicted this ("past it, the fix is the searchable picker the products
+  already have"); the form is the only consumer either ever had.
+- **The field owns its label.** `_purchaseLabel`'s `'Another purchase'` branch — the old
+  code admitting it could not name a purchase outside the page it had loaded — is gone,
+  and the label is built from the row the user tapped. `PurchaseCard`'s supplier-name map
+  idiom is reused for the name, and an unresolved name is left off rather than failing
+  anything.
+- **Bounds, stated rather than hidden.** Twenty rows per page; the supplier branch is
+  capped at `purchasePickerSupplierMatchLimit` (25), because it becomes an `in.(…)` list
+  inside the filter; and the *name shown* on a row comes from `supplierOptionsProvider`,
+  which has its own 500-row bound. Each narrows the answer rather than failing it, and
+  each is recorded here rather than discovered later.
+- **Four states, told apart** (T-5, D-058): rows, "no invoice matches this search",
+  "no received purchases yet", and a search that *failed* — with its own sentence and its
+  own retry. The empty-state test is `PurchasesQuery.hasSearch` rather than `isFiltered`,
+  because this picker is scoped to received invoices from the moment it opens: the coarser
+  question would tell somebody who typed nothing that nothing matched.
+- **A failed "Load more" keeps the rows on screen** and reports itself under the list,
+  rather than blanking a list the user is reading (the same trade as the list screen's
+  `loadMore`).
+- **Verified:** 10 controller tests (scope, paging, search by number, search by
+  distributor, one supplier resolution per result set, date window, failure, and a failed
+  page keeping its rows), 9 widget tests (the label, the four states, both searches, Load
+  more, the date control) and 8 tests over the filter builders; 664 Flutter tests in
+  total. **Not verified from here:** the assembled `or=(…)` string against a live
+  PostgREST — no local stack exists, so the shape rests on the builders' unit tests and on
+  a documented reading of PostgREST's `or` syntax. A live session would settle it in one
+  request.

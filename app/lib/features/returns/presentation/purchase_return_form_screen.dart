@@ -8,7 +8,6 @@ import 'package:app/core/utils/validators.dart';
 import 'package:app/core/widgets/app_back_button.dart';
 import 'package:app/core/widgets/app_button.dart';
 import 'package:app/core/widgets/app_date_field.dart';
-import 'package:app/core/widgets/app_dropdown_field.dart';
 import 'package:app/core/widgets/app_scaffold.dart';
 import 'package:app/core/widgets/app_text_field.dart';
 import 'package:app/core/widgets/error_view.dart';
@@ -16,9 +15,12 @@ import 'package:app/core/widgets/loading_view.dart';
 import 'package:app/core/widgets/section_card.dart';
 import 'package:app/data/models/purchase.dart';
 import 'package:app/data/models/purchase_return.dart';
+import 'package:app/data/models/supplier.dart';
 import 'package:app/features/returns/application/purchase_return_form_controller.dart';
 import 'package:app/features/returns/data/purchase_return_totals.dart';
 import 'package:app/features/returns/data/purchase_returns_repository.dart';
+import 'package:app/features/returns/presentation/widgets/purchase_picker_field.dart';
+import 'package:app/features/suppliers/application/supplier_options.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -42,7 +44,13 @@ class _PurchaseReturnFormScreenState
     extends ConsumerState<PurchaseReturnFormScreen> {
   final _formKey = GlobalKey<FormState>();
   final _reason = TextEditingController();
-  String? _purchaseId;
+
+  /// The invoice the goods came from, as the picker returned it.
+  ///
+  /// Kept as the whole row rather than as an id: the field has to draw what was
+  /// chosen, and a label derived from whatever list happened to be loaded is how
+  /// the old dropdown ended up calling a chosen invoice "Another purchase" (I-3).
+  Purchase? _purchase;
   DateTime _returnDate = DateTime.now();
 
   /// Units to return, keyed by purchase-item id. Absent means "this one stays".
@@ -56,12 +64,19 @@ class _PurchaseReturnFormScreenState
 
   @override
   Widget build(BuildContext context) {
-    final purchases = ref.watch(returnablePurchasesProvider);
-    final purchaseId = _purchaseId;
+    final purchaseId = _purchase?.id;
     final lines = purchaseId == null
         ? null
         : ref.watch(returnableLinesProvider(purchaseId));
     final isSaving = ref.watch(purchaseReturnFormControllerProvider).isLoading;
+    // Who the chosen invoice came from, for the field's label. An unresolved name
+    // is simply left off rather than failing anything - the same trade
+    // `PurchaseCard` makes with the same map.
+    final supplierNames = <String, String>{
+      for (final supplier
+          in ref.watch(supplierOptionsProvider).value ?? const <Supplier>[])
+        supplier.id: supplier.name,
+    };
 
     ref.listen<AsyncValue<PurchaseReturn?>>(
       purchaseReturnFormControllerProvider,
@@ -89,10 +104,12 @@ class _PurchaseReturnFormScreenState
               title: 'Return',
               child: Column(
                 children: <Widget>[
-                  _PurchaseField(
-                    purchases: purchases,
-                    value: purchaseId,
-                    onChanged: _choosePurchase,
+                  PurchasePickerField(
+                    selected: _purchase,
+                    selectedSupplierName: _purchase == null
+                        ? null
+                        : supplierNames[_purchase!.supplierId],
+                    onSelected: _choosePurchase,
                   ),
                   const SizedBox(height: 16),
                   AppDateField(
@@ -145,11 +162,11 @@ class _PurchaseReturnFormScreenState
   /// The quantities are keyed by purchase-item id, so a stale choice could never
   /// be attributed to the wrong invoice - but leaving them in place would make the
   /// fields wrong on screen if the same item id came back, so they are cleared.
-  void _choosePurchase(String? value) => setState(() {
-    if (_purchaseId != value) {
+  void _choosePurchase(Purchase purchase) => setState(() {
+    if (_purchase?.id != purchase.id) {
       _quantities.clear();
     }
-    _purchaseId = value;
+    _purchase = purchase;
   });
 
   /// Records how many units of one line are going back, or clears it at zero.
@@ -167,7 +184,7 @@ class _PurchaseReturnFormScreenState
     if (form == null || !form.validate()) {
       return;
     }
-    final purchaseId = _purchaseId;
+    final purchaseId = _purchase?.id;
     if (purchaseId == null) {
       _report('Choose the purchase the goods came from.');
       return;
@@ -202,60 +219,6 @@ class _PurchaseReturnFormScreenState
       ..hideCurrentSnackBar()
       ..showSnackBar(SnackBar(content: Text(message)));
   }
-}
-
-/// The purchase picker, with the read's three states.
-class _PurchaseField extends StatelessWidget {
-  const _PurchaseField({
-    required this.purchases,
-    required this.value,
-    required this.onChanged,
-  });
-
-  /// The received purchases, or the failed read's error state.
-  final AsyncValue<List<Purchase>> purchases;
-
-  /// The selected purchase id.
-  final String? value;
-
-  /// Called with the chosen id.
-  final ValueChanged<String?> onChanged;
-
-  @override
-  Widget build(BuildContext context) {
-    if (purchases.hasError && !purchases.hasValue) {
-      return Text(
-        describeError(purchases.error!),
-        style: Theme.of(context).textTheme.bodySmall,
-      );
-    }
-
-    final options = purchases.value ?? const <Purchase>[];
-    return AppDropdownField<String>(
-      label: 'Purchase',
-      hint: options.isEmpty ? 'No received purchases yet' : 'Which invoice',
-      prefixIcon: Icons.receipt_long_outlined,
-      value: value,
-      values: options.map((purchase) => purchase.id).toList(growable: false),
-      labelOf: (id) => _purchaseLabel(options, id),
-      enabled: options.isNotEmpty,
-      onChanged: onChanged,
-      validator: (chosen) => chosen == null ? 'Choose a purchase' : null,
-    );
-  }
-}
-
-/// The label for a purchase in the picker: invoice, then date.
-String _purchaseLabel(List<Purchase> purchases, String id) {
-  for (final purchase in purchases) {
-    if (purchase.id == id) {
-      return '${purchase.invoiceNo} · '
-          '${Formatters.dateDdMmmYyyy(purchase.invoiceDate)}';
-    }
-  }
-  // The selected purchase is outside the page the picker loaded; showing its id
-  // would be worse than saying so.
-  return 'Another purchase';
 }
 
 /// The lines of the chosen purchase, each with how many units go back.

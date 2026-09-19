@@ -128,10 +128,11 @@ sideloading** (debug-signed — D-061), a re-read of a bill no longer discards t
 supplier the human chose (N-8) and is now **offered on the verify screen** with a
 three-read limit per bill (D-062), **the Vercel web deploy is configured**
 (`app/vercel.json` + [`docs/DEPLOY_VERCEL.md`](docs/DEPLOY_VERCEL.md) — D-063,
-written and **not run**), and the email-confirmation policy is settled (D-060).
+written and **not run**), the return form picks its invoice by **searching** —
+invoice number, notes or distributor, with a date window (I-3, D-064) — and the
+email-confirmation policy is settled (D-060).
 **Outstanding**: the Vercel import and first deploy, a Play Store listing (needs a
-keystore), the still-unset Edge Function secrets (WhatsApp, SendGrid, Firebase),
-and the searchable purchase picker (I-3).
+keystore), and the still-unset Edge Function secrets (WhatsApp, SendGrid, Firebase).
 
 ---
 
@@ -151,7 +152,7 @@ PharmaFlow/
 │   │   │                         ledger, reports, expenses, notifications, chatbot,
 │   │   │                         settings
 │   │   └── services/             OCR, matching, chatbot, notifications, printing
-│   ├── test/                     unit + widget tests (637)
+│   ├── test/                     unit + widget tests (664)
 │   ├── vercel.json               the web deploy's build config (Root Directory `app`, D-063)
 │   └── pubspec.yaml
 ├── supabase/

@@ -80,4 +80,81 @@ void main() {
       expect(filter, 'name.ilike.%para is active.eq.false%');
     });
   });
+
+  group('buildInFilter', () {
+    test('builds one in-list for the values it was given', () {
+      expect(
+        buildInFilter(column: 'supplier_id', values: <String>['a-1', 'b-2']),
+        'supplier_id.in.(a-1,b-2)',
+      );
+    });
+
+    test('returns null when there is nothing to match', () {
+      expect(
+        buildInFilter(column: 'supplier_id', values: const <String>[]),
+        isNull,
+      );
+    });
+
+    test('drops a value that would restructure the filter', () {
+      // A comma would split the list into an extra condition - the failure this
+      // file exists to prevent. These ids come from a column rather than from a
+      // user, so a value like this is a bug being refused rather than text being
+      // rewritten into somebody else's id.
+      expect(
+        buildInFilter(
+          column: 'supplier_id',
+          values: <String>['ok', 'bad,one', 'also)bad', 'quo"te', 'wild%card'],
+        ),
+        'supplier_id.in.(ok)',
+      );
+    });
+
+    test('returns null when every value is unusable', () {
+      expect(
+        buildInFilter(column: 'supplier_id', values: <String>['', ',']),
+        isNull,
+      );
+    });
+  });
+
+  group('buildAnyOfFilter', () {
+    test('joins the conditions that are there', () {
+      expect(
+        buildAnyOfFilter(<String?>['name.ilike.%x%', 'b.in.(1)']),
+        'name.ilike.%x%,b.in.(1)',
+      );
+    });
+
+    test('drops the ones that are not', () {
+      expect(buildAnyOfFilter(<String?>[null, 'b.in.(1)']), 'b.in.(1)');
+      expect(buildAnyOfFilter(<String?>['', 'b.in.(1)']), 'b.in.(1)');
+    });
+
+    test('returns null rather than an empty group', () {
+      // An empty `or=()` is a filter that has stopped filtering, which would be a
+      // search quietly returning everything.
+      expect(buildAnyOfFilter(const <String?>[]), isNull);
+      expect(buildAnyOfFilter(<String?>[null, '']), isNull);
+    });
+
+    test('one search can cover the text and the rows it points at', () {
+      // The I-3 shape: a purchase is the invoice number somebody typed, or a
+      // document that came from one of the suppliers whose name they typed.
+      expect(
+        buildAnyOfFilter(<String?>[
+          buildIlikeOrFilter(
+            columns: <String>['invoice_no', 'notes'],
+            term: 'arihant',
+          ),
+          buildInFilter(
+            column: 'supplier_id',
+            values: <String>['sup-1', 'sup-2'],
+          ),
+        ]),
+        'invoice_no.ilike.%arihant%,notes.ilike.%arihant%,'
+        'supplier_id.in.(sup-1,sup-2)',
+      );
+    });
+  });
 }

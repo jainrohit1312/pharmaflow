@@ -13,6 +13,7 @@ import 'package:app/features/returns/presentation/purchase_return_detail_screen.
 import 'package:app/features/returns/presentation/purchase_return_form_screen.dart';
 import 'package:app/features/returns/presentation/returns_screen.dart';
 import 'package:app/features/suppliers/application/supplier_options.dart';
+import 'package:app/features/suppliers/data/suppliers_repository.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -20,6 +21,9 @@ import 'package:go_router/go_router.dart';
 
 import 'fake_purchase_returns_repository.dart';
 import 'fake_purchases_repository.dart';
+// Narrowed on purpose: both fakes declare a `buildSupplier`, and the purchase
+// one is the builder this harness's fixtures come from.
+import 'fake_suppliers_repository.dart' show FakeSuppliersRepository;
 
 /// A router carrying the returns screens and the purchase detail they link to.
 ///
@@ -84,6 +88,13 @@ Future<GoRouter> pumpReturnsApp(
         purchasesRepositoryProvider.overrideWithValue(purchases),
         requirePharmacyIdProvider.overrideWith((ref) => 'ph-1'),
         supplierOptionsProvider.overrideWith((ref) async => suppliers),
+        // The picker resolves a typed term against supplier *names* (I-3), which
+        // is a second call to the same repository the options above come from - so
+        // it is the same list behind both, and a term that matches a supplier here
+        // matches it there.
+        suppliersRepositoryProvider.overrideWithValue(
+          FakeSuppliersRepository(suppliers: List<Supplier>.of(suppliers)),
+        ),
       ],
       child: MaterialApp.router(routerConfig: router),
     ),

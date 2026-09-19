@@ -4,6 +4,7 @@
 library;
 
 import 'package:app/core/errors/app_exception.dart';
+import 'package:app/core/utils/postgrest_search.dart';
 import 'package:app/data/models/purchase.dart';
 import 'package:app/data/models/purchase_draft.dart';
 import 'package:app/data/models/purchase_item.dart';
@@ -115,6 +116,12 @@ class FakePurchasesRepository implements PurchasesRepository {
   /// The last query `list` was given.
   PurchasesQuery? lastQuery;
 
+  /// The offset the last `list` was given.
+  int? lastOffset;
+
+  /// The limit the last `list` was given.
+  int? lastLimit;
+
   /// The header the last write was given.
   PurchaseDraft? lastHeader;
 
@@ -144,17 +151,28 @@ class FakePurchasesRepository implements PurchasesRepository {
     int offset = 0,
   }) async {
     lastQuery = query;
+    lastOffset = offset;
+    lastLimit = limit;
     if (failNextList) {
       failNextList = false;
       throw StateError('the fake was told to fail');
     }
 
-    final term = query.search.toLowerCase();
+    final term = sanitizeSearchTerm(query.search).toLowerCase();
     final matching = purchases.where((purchase) {
+      // The term and the resolved supplier branch are one disjunction, the way
+      // the repository ORs them (I-3): a search that found the distributor and
+      // not the invoice number has still found the document. Every other filter
+      // narrows, as it always has.
       final matchesTerm =
-          term.isEmpty ||
-          purchase.invoiceNo.toLowerCase().contains(term) ||
-          (purchase.notes?.toLowerCase().contains(term) ?? false);
+          term.isNotEmpty &&
+          (purchase.invoiceNo.toLowerCase().contains(term) ||
+              (purchase.notes?.toLowerCase().contains(term) ?? false));
+      final matchesSupplierIds =
+          query.supplierIds.isNotEmpty &&
+          query.supplierIds.contains(purchase.supplierId);
+      final hasSearch = term.isNotEmpty || query.supplierIds.isNotEmpty;
+      final matchesSearch = !hasSearch || matchesTerm || matchesSupplierIds;
       final matchesSupplier =
           query.supplierId == null || purchase.supplierId == query.supplierId;
       final matchesStatus =
@@ -163,7 +181,7 @@ class FakePurchasesRepository implements PurchasesRepository {
           query.from == null || !purchase.invoiceDate.isBefore(query.from!);
       final matchesTo =
           query.to == null || !purchase.invoiceDate.isAfter(query.to!);
-      return matchesTerm &&
+      return matchesSearch &&
           matchesSupplier &&
           matchesStatus &&
           matchesFrom &&

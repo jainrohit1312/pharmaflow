@@ -29,6 +29,7 @@ class PurchasesQuery {
   const PurchasesQuery({
     this.search = '',
     this.supplierId,
+    this.supplierIds = const <String>[],
     this.status,
     this.from,
     this.to,
@@ -39,6 +40,16 @@ class PurchasesQuery {
 
   /// Restrict to one supplier.
   final String? supplierId;
+
+  /// Restrict to purchases from **any** of these suppliers.
+  ///
+  /// Separate from [supplierId] because the two answer different questions.
+  /// [supplierId] is a *filter* - "this distributor's invoices", chosen from a
+  /// list - and ANDs with everything else. These ids are the second branch of a
+  /// *search*: one box that accepts an invoice number or a distributor's name, so
+  /// when it finds the supplier and not the number, the document has still been
+  /// found. `list` therefore ORs them with the text branches and ANDs the rest.
+  final List<String> supplierIds;
 
   /// Restrict to one document status.
   final PurchaseStatus? status;
@@ -53,14 +64,30 @@ class PurchasesQuery {
   bool get isFiltered =>
       search.isNotEmpty ||
       supplierId != null ||
+      supplierIds.isNotEmpty ||
       status != null ||
       from != null ||
       to != null;
 
+  /// Whether the *user* asked for anything.
+  ///
+  /// Distinct from [isFiltered], which also counts the status because the list
+  /// screen's "clear" button has to know there is something to clear. This one
+  /// answers "did a search happen", for the screen that has to tell an empty
+  /// result from an empty list: a picker scoped to received invoices is filtered
+  /// from the moment it opens, and telling somebody who typed nothing that
+  /// "nothing matched" would be a lie about their own input.
+  bool get hasSearch =>
+      search.isNotEmpty || supplierIds.isNotEmpty || from != null || to != null;
+
   /// A copy with the search term replaced.
+  ///
+  /// Clearing the term clears [supplierIds] with it, because those were resolved
+  /// *from* the term: keeping them would leave a search nobody asked for.
   PurchasesQuery withSearch(String value) => PurchasesQuery(
     search: value,
     supplierId: supplierId,
+    supplierIds: value.isEmpty ? const <String>[] : supplierIds,
     status: status,
     from: from,
     to: to,
@@ -70,6 +97,17 @@ class PurchasesQuery {
   PurchasesQuery withSupplier(String? value) => PurchasesQuery(
     search: search,
     supplierId: value,
+    supplierIds: supplierIds,
+    status: status,
+    from: from,
+    to: to,
+  );
+
+  /// A copy with the resolved supplier branch replaced.
+  PurchasesQuery withSupplierIds(List<String> values) => PurchasesQuery(
+    search: search,
+    supplierId: supplierId,
+    supplierIds: values,
     status: status,
     from: from,
     to: to,
@@ -79,6 +117,7 @@ class PurchasesQuery {
   PurchasesQuery withStatus(PurchaseStatus? value) => PurchasesQuery(
     search: search,
     supplierId: supplierId,
+    supplierIds: supplierIds,
     status: value,
     from: from,
     to: to,
@@ -89,6 +128,7 @@ class PurchasesQuery {
       PurchasesQuery(
         search: search,
         supplierId: supplierId,
+        supplierIds: supplierIds,
         status: status,
         from: from,
         to: to,
@@ -110,6 +150,13 @@ class PurchasesRepository {
   static const List<String> searchColumns = <String>['invoice_no', 'notes'];
 
   /// Loads one page of purchases matching [query], newest invoice first.
+  ///
+  /// The free-text term and the resolved supplier branch are **one
+  /// disjunction** - a purchase matching either is a purchase the search found -
+  /// while every other filter (the single supplier, the status, the date window)
+  /// narrows the result set as it always has. That is what lets a picker accept
+  /// "arihant" and answer with their invoices even though no invoice number
+  /// contains it.
   Future<List<Purchase>> list({
     required String pharmacyId,
     required PurchasesQuery query,
@@ -122,10 +169,10 @@ class PurchasesRepository {
           .select()
           .eq('pharmacy_id', pharmacyId);
 
-      final search = buildIlikeOrFilter(
-        columns: searchColumns,
-        term: query.search,
-      );
+      final search = buildAnyOfFilter(<String?>[
+        buildIlikeOrFilter(columns: searchColumns, term: query.search),
+        buildInFilter(column: 'supplier_id', values: query.supplierIds),
+      ]);
       if (search != null) {
         request = request.or(search);
       }
