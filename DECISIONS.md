@@ -1607,3 +1607,80 @@ missed suggestion costs a tap, a wrong one costs trust.
 - Live end to end, after the backfill and the re-tune: `Dolo650Tab15s` → the real
   product at `reason: vector`, score 0.8280; `Dolo 650 Tab` → `reason: trigram`,
   1.0; `Cetirizine 10mg Tab` and `ZZQQ nonsense 9999` → no candidates at all.
+
+---
+
+## D-045 — Measurements Never Mutate Production
+
+**Date:** 2026-09-19
+
+**Status:** Active
+
+**Decision:** Any measurement that requires modifying a function, a constant or a
+table on the live project happens on a **temporary tenant** — a throwaway pharmacy
+with its own fixtures — which is deleted afterwards. The live project is touched only
+by versioned migrations.
+
+**Rationale:** The floor re-tune (D-044) measured by patching the live
+`match_products` — `pg_get_functiondef`, one word changed, reinstalled for about a
+minute, then restored by migration 00026. It worked and the live constant was
+verified afterwards, and it was still the wrong method: while the patch was installed
+the deployed function was answering real queries with a floor of 0.01, so any genuine
+match in that window would have come back with nonsense suggestions. A measurement
+must never be something a real user can be inside.
+
+**Exception:** Versioned migrations are the standard path, and D-013 covers them:
+they are reversible, attached to the code, and reviewed like every other change. The
+line is *reversibility plus review*, not "never change the database".
+
+**Consequences:**
+
+- The next measurement of this kind spends about two minutes creating and deleting a
+  throwaway tenant. Cheap insurance against a race with a real query.
+- **One implementation question is open, and the next measurement will meet it**: the
+  temporary tenant needs an identity to act as — `get_my_pharmacy_id()` reads the
+  caller's own profile, and this project's guard refuses hand-edited auth rows
+  (N-7). A measurement that needs a **live function invocation** therefore needs
+  either a session from the app or a temporary user created and removed with the
+  tenant; a measurement that needs only the database can impersonate an existing
+  identity the way every SQL test here does. Decide which, and say so, before the
+  measurement starts.
+- What remains verifiable without any mutation at all, and should be reached for
+  first: the RPC's own reported numbers (C3 read every `distance` the matcher
+  returned), a `select` over the data, and the SQL tests' impersonation.
+
+---
+
+## D-046 — Alerts Surface In-App in Phase 5, Dispatch in Phase 6
+
+**Date:** 2026-09-19
+
+**Status:** Active
+
+**Decision:** Low-stock and expiring-batch alerts **appear in the in-app notification
+list** and are not dispatched anywhere in Phase 5. No automatic WhatsApp or email
+leaves the system for them. `send-notification` is built and ready in this phase; its
+**triggers** land in Phase 6, with the credentials and the recipient numbers.
+
+**Rationale:** There is nobody to send to and nothing to send with: no recipient phone
+numbers are collected (neither users' nor suppliers'), there is no paid Meta WhatsApp
+account, and there is no SendGrid key. An alert path that cannot deliver is a path
+whose failures are noise, and Phase 5's discipline is to build the capability and
+surface what it can honestly show. Auto-dispatch is also the wrong thing to switch on
+before its credentials exist, because the first thing it would teach an operator is to
+ignore it.
+
+**Consequences:**
+
+- Phase 5 ships **visibility**; Phase 6 ships **automation**. The function, the log
+  table and the in-app list are all in place for it, so Phase 6 adds triggers and
+  credentials rather than a subsystem.
+- The in-app list is deliberately the surface that carries the message either way
+  (D-029's reasoning, one layer out): a notification that could not be *delivered* is
+  still visible in the app, and the list is where a failed dispatch is discovered.
+- `notification_logs` still records every attempt the function makes, so the audit
+  trail exists before the automation does — an operator asking "did we tell this
+  supplier" gets the same answer before and after push and dispatch arrive.
+- Alerts are computed **in SQL** (`low_stock_products`, `expiring_batches`) rather
+  than compared in Dart, which is also I-1's fix and the RPCs D-026 already reserved
+  for the chatbot: one implementation, three callers.
