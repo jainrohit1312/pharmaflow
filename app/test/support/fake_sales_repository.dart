@@ -3,6 +3,8 @@
 /// Not a `_test.dart` file, so `flutter test` does not try to run it.
 library;
 
+import 'dart:async';
+
 import 'package:app/core/errors/app_exception.dart';
 import 'package:app/data/models/sale.dart';
 import 'package:app/data/models/sale_item.dart';
@@ -117,6 +119,13 @@ class FakeSalesRepository implements SalesRepository {
   /// be retried into a success before a test could look at the error state.
   Exception? errorToThrow;
 
+  /// When set, `list` waits for it before answering.
+  ///
+  /// A read that can be held open is the only way to look at a *loading* state:
+  /// a screen has to render something while the rows are on their way, and that
+  /// is the state T-5 is about.
+  Completer<void>? listGate;
+
   @override
   Future<List<Sale>> list({
     required String pharmacyId,
@@ -126,6 +135,10 @@ class FakeSalesRepository implements SalesRepository {
   }) async {
     lastQuery = query;
     requestedOffsets.add(offset);
+    final gate = listGate;
+    if (gate != null) {
+      await gate.future;
+    }
     if (failNextList) {
       failNextList = false;
       throw StateError('the fake was told to fail');
@@ -162,6 +175,10 @@ class FakeSalesRepository implements SalesRepository {
     required String pharmacyId,
     required String saleId,
   }) async {
+    final error = errorToThrow;
+    if (error != null) {
+      throw error;
+    }
     for (final sale in sales) {
       if (sale.id == saleId) {
         return sale;
@@ -174,8 +191,13 @@ class FakeSalesRepository implements SalesRepository {
   Future<List<SaleItem>> itemsFor({
     required String pharmacyId,
     required String saleId,
-  }) async =>
-      items.where((item) => item.saleId == saleId).toList(growable: false);
+  }) async {
+    final error = errorToThrow;
+    if (error != null) {
+      throw error;
+    }
+    return items.where((item) => item.saleId == saleId).toList(growable: false);
+  }
 
   @override
   Future<Sale> checkout({

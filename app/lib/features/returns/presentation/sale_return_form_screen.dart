@@ -192,9 +192,13 @@ class _SaleReturnFormScreenState extends ConsumerState<SaleReturnFormScreen> {
     if (form == null || !form.validate()) {
       return;
     }
+    // The button is disabled until a bill is chosen, so this is the type system's
+    // narrowing rather than a second rule kept in step with it. It used to be both:
+    // the picker also carried a "Choose a bill" validator and this branch reported
+    // the same thing, and neither could ever reach a user (T-4). The rule lives in
+    // the button's `onPressed` now, and nowhere else.
     final saleId = _saleId;
     if (saleId == null) {
-      _report('Choose the bill the goods were sold on.');
       return;
     }
     if (_quantities.isEmpty) {
@@ -262,14 +266,20 @@ class _SaleField extends StatelessWidget {
     final options = sales.value ?? const <Sale>[];
     return AppDropdownField<String>(
       label: 'Bill',
-      hint: options.isEmpty ? 'No sales yet' : 'Which bill',
+      // Three states, three hints. `sales.value` is null while the read is still
+      // in flight, and taking its length was how this field rendered "No sales yet"
+      // for a pharmacy it had not finished asking - an empty, disabled picker with
+      // no way to tell the two apart (T-5). `enabled` follows the options, so a
+      // loading picker stays untappable either way.
+      hint: sales.value == null
+          ? 'Loading the bills…'
+          : (options.isEmpty ? 'No sales yet' : 'Which bill'),
       prefixIcon: Icons.receipt_long_outlined,
       value: value,
       values: options.map((sale) => sale.id).toList(growable: false),
       labelOf: (id) => _saleLabel(options, id),
       enabled: options.isNotEmpty,
       onChanged: onChanged,
-      validator: (chosen) => chosen == null ? 'Choose a bill' : null,
     );
   }
 }

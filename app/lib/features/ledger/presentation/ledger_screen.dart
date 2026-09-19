@@ -42,19 +42,6 @@ class LedgerScreen extends ConsumerWidget {
     final page = ref.watch(ledgerEntriesControllerProvider);
     final isSupplier = selection.partyType == PartyType.supplier;
 
-    ref.listen<AsyncValue<LedgerPage>>(ledgerEntriesControllerProvider, (
-      previous,
-      next,
-    ) {
-      final error = next.error;
-      if (error == null || !context.mounted) {
-        return;
-      }
-      ScaffoldMessenger.of(context)
-        ..hideCurrentSnackBar()
-        ..showSnackBar(SnackBar(content: Text(describeError(error))));
-    });
-
     return AppScaffold(
       title: 'Ledger',
       body: Column(
@@ -180,7 +167,13 @@ class _LedgerBody extends ConsumerWidget {
       );
     }
 
-    if (page.hasError && !page.hasValue) {
+    // The failure is decided *before* the retained value, deliberately. Riverpod
+    // keeps the last value on a rebuild, so a party chosen after the first frame
+    // arrives with the empty page the provider held while nothing was selected -
+    // and a body that rendered that page would tell a user "Nothing on this
+    // ledger" about a ledger nobody managed to read, leaving them no way to ask
+    // again (T-3). An error is about the party on screen, so it wins.
+    if (page.hasError) {
       return ErrorView(
         message: describeError(page.error!),
         onRetry: () => ref.invalidate(ledgerEntriesControllerProvider),

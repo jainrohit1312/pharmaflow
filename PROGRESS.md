@@ -1,8 +1,8 @@
 # PharmaFlow — Progress Tracker
 
 **Last Updated:** 2026-09-19
-**Current Phase:** **PHASE 5 COMPLETE** (chunks A–E). Chunk E part 2 — the `/chatbot` surface — is built, tested and gated: `ChatService` over `functions.invoke('chat-sql-agent')`, the plain-class answer envelope, the conversation controller, a screen whose four situations (invitation / waiting / refusal / failure) cannot be confused, and the **13th shell destination** (D-054, D-055). Next: **Phase 6** — W-1, R-1, N-1, D-046's credentials and triggers, D-052's auto-send PO, N-9, N-5, I-1 (`context/chat3l-opening-prompt.md`)
-**Overall Status:** Phases 0-5 done and gated; Phase 5 closed with its database substrate, **five deployed Edge Functions** (four live-verified against their provider, one live-probed below the credential, one live-probed end to end), a bill that reads and saves end to end, a matcher that suggests and learns, a backfilled catalogue with a measured similarity floor, its alert sources, the notification function and inbox, and a chatbot a person can type into — **593 Flutter tests, 181 Deno tests**
+**Current Phase:** **PHASE 6 IN PROGRESS** (chunk 1 of n, `context/chat3l-summary.md`). Phase 5 is complete, and Phase 6's no-external-input half is now closed: W-1, A-1, I-1, N-5, T-3/T-4/T-5, T-6 and the two named coverage gaps are all done and gated, with R-1's README refresh plus `docs/USER_MANUAL.md` and `docs/DEPLOYMENT.md`. This chunk's job was to make what Phase 5 built deployable, documented and measured — and it is: `flutter build windows --debug` produces `app.exe`; 30/30 migrations match; and the suite is **627 Flutter tests / 181 Deno tests**, all green. Next: **Phase 6's deploy half** — the Vercel web deploy, the Android APK and Play listing, the credentials behind D-046/D-052/N-1, I-3, N-9's re-measurement, and the user manual's remaining gaps (`context/chat3m-opening-prompt.md`)
+**Overall Status:** Phases 0-5 done and gated; Phase 6 chunk 1 done and gated — Phase 5 closed with its database substrate, **five deployed Edge Functions** (four live-verified against their provider, one live-probed below the credential, one live-probed end to end), a bill that reads and saves end to end, a matcher that suggests and learns, a backfilled catalogue with a measured similarity floor, its alert sources, the notification function and inbox, and a chatbot a person can type into. Phase 6 chunk 1 added the first migration since Phase 5 closed (the alias key, N-5) and 34 tests over the bill printer and the bill screen — **627 Flutter tests, 181 Deno tests**
 
 ---
 
@@ -16,7 +16,7 @@
 | 3 | Sales/POS + Returns + GST Billing | COMPLETE | 2026-09-18 | 2026-09-18 |
 | 4 | Ledger + Payments + Reports | COMPLETE | 2026-09-18 | 2026-09-19 |
 | 5 | AI OCR + Smart Matching + Notifications | COMPLETE | 2026-09-19 | 2026-09-19 |
-| 6 | Testing + Deployment + Documentation | PENDING | - | - |
+| 6 | Testing + Deployment + Documentation | IN PROGRESS (chunk 1 of n) | 2026-09-19 | - |
 
 ---
 
@@ -51,7 +51,7 @@
 
 ### Backend (Supabase Hosted)
 
-- 29 migrations applied, all idempotent (`supabase migration list`: 29/29 local
+- 30 migrations applied, all idempotent (`supabase migration list`: 30/30 local
   and remote match)
 - 24 tables and 2 views (`product_stock`, `batch_status`), RLS enforced on every
   business table; migration 00022 added `device_tokens`, `notification_logs`, the
@@ -123,9 +123,12 @@
 ### Platform Support
 
 - Web (Chrome): working
-- Windows: build fails (`permission_handler_windows`, STL1011)
-- Android: configured, untested
-- iOS: configured, untested
+- Windows: **builds** — W-1 fixed in Phase 6 (`_SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS`
+  scoped to `permission_handler_windows_plugin`); `flutter build windows --debug`
+  produced `build\windows\x64\runner\Debug\app.exe`. The release build was not run
+  (deliberately — see D-059). Not a launch target.
+- Android: configured, APK not yet built (needs release signing — N-11)
+- iOS: configured, out of scope this phase (needs a Mac — D-059)
 
 ---
 
@@ -151,6 +154,16 @@
 | N-7 | A throwaway probe account cannot sign in on the hosted project: signup returns `confirmation_sent_at` with no session and the password grant answers `email_not_confirmed`, while `config.toml` says `enable_confirmations = false` (a local-stack-only setting, D-003). Setting `auth.users.email_confirmed_at` by hand is the obvious workaround and is correctly refused by the auto-mode guard as an auth-weakening write to production | Low | Probe with a session obtained from the app (`owner@pharmaflow.dev`), or decide deliberately whether "Confirm email" should be off in the hosted project the way the repo believes it is |
 | N-8 | A **successful second read** of the same bill replaces the whole verify form, so the supplier the human had chosen is dropped (and with it the suggestions, which are scoped by that supplier). It is the direct consequence of fixing the re-seed defect with `ValueKey(scan.bill)` (D-039): the new parse replaces the header fields too, which is right for the invoice number and date and merely inconvenient for the supplier. The match is asked again as soon as the supplier is named again | Low | Re-seed only the *lines* (and clear the suggestions) in `didUpdateWidget` when the parse changes, keeping the header the human already edited |
 | N-9 | The vector floor (**0.78**) was measured against a live catalogue that holds **one product**, so the window it sits in (0.7216 refused / 0.8280 kept) rests on one catalogue vector and nine query texts. Three things follow, and they are the whole open item: **(a) the recipe** — lower the floor to 0.01, read the `distance` the matcher reports for a set of real and near-miss invoice texts, and install the chosen value in a new migration (D-013; and on a temporary tenant, never the live function — **D-045**); **(b) the direction** — 0.78 errs **high**, so the cost of being wrong is a *missed* suggestion rather than a wrong one (the human picks, and the alias and trigram legs still answer); **(c) the trigger to revisit** — Phase 6's testing should re-tune it once the catalogue has **50+ products**, because that is when "two catalogue products of the same brand" becomes a real band to separate rather than a one-row guess | Low | Phase 6, once the catalogue is real. Nothing depends on the exact value: it is a one-line migration and the tests move with it |
+| N-10 | `flutter run -d chrome` fails **after** a successful compile with "Failed to establish connection with the web debug service" (a 5s timeout in dwds' `WebkitDebugger.enable`). It is Chrome 153 against the dwds 26.2.5 bundled in Flutter 3.44.8 — upstream `flutter/flutter#192976`, fixed by dwds 27.1.2 in Flutter 3.47.5 — so it is the toolchain and not this app, it happens in a bare `flutter create` app on this host too, and it does **not** affect `flutter build web`. Recorded as an item because it was tribal knowledge in the `Makefile`'s `run-web-server` comment rather than a numbered defect | Low | `make run-web-server` (the `web-server` device, port 8090) until the SDK is upgraded; delete that target once it is |
+| N-11 | Phase 6's deploy targets need accounts, and none of them exists yet: a Vercel project for the web app, a Google Play developer account (and an upload keystore) for Android, and the WhatsApp/SendGrid/Firebase credentials the dispatch, auto-send PO and push work all wait on (D-059). Nothing in the app blocks any of them | Medium | Ask the user for the accounts and credentials, then do the deploy in the order D-059 sets (Web → Android), and the credential work last |
+
+**Resolved in chat 4 (Phase 6, chunk 1 — `context/chat3l-summary.md`):** **W-1**,
+**A-1**, **I-1**, **N-5**, **T-3**, **T-4**, **T-5** and **T-6** (the sale detail
+screen's endless spinner for a bill that is gone, found while writing its tests).
+R-1's README refresh landed as well, with `docs/USER_MANUAL.md` and
+`docs/DEPLOYMENT.md` beside it. Still open above that this chunk did not touch:
+I-2, I-3, N-1, N-2, N-4, N-7, N-8, N-9, N-11, D-027's residual, and the
+dependency-pin item T-1.
 
 **Resolved in chat 4 (chunk C3):** the catalogue is embedded, and the floor stopped
 being a guess. Live: `{embedded:1,remaining:0}` then `{embedded:0,remaining:0}`
@@ -235,6 +248,156 @@ environment:
 Changing any pin above requires explicit user approval (see DECISIONS.md D-007).
 
 ---
+
+## Chat 4 Progress — Phase 6, chunk 1: the no-external-input half [DONE — PHASE 6 OPEN]
+
+Phase 6 has no server left to build. This chunk took everything in it that needs no
+account, no credential and no live session — plus the documentation the phase owns —
+and left the deploy half for the next one. The full account is
+`context/chat3l-summary.md`; the decisions are **D-056 to D-059**.
+
+### What this chunk delivered
+
+- **W-1 — the Windows build is fixed.** `app/windows/CMakeLists.txt` defines
+  `_SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS` for
+  `permission_handler_windows_plugin` only, guarded by `if(TARGET …)` so a pubspec
+  that ever drops the plugin cannot leave a stale line breaking the build. Reproduced
+  first (`error C2338: static assertion failed: 'error STL1011: … <experimental/coroutine>
+  … deprecated …'`), then fixed, then `flutter build windows --debug` produced
+  `build\windows\x64\runner\Debug\app.exe`. **The release build was deliberately not
+  run** at the user's instruction — the debug build already proves the compile fix, and
+  the release pass costs minutes of toolchain time for no new information (D-059).
+- **A-1 — `publishableKey`.** `bootstrap.dart` passes `publishableKey:` (2.17 deprecated
+  `anonKey` for the same public key, checked in the resolved 2.17.2 source). The **env
+  var stays `SUPABASE_ANON_KEY`**: that is the contract `.env.example` and the README
+  document, and the two names deliberately differ.
+- **I-1 — the reorder list is the server's answer.** `InventoryRepository.lowStock`
+  calls `low_stock_products()` and returns `LowStockProduct`, the same payload the
+  notification list and the chatbot read (D-047). The Dart comparison, the 500-row scan
+  and `lowStockScanLimit` are gone; `lowStockLimit` is the server's own ceiling.
+- **The trade I-1 forced, and why it is the right one**: the RPC answers in quantities
+  (on hand, level, **shortfall**) and not in money, so the low-stock tab renders
+  `LowStockCard` over that payload instead of `ProductStockCard`, and the *"₹ at cost"*
+  line the old list carried is gone. That figure belongs to the `product_stock` rollup
+  (the stock tab and the product detail still show it), and copying it from a
+  different query — or rendering a default — would put a wrong rupee amount on a
+  reorder list. In exchange the list gained the **shortfall**, which is the number the
+  RPC's own comment says it exists to provide. One card, one `.dart` file, and a
+  one-line reversion if the review disagrees.
+- **N-5 — the alias key treats "no supplier" as a value** (D-056). Migration
+  `00030` rebuilds the unique index on `(pharmacy_id, supplier_id, normalized_name)`
+  with `NULLS NOT DISTINCT`; the coalesce-expression alternative was rejected because
+  PostgREST's `on_conflict` matches an index by *column names* and an expression index
+  is not inferrable, so `addAlias`'s upsert would have broken for every pharmacy. A
+  read-only probe first: **0 alias rows, 0 colliding keys**, so the index was built
+  over an empty table and nothing had to be de-duplicated. Both contradicting comments
+  reconciled (00015's points forward at 00030, the way 00010 points at 00015 —
+  D-013). `supabase db push --yes` → **30/30 local and remote**.
+- **T-3 — the ledger's failure path is a retry** (D-058). The body decides the error
+  *before* the retained value, so a party chosen after the first frame whose read fails
+  shows the failure and a Retry instead of "Nothing on this ledger"; the duplicate
+  SnackBar listener is gone, because one failure had two surfaces and the second one was
+  noise.
+- **T-4 — the sale-return form's dead branches are gone.** The picker's `'Choose a
+  bill'` validator and `_save`'s report of the same thing could never run (the button is
+  disabled until a bill is chosen), so the rule now lives in exactly one place: the
+  button's `onPressed`. The remaining null check is type narrowing, and says so.
+- **T-5 — "loading" and "no bills" are told apart.** The bill picker's hint is a
+  three-way `Loading the bills…` / `No sales yet` / `Which bill`, so a pharmacy that has
+  not answered yet is no longer told it has never sold anything.
+- **T-6 (new, found while writing the bill screen's tests) — a bill that is gone says
+  so** instead of spinning for ever. `saleDetailProvider` answers `null` for an id that
+  is no longer there, and the screen read that as "still loading"; it now renders
+  *Bill not found*, checking `!isLoading` so a retry in flight is not mistaken for a
+  missing bill.
+- **The coverage gaps Phase 3 named, both closed** (34 tests):
+  - `test/services/invoice_printer_test.dart` (**17**) — the printer's **content** is
+    extracted into an `InvoiceSheet` (D-057), so the bill is asserted as a document
+    rather than through a mocked print channel: the seller block and its placeholder,
+    the lines and their pricing, both tax splits, the discount present/absent pair, the
+    total's emphasis and rule, how it was settled, and that the layout renders a PDF at
+    all. **Writing it found a real defect**: the old split rounded both halves of
+    `tax_total` separately, so an odd number of paise printed CGST + SGST that summed to
+    one paisa *more* than the tax charged. The split now subtracts the rounded half
+    (D-057); only the printed document changed, never a stored figure.
+  - `test/features/sales/presentation/sale_detail_screen_test.dart` (**14**) — the bill
+    screen's figures come from the document's own columns, the tax head follows the
+    split, the line metrics appear (and the ones a line does not have do not), a
+    prescription-only line is marked for the drug register, a walk-in and an account
+    sale read differently, a part payment shows what is still owed, printing goes
+    through the printer seam (and a refused print keeps the bill on screen), and a read
+    failure offers a retry.
+- **R-1 — the README is current.** It had said "Phase 0 (scaffold)", "14 migrations"
+  and "21 tables"; it now carries the real state — 30 migrations, 24 tables/2 views,
+  five Edge Functions, 13 destinations, 627 Flutter and 181 Deno tests, the gate block,
+  the three load-bearing pins, the platform status (including the W-1 fix and the
+  web-debug workaround), and pointers to the new docs.
+- **`docs/` — a user manual and a deploy runbook.** `docs/USER_MANUAL.md` is written for
+  the person behind the counter (getting in, products and aliases, ordering and
+  receiving, the bill reader, inventory and reorder, the counter, the bill and printing,
+  returns, the ledger, reports, notifications, the chatbot, day-to-day recipes, and an
+  explicit list of what the app deliberately does *not* do).
+  `docs/DEPLOYMENT.md` is the runbook: the gates, the `.env`-is-compiled-in fact (which
+  is what makes a Vercel deploy a build-time concern), the Vercel steps and the `curl`
+  checks that verify them, the Android keystore/signing steps with the exact
+  `build.gradle.kts` change still to be made, the iOS runbook for a Mac, the Windows
+  release note, the Edge Function secrets, and the honest outstanding list.
+
+### Files
+
+```
+supabase/migrations/20260919000030_phase6_alias_identity.sql   (new)
+supabase/tests/phase6_alias_identity.sql                       (new, 20 assertions)
+app/lib/features/inventory/presentation/widgets/low_stock_card.dart  (new)
+app/test/services/invoice_printer_test.dart                    (new, 17 tests)
+app/test/features/sales/presentation/sale_detail_screen_test.dart (new, 14 tests)
+app/test/support/sale_detail_test_app.dart                     (new)
+docs/USER_MANUAL.md                                            (new)
+docs/DEPLOYMENT.md                                             (new)
+context/chat3l-summary.md                                      (new)
+context/chat3m-opening-prompt.md                               (new)
+```
+
+**Modified:** `app/lib/bootstrap.dart` (A-1), `app/lib/features/inventory/data/inventory_repository.dart`
+and `application/low_stock_controller.dart` and `presentation/inventory_screen.dart`
+(I-1), `app/lib/features/ledger/presentation/ledger_screen.dart` (T-3),
+`app/lib/features/returns/presentation/sale_return_form_screen.dart` (T-4/T-5),
+`app/lib/services/invoice_printer.dart` (D-057), `app/lib/features/sales/presentation/sale_detail_screen.dart`
+(T-6), `app/windows/CMakeLists.txt` (W-1), `app/lib/features/products/data/products_repository.dart`
++ `supabase/migrations/20260918000015_phase2_extras.sql` + `supabase/tests/phase5_match_products.sql`
++ `supabase/tests/phase5_learn_product_aliases.sql` (N-5's comment reconciliation),
+`app/test/support/fake_inventory_repository.dart`, `fake_sales_repository.dart`,
+`app/test/features/inventory/inventory_screen_test.dart`, `app/test/features/ledger/presentation/ledger_screen_test.dart`,
+`app/test/features/returns/presentation/sale_return_form_screen_test.dart`,
+`README.md`, `PROGRESS.md`, `DECISIONS.md`.
+
+### Verification evidence
+
+```
+dart format lib test                                      -> 421 files, 0 changed
+dart run build_runner build --delete-conflicting-outputs   -> no errors
+dart run custom_lint                                     -> No issues found!
+flutter analyze                                          -> No issues found!
+flutter test                                             -> +627: All tests passed!  (593 -> 627)
+deno test supabase/functions                             -> ok | 181 passed | 0 failed
+deno check <each of the five entry points>                -> clean
+flutter build windows --debug                             -> Built build\windows\x64\runner\Debug\app.exe
+supabase migration list                                   -> 30/30 local and remote match
+supabase/tests/phase6_alias_identity.sql                  -> 20 PASS / 0 FAIL of 21 assertions
+  (the same file, pre-migration, produced 7 FAILs — see D-056)
+supabase/tests/phase5_learn_product_aliases.sql            -> 42 PASS / 0 FAIL (no regression)
+supabase/tests/phase5_match_products.sql                  -> all PASS (no regression)
+```
+
+### What this chunk deliberately did not do
+
+- **No deploy.** The Vercel web deploy and the Android APK both need accounts that do
+  not exist yet (N-11); `docs/DEPLOYMENT.md` is the procedure, written to be runnable,
+  and says at the top that nothing in it has been executed.
+- **No Windows release build** — the user's instruction, and D-059 records why the
+  debug build is enough evidence for the fix.
+- **No iOS work** (needs a Mac) and **no Windows features** (desktop is covered by web).
+- **Nothing touched the two permanent probe rows** (D-049's evidence).
 
 ## Chat 4 Progress — Chunk E (PART 2 of 2): the `/chatbot` surface [DONE — PHASE 5 CLOSED]
 

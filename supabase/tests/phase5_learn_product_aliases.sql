@@ -26,9 +26,11 @@
 --       the human chose, and the numbers in the return envelope.
 --   2.  Re-learning converges: the same text for the same supplier re-points the
 --       one row instead of adding a second.
---   3.  The NULL-supplier case converges too, which the unique index cannot do on
---       its own (open item N-5): the same text with no supplier stays one row and
---       re-points.
+--   3.  The NULL-supplier case converges too, which the unique index could not do
+--       on its own when this file was written (open item N-5, closed by migration
+--       20260919000030): the same text with no supplier stays one row and
+--       re-points. The function's own update-then-insert is what converges it, and
+--       it stays after 00030 - redundant now, still correct.
 --   4.  Every untrusted input is skipped with a reason rather than raising: a
 --       non-object entry, blank text, punctuation-only text, no product chosen, a
 --       malformed product id, a product belonging to another tenant, a supplier
@@ -224,10 +226,11 @@ begin
   );
 
   -- ------------------------------------ 3. the pharmacy-wide case (open item N-5)
-  -- supplier_id NULL. The unique index cannot converge these rows - Postgres
-  -- treats NULLs as distinct - so the function updates first and inserts only when
-  -- there was nothing to update. N-5 is not fixed here; this write simply does not
-  -- depend on it.
+  -- supplier_id NULL. The unique index could not converge these rows when this was
+  -- written - Postgres treats NULLs as distinct - so the function updates first and
+  -- inserts only when there was nothing to update. Migration 00030 closes N-5 by
+  -- rebuilding the index NULLS NOT DISTINCT; the function is deliberately not
+  -- replaced, and its branch is what this section still exercises.
   v_result := public.learn_product_aliases(jsonb_build_array(
     jsonb_build_object(
       'raw_name', 'ZETAMAC 500 TAB',
@@ -266,7 +269,7 @@ begin
     v_log,
     case when v_n = 1 then 'PASS' else 'FAIL' end
       || ': 3. learning it with no supplier a second time is still one row, not two (found '
-      || v_n || ') - the N-5 trap, sidestepped rather than fixed'
+      || v_n || ') - the N-5 trap this branch sidesteps, which 00030 closed'
   );
 
   select a.product_id into v_pointed

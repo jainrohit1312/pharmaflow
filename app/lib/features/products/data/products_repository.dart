@@ -450,7 +450,11 @@ class ProductsRepository {
   ///
   /// Re-adding text that already exists re-points the alias at [productId]
   /// instead of failing, which is what the unique key on
-  /// (pharmacy_id, supplier_id, normalized_name) is for.
+  /// (pharmacy_id, supplier_id, normalized_name) is for - including when
+  /// [supplierId] is null, because that key is NULLS NOT DISTINCT (migration
+  /// 20260919000030, which closed N-5). Before that migration the second
+  /// pharmacy-wide add inserted a duplicate row and reported success, so the
+  /// doc here described a behaviour the index did not have.
   Future<ProductAlias> addAlias({
     required String pharmacyId,
     required String productId,

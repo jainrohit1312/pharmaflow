@@ -158,20 +158,18 @@ void main() {
       ledger: repository,
       suppliers: <Supplier>[buildSupplier('Arihant Distributors')],
       // The party is selected before the first frame, so the entries provider's
-      // very first read is the one that fails. A party picked later would find an
-      // empty page already on screen, and the failure would be reported without
-      // replacing it (the design the load-more case below pins).
+      // very first read is the one that fails.
       configure: (container) => container
           .read(ledgerSelectionControllerProvider.notifier)
           .party('id-Arihant Distributors'),
     );
 
+    // One surface, not two: the body takes the failure and offers the retry, so
+    // there is no second report to sit beside it. The load-more path below is the
+    // one that keeps its rows and reports through a SnackBar, because there the
+    // page that is on screen is still true.
     expect(find.byType(ErrorView), findsOneWidget);
-    expect(
-      find.textContaining('Unable to load that ledger.'),
-      findsNWidgets(2),
-      reason: 'the body reports the failure and the listener announces it too',
-    );
+    expect(find.textContaining('Unable to load that ledger.'), findsOneWidget);
 
     repository.failEntries = false;
     await tester.tap(find.text('Retry'));
@@ -179,6 +177,37 @@ void main() {
 
     expect(find.byType(ErrorView), findsNothing);
     expect(find.text('INV-1'), findsOneWidget);
+  });
+
+  testWidgets('a read that fails after a party is picked still offers a retry', (
+    tester,
+  ) async {
+    final repository = FakeLedgerRepository()..failEntries = true;
+
+    await pumpLedgerApp(
+      tester,
+      ledger: repository,
+      suppliers: <Supplier>[buildSupplier('Arihant Distributors')],
+    );
+
+    // Nothing selected: the entries provider is holding an empty page, and the
+    // screen says so as a question rather than as a failure.
+    expect(find.text('Pick a party'), findsOneWidget);
+
+    await _pickParty(tester, 'Arihant Distributors');
+
+    // That retained empty page is the trap T-3 recorded: with the error decided
+    // after the value, the body kept rendering "Nothing on this ledger" - a claim
+    // nothing had established - and the only retry control was navigating away.
+    expect(find.text('Nothing on this ledger'), findsNothing);
+    expect(find.byType(ErrorView), findsOneWidget);
+
+    repository.failEntries = false;
+    // Tapped before any pump: Riverpod 3 retries a failed build on its own
+    // backoff, so a settle here would race the retry and the button would be gone.
+    await tester.tap(find.text('Retry'));
+    await tester.pumpAndSettle();
+    expect(find.byType(ErrorView), findsNothing);
   });
 
   testWidgets('a refused load-more keeps the entries and says so', (

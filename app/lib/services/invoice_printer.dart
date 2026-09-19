@@ -7,6 +7,14 @@
 ///
 /// The receipt is laid out on an 80mm roll - the width a thermal counter printer
 /// takes - so the same artifact prints on a till and saves as a PDF.
+///
+/// It is built in two steps on purpose. [InvoicePrinter.buildSheet] turns the sale
+/// into the bill's **content** and touches nothing platform-shaped;
+/// [InvoicePrinter.buildDocument] lays that content out; `printReceipt` hands it to
+/// the platform. A bill is a tax document, so what it says is worth asserting -
+/// and while the two steps were one method, the only way to look at any of it from
+/// a test was to mock a print channel. The content is where the arithmetic and the
+/// statutory headings live, so the content is what the tests check.
 library;
 
 import 'package:app/core/utils/formatters.dart';
@@ -30,47 +38,260 @@ part 'invoice_printer.g.dart';
 @riverpod
 InvoicePrinter invoicePrinter(Ref ref) => const InvoicePrinter();
 
+/// One sold line as the bill prints it.
+class InvoiceLine {
+  /// Creates a printed line.
+  const InvoiceLine({
+    required this.name,
+    required this.detail,
+    required this.amount,
+  });
+
+  /// What the product is called.
+  final String name;
+
+  /// How the line was priced: `2 x Rs 100.00 less 10% + 12% GST`.
+  final String detail;
+
+  /// What the line came to.
+  final String amount;
+}
+
+/// One label and amount.
+class InvoiceRow {
+  /// Creates a printed row.
+  const InvoiceRow(this.label, this.value, {this.emphasis, this.ruleAbove});
+
+  /// The name of the figure.
+  final String label;
+
+  /// The figure, already formatted.
+  final String value;
+
+  /// Whether this row is the document's headline figure.
+  ///
+  /// Only the total is: it is the one number a customer, an auditor and a GST
+  /// return all agree on, so it is set apart rather than left in the list.
+  final bool? emphasis;
+
+  /// Whether a rule is printed above this row.
+  ///
+  /// The line that separates the tax breakdown from the total. It is part of what
+  /// a GST bill looks like rather than something the renderer should decide, so it
+  /// travels with the row it belongs to.
+  final bool? ruleAbove;
+}
+
+/// The bill's content, before it is anything on paper.
+///
+/// Deliberately not a widget tree and not Freezed: nothing here is a table row or
+/// an RPC envelope, and the point of it is to be the half of a receipt that can be
+/// asserted without a printer, a PDF or a platform channel.
+class InvoiceSheet {
+  /// Creates a sheet.
+  const InvoiceSheet({
+    required this.heading,
+    required this.title,
+    required this.reference,
+    required this.issuedAt,
+    required this.lines,
+    required this.totals,
+    required this.payment,
+    required this.footer,
+  });
+
+  /// The seller's block: the pharmacy's name first, then the details it has.
+  ///
+  /// One positional list rather than separate fields, because this is the order the
+  /// block is read in - the name is the headline at the top of the roll and the rest
+  /// is the small print under it. The first element is styled as the headline; an
+  /// empty pharmacy still yields one element, so a customer always gets a bill
+  /// (a header row that could not be read is not a reason to print nothing).
+  final List<String> heading;
+
+  /// What kind of document this is - `TAX INVOICE`.
+  final String title;
+
+  /// The document's own identifier, e.g. `Bill INV-1`.
+  final String reference;
+
+  /// When it was raised, as `18/09/2026 14:05`.
+  final String issuedAt;
+
+  /// What was sold.
+  final List<InvoiceLine> lines;
+
+  /// The arithmetic: taxable value, discount, the tax heads, and the total.
+  final List<InvoiceRow> totals;
+
+  /// How it was settled.
+  final List<InvoiceRow> payment;
+
+  /// The sentence at the foot of the roll.
+  final String footer;
+}
+
 /// Turns a sale into a bill.
 class InvoicePrinter {
   /// Creates a printer.
   const InvoicePrinter();
 
-  /// Renders [data] as an 80mm receipt and hands it to the platform.
+  /// The sentence printed at the foot of every bill.
+  static const String footerNote =
+      'Goods once sold are not returnable without the bill.';
+
+  /// The bill's content. Pure: no PDF, no platform, no clock.
   ///
   /// [pharmacy] supplies the seller's half of a GST bill. It is nullable because a
   /// pharmacy row that cannot be read should not stop a customer getting a receipt:
   /// the bill prints with a placeholder header rather than not printing at all.
+  ///
+  /// [split] decides the tax heads. It is a parameter rather than something read
+  /// off the sale because `sales` stores one `tax_total` and does not record which
+  /// state the goods went to in a form this can rely on; the counter's own GST
+  /// settings and the place of supply are what decide it there.
+  InvoiceSheet buildSheet({
+    required SaleDetailData data,
+    required Pharmacy? pharmacy,
+    TaxSplit split = TaxSplit.intraState,
+  }) {
+    final sale = data.sale;
+    return InvoiceSheet(
+      heading: <String>[
+        pharmacy?.name ?? 'Pharmacy',
+        if (_present(pharmacy?.displayAddress)) pharmacy!.displayAddress,
+        if (_present(pharmacy?.gstin)) 'GSTIN ${pharmacy!.gstin}',
+        if (_present(pharmacy?.drugLicenseNo))
+          'D.L. ${pharmacy!.drugLicenseNo}',
+      ],
+      title: 'TAX INVOICE',
+      reference: 'Bill ${sale.invoiceNo}',
+      issuedAt: _dateTime(sale.saleDate),
+      lines: <InvoiceLine>[
+        for (final item in data.items)
+          InvoiceLine(
+            name: data.nameOf(item),
+            detail: _lineDetail(item),
+            amount: _money(item.totalAmount),
+          ),
+      ],
+      totals: <InvoiceRow>[
+        InvoiceRow('Taxable value', _money(sale.subTotal)),
+        if (sale.discountTotal > 0)
+          InvoiceRow('Discount', '-${_money(sale.discountTotal)}'),
+        // Half each when the sale is intra-state. The *rounded* half is
+        // subtracted, not the unrounded one, so the two always add back up to the
+        // stored `tax_total`: a tax total with an odd number of paise has no exact
+        // half, and rounding both halves of `t` separately gave `t + 0.01` - a bill
+        // whose own tax heads did not sum to the tax it charged.
+        if (split == TaxSplit.intraState) ...<InvoiceRow>[
+          InvoiceRow('CGST', _money(_cgst(sale.taxTotal))),
+          InvoiceRow(
+            'SGST',
+            _money(PurchaseTotals.round2(sale.taxTotal - _cgst(sale.taxTotal))),
+          ),
+        ] else
+          InvoiceRow('IGST', _money(sale.taxTotal)),
+        InvoiceRow(
+          'TOTAL',
+          _money(sale.grandTotal),
+          emphasis: true,
+          ruleAbove: true,
+        ),
+      ],
+      payment: <InvoiceRow>[
+        InvoiceRow(sale.paymentMode.label, _money(sale.amountPaid)),
+        if (sale.balanceDue > 0)
+          InvoiceRow('Balance due', _money(sale.balanceDue)),
+        // A credit sale names no customer on the roll: the bill is printed at the
+        // counter, and who owes it is the ledger's business, not the paper's.
+        if (sale.customerId != null)
+          const InvoiceRow('Customer', 'account sale'),
+      ],
+      footer: footerNote,
+    );
+  }
+
+  /// [buildSheet] laid out on an 80mm roll.
+  ///
+  /// Returns the document rather than printing it, so the layout can be built (and
+  /// a smoke test can build it) without a platform in reach.
+  pw.Document buildDocument({
+    required SaleDetailData data,
+    required Pharmacy? pharmacy,
+    TaxSplit split = TaxSplit.intraState,
+  }) {
+    final sheet = buildSheet(data: data, pharmacy: pharmacy, split: split);
+
+    return pw.Document()..addPage(
+      pw.Page(
+        pageFormat: PdfPageFormat.roll80,
+        margin: const pw.EdgeInsets.all(8),
+        build: (context) => pw.Column(
+          crossAxisAlignment: pw.CrossAxisAlignment.stretch,
+          children: <pw.Widget>[
+            pw.Column(
+              children: <pw.Widget>[
+                for (var index = 0; index < sheet.heading.length; index++)
+                  pw.Text(
+                    sheet.heading[index],
+                    style: index == 0
+                        ? const pw.TextStyle(
+                            fontSize: 14,
+                            fontWeight: pw.FontWeight.bold,
+                          )
+                        : const pw.TextStyle(fontSize: 8),
+                    textAlign: pw.TextAlign.center,
+                  ),
+                pw.SizedBox(height: 4),
+                pw.Text(
+                  sheet.title,
+                  style: const pw.TextStyle(
+                    fontSize: 10,
+                    fontWeight: pw.FontWeight.bold,
+                  ),
+                ),
+                pw.SizedBox(height: 2),
+                pw.Text(
+                  sheet.reference,
+                  style: const pw.TextStyle(fontSize: 8),
+                ),
+                pw.Text(sheet.issuedAt, style: const pw.TextStyle(fontSize: 8)),
+              ],
+            ),
+            pw.SizedBox(height: 6),
+            pw.Divider(thickness: 0.5),
+            for (final line in sheet.lines) _lineWidget(line),
+            pw.Divider(thickness: 0.5),
+            for (final row in sheet.totals) ...<pw.Widget>[
+              if (row.ruleAbove ?? false) pw.Divider(thickness: 0.5),
+              _rowWidget(row),
+            ],
+            pw.SizedBox(height: 6),
+            for (final row in sheet.payment) _rowWidget(row),
+            pw.SizedBox(height: 10),
+            pw.Text(
+              sheet.footer,
+              style: const pw.TextStyle(fontSize: 7),
+              textAlign: pw.TextAlign.center,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Renders [data] as an 80mm receipt and hands it to the platform.
   Future<void> printReceipt({
     required SaleDetailData data,
     required Pharmacy? pharmacy,
     TaxSplit split = TaxSplit.intraState,
   }) async {
-    final document = pw.Document()
-      ..addPage(
-        pw.Page(
-          pageFormat: PdfPageFormat.roll80,
-          margin: const pw.EdgeInsets.all(8),
-          build: (context) => pw.Column(
-            crossAxisAlignment: pw.CrossAxisAlignment.stretch,
-            children: <pw.Widget>[
-              _header(pharmacy, data.sale),
-              pw.SizedBox(height: 6),
-              pw.Divider(thickness: 0.5),
-              for (final item in data.items) _line(item, data.nameOf(item)),
-              pw.Divider(thickness: 0.5),
-              _totals(data.sale, split),
-              pw.SizedBox(height: 6),
-              _payment(data.sale),
-              pw.SizedBox(height: 10),
-              pw.Text(
-                'Goods once sold are not returnable without the bill.',
-                style: const pw.TextStyle(fontSize: 7),
-                textAlign: pw.TextAlign.center,
-              ),
-            ],
-          ),
-        ),
-      );
+    final document = buildDocument(
+      data: data,
+      pharmacy: pharmacy,
+      split: split,
+    );
 
     await Printing.layoutPdf(
       name: 'bill-${data.sale.invoiceNo}',
@@ -78,126 +299,56 @@ class InvoicePrinter {
     );
   }
 
-  /// The seller's details and the document's own.
-  pw.Widget _header(Pharmacy? pharmacy, Sale sale) => pw.Column(
-    children: <pw.Widget>[
-      pw.Text(
-        pharmacy?.name ?? 'Pharmacy',
-        style: const pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.bold),
-        textAlign: pw.TextAlign.center,
-      ),
-      if ((pharmacy?.displayAddress ?? '').isNotEmpty)
-        pw.Text(
-          pharmacy!.displayAddress,
-          style: const pw.TextStyle(fontSize: 8),
-          textAlign: pw.TextAlign.center,
-        ),
-      if ((pharmacy?.gstin ?? '').isNotEmpty)
-        pw.Text(
-          'GSTIN ${pharmacy!.gstin}',
-          style: const pw.TextStyle(fontSize: 8),
-          textAlign: pw.TextAlign.center,
-        ),
-      if ((pharmacy?.drugLicenseNo ?? '').isNotEmpty)
-        pw.Text(
-          'D.L. ${pharmacy!.drugLicenseNo}',
-          style: const pw.TextStyle(fontSize: 8),
-          textAlign: pw.TextAlign.center,
-        ),
-      pw.SizedBox(height: 4),
-      pw.Text(
-        'TAX INVOICE',
-        style: const pw.TextStyle(fontSize: 10, fontWeight: pw.FontWeight.bold),
-      ),
-      pw.SizedBox(height: 2),
-      pw.Text('Bill ${sale.invoiceNo}', style: const pw.TextStyle(fontSize: 8)),
-      pw.Text(_dateTime(sale.saleDate), style: const pw.TextStyle(fontSize: 8)),
-    ],
-  );
-
-  /// One sold line: what, where it came from, and what it cost.
-  pw.Widget _line(SaleItem item, String name) => pw.Padding(
+  /// One sold line.
+  pw.Widget _lineWidget(InvoiceLine line) => pw.Padding(
     padding: const pw.EdgeInsets.symmetric(vertical: 3),
     child: pw.Column(
       crossAxisAlignment: pw.CrossAxisAlignment.start,
       children: <pw.Widget>[
-        pw.Text(name, style: const pw.TextStyle(fontSize: 9)),
+        pw.Text(line.name, style: const pw.TextStyle(fontSize: 9)),
         pw.Row(
           mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
           children: <pw.Widget>[
-            pw.Text(
-              '${item.qty} x ${_money(item.rate)}'
-              '${item.discountPercent > 0 ? ' less ${_number(item.discountPercent)}%' : ''}'
-              '${item.gstPercent > 0 ? ' + ${_number(item.gstPercent)}% GST' : ''}',
-              style: const pw.TextStyle(fontSize: 8),
-            ),
-            pw.Text(
-              _money(item.totalAmount),
-              style: const pw.TextStyle(fontSize: 8),
-            ),
+            pw.Text(line.detail, style: const pw.TextStyle(fontSize: 8)),
+            pw.Text(line.amount, style: const pw.TextStyle(fontSize: 8)),
           ],
         ),
       ],
     ),
   );
 
-  /// The bill's arithmetic, with the tax heads the split decided.
-  pw.Widget _totals(Sale sale, TaxSplit split) => pw.Column(
-    children: <pw.Widget>[
-      _row('Taxable value', _money(sale.subTotal)),
-      if (sale.discountTotal > 0)
-        _row('Discount', '-${_money(sale.discountTotal)}'),
-      if (split == TaxSplit.intraState) ...<pw.Widget>[
-        _row('CGST', _money(PurchaseTotals.round2(sale.taxTotal / 2))),
-        _row(
-          'SGST',
-          _money(PurchaseTotals.round2(sale.taxTotal - sale.taxTotal / 2)),
-        ),
-      ] else
-        _row('IGST', _money(sale.taxTotal)),
-      pw.Divider(thickness: 0.5),
-      pw.Row(
-        mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
-        children: <pw.Widget>[
-          pw.Text(
-            'TOTAL',
-            style: const pw.TextStyle(
-              fontSize: 10,
-              fontWeight: pw.FontWeight.bold,
-            ),
-          ),
-          pw.Text(
-            _money(sale.grandTotal),
-            style: const pw.TextStyle(
-              fontSize: 10,
-              fontWeight: pw.FontWeight.bold,
-            ),
-          ),
-        ],
-      ),
-    ],
-  );
-
-  /// How it was settled, which is what a customer checks the change against.
-  pw.Widget _payment(Sale sale) => pw.Column(
-    children: <pw.Widget>[
-      _row(sale.paymentMode.label, _money(sale.amountPaid)),
-      if (sale.balanceDue > 0) _row('Balance due', _money(sale.balanceDue)),
-      if (sale.customerId != null) _row('Customer', 'account sale'),
-    ],
-  );
-
   /// A label and an amount on one line.
-  pw.Widget _row(String label, String value) => pw.Padding(
+  pw.Widget _rowWidget(InvoiceRow row) => pw.Padding(
     padding: const pw.EdgeInsets.symmetric(vertical: 1),
     child: pw.Row(
       mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
       children: <pw.Widget>[
-        pw.Text(label, style: const pw.TextStyle(fontSize: 8)),
-        pw.Text(value, style: const pw.TextStyle(fontSize: 8)),
+        pw.Text(row.label, style: _rowStyle(row)),
+        pw.Text(row.value, style: _rowStyle(row)),
       ],
     ),
   );
+
+  /// The style a row's text is set in.
+  static pw.TextStyle _rowStyle(InvoiceRow row) => (row.emphasis ?? false)
+      ? const pw.TextStyle(fontSize: 10, fontWeight: pw.FontWeight.bold)
+      : const pw.TextStyle(fontSize: 8);
+
+  /// The central half of the tax, rounded once.
+  ///
+  /// The rounded value rather than `taxTotal / 2`, so that subtracting it gives the
+  /// state half exactly and the two add back up to the stored total.
+  static double _cgst(double taxTotal) => PurchaseTotals.round2(taxTotal / 2);
+
+  /// How one line was priced.
+  static String _lineDetail(SaleItem item) =>
+      '${item.qty} x ${_money(item.rate)}'
+      '${item.discountPercent > 0 ? ' less ${_number(item.discountPercent)}%' : ''}'
+      '${item.gstPercent > 0 ? ' + ${_number(item.gstPercent)}% GST' : ''}';
+
+  /// Whether [value] holds anything worth printing.
+  static bool _present(String? value) =>
+      value != null && value.trim().isNotEmpty;
 
   /// An amount as `Rs 1,234.00`.
   ///

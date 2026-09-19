@@ -15,6 +15,7 @@ import 'package:app/core/utils/formatters.dart';
 import 'package:app/core/utils/postgrest_search.dart';
 import 'package:app/data/datasources/postgrest_error_mapper.dart';
 import 'package:app/data/datasources/supabase_client.dart';
+import 'package:app/data/models/alert_payloads.dart';
 import 'package:app/data/models/batch_status.dart';
 import 'package:app/data/models/product_stock.dart';
 import 'package:app/data/models/stock_adjustment.dart';
@@ -88,16 +89,14 @@ class InventoryRepository {
     'brand',
   ];
 
-  /// How many candidates the low-stock list will look at.
+  /// How many reorder alerts one read asks for.
   ///
-  /// PostgREST cannot compare two columns, so `total_qty < min_stock_level` is
-  /// decided here rather than in the query, and it is decided over rows the
-  /// server has already narrowed to those with a reorder level configured. That
-  /// subset is small by nature - a threshold is set per product, by hand - and
-  /// this bound exists so a pathological catalogue cannot make the screen pull
-  /// the world. Past it, the list would quietly omit rows, which is the same
-  /// trade-off `supplierOptionsLimit` makes.
-  static const int lowStockScanLimit = 500;
+  /// 200 is the server's own ceiling - `low_stock_products` clamps `p_limit`
+  /// into `1..200` - so one read is the whole list rather than a page of it,
+  /// and a pharmacy past that has a problem a list will not solve. There is no
+  /// bound the screen can silently fall off the end of any more: that was the
+  /// scan limit this replaced (I-1).
+  static const int lowStockLimit = 200;
 
   /// How many batches one expiry read will look at.
   ///
@@ -149,31 +148,33 @@ class InventoryRepository {
     }
   }
 
-  /// Products with a reorder level configured that are below it, worst first.
+  /// Products below the level they are meant to keep, worst shortfall first.
   ///
   /// The ordering is the point of this list: a pharmacist reading it is
-  /// deciding what to reorder, so the product furthest below its level leads.
-  Future<List<ProductStock>> lowStock({required String pharmacyId}) async {
+  /// deciding what to reorder, so the product furthest below its level leads -
+  /// and the answer carries the shortfall, so the list can say how many units
+  /// close the gap rather than only what is low.
+  ///
+  /// One round trip to `low_stock_products()` (migration 20260919000027), the
+  /// same RPC the notifications list and the chatbot read (D-047): the
+  /// comparison PostgREST cannot express, the order and the shortfall all
+  /// arrive decided, so nothing here scans a page and compares two columns in
+  /// Dart (I-1).
+  ///
+  /// [pharmacyId] is deliberately **not** sent - the RPC takes the tenant from
+  /// the caller's own JWT (`get_my_pharmacy_id()`, D-004), which is what keeps
+  /// the tenant out of the request body. The argument stays in the signature
+  /// because every read on this repository is scoped by its caller the same
+  /// way, and the provider that calls it still waits for the scope to be known
+  /// before asking: a tab that answered "nothing is low" while the profile was
+  /// still loading would be T-5's mistake in a new place.
+  Future<List<LowStockProduct>> lowStock({required String pharmacyId}) async {
     try {
-      final rows = await _client
-          .from('product_stock')
-          .select()
-          .eq('pharmacy_id', pharmacyId)
-          // Only products that have a threshold: a level of 0 means "no alert
-          // configured", not "everything is low" (see ProductStockX.isLowStock).
-          .gt('min_stock_level', 0)
-          .order('name')
-          .limit(lowStockScanLimit);
-
-      return rows
-          .map(ProductStock.fromJson)
-          .where((stock) => stock.isLowStock)
-          .toList(growable: false)
-        ..sort(
-          (a, b) => (a.totalQty - a.minStockLevel).compareTo(
-            b.totalQty - b.minStockLevel,
-          ),
-        );
+      final data = await _client.rpc<dynamic>(
+        'low_stock_products',
+        params: <String, dynamic>{'p_limit': lowStockLimit},
+      );
+      return lowStockProductsFrom(data);
     } on sb.PostgrestException catch (error) {
       throw mapPostgrestException(
         error,

@@ -2109,3 +2109,199 @@ are therefore three *structures*, not three captions on one:
 - The `data` field is decoded and kept **verbatim**, not re-modelled into five report
   shapes: nothing on this screen reads a figure out of it, and five models would be five
   chances to lose the caveat that is the point of keeping it.
+
+---
+
+## D-056 — The Alias Key Treats "No Supplier" as a Value
+
+**Date:** 2026-09-19
+
+**Status:** Active
+
+**Decision:** `product_aliases`' unique index is rebuilt `NULLS NOT DISTINCT` on
+`(pharmacy_id, supplier_id, normalized_name)` (migration `20260919000030`). A NULL
+`supplier_id` is therefore a **value**, so a pharmacy may hold one alias per printed
+text per supplier *value*, and "no supplier" — a pharmacy-wide alias — is one of them.
+`ProductsRepository.addAlias`'s upsert converges those rows instead of inserting a
+duplicate.
+
+**Rationale:** Open item N-5, and the reason it was an open item rather than a
+preference: two places in the repository said contradictory things about the same key.
+Migration 00015's comment claimed NULL-supplier rows "never conflict" and called that
+correct; `addAlias`'s doc claimed re-adding a text "re-points the alias … which is what
+the unique key is for". Postgres treats NULLs as distinct, so the first was true and
+the second was false — a second manual alias with no supplier inserted a *duplicate*.
+
+- **Why not the expression index.** The other candidate was
+  `(pharmacy_id, coalesce(supplier_id, '<sentinel>'::uuid), normalized_name)`. It
+  enforces the same rule and **PostgREST cannot use it**: `on_conflict` is matched to an
+  index by column *names*, and an index over an expression is not inferrable from those
+  names, so the app's upsert would have started failing with *"there is no unique or
+  exclusion constraint matching the ON CONFLICT specification"*. PostgreSQL's own
+  documentation describes inference as matching "exactly the `conflict_target`-specified
+  columns/expressions", with no exclusion for `NULLS NOT DISTINCT`, so the plain-column
+  index keeps working — and now the conflict it looks for is actually detected. This was
+  checked in the docs before the migration was written, because a wrong call here would
+  have broken the alias tab for every pharmacy rather than for one case.
+- **Probe first.** A read-only query over the live project found **0 alias rows and 0
+  colliding keys**, so the index was built over an empty table and nothing had to be
+  de-duplicated. That is the only reason this is pure DDL: on a populated table it would
+  have needed a decision about which row survives, which is not a thing an index swap
+  should decide.
+- **`learn_product_aliases` is deliberately not replaced.** Migration 00024's function
+  carries an explicit update-then-insert for the NULL-supplier case precisely because
+  `on conflict` could not converge those rows. That branch is now redundant and stays:
+  it is still correct, and replacing a deployed, tested function in order to delete a
+  branch that harms nothing is churn with a risk attached.
+
+**Consequences:**
+
+- `NULLS NOT DISTINCT` is a property of the index and cannot be turned on for an
+  existing one, so the index is dropped and rebuilt. The statement is a no-op on a
+  re-run (the table is empty, and `drop … if exists` precedes the create).
+- Both contradicting comments are reconciled: 00015's points forward at 00030 (the way
+  00010 points at 00015, D-013), and `addAlias`'s doc now states the behaviour the index
+  actually has. The two Phase 5 tests that described the old fact were corrected rather
+  than left to contradict the code.
+- Verified by `supabase/tests/phase6_alias_identity.sql` (20 PASS / 0 FAIL): the index's
+  own flags, both upsert paths converging, the supplier-scoped and pharmacy-wide rows
+  still coexisting, two different texts still two rows, and tenant isolation. **The same
+  file produced 7 FAILs against the pre-migration database**, which is what makes it
+  evidence rather than decoration.
+
+---
+
+## D-057 — A Bill Is Built in Two Steps, and Its Tax Heads Sum to the Tax Charged
+
+**Date:** 2026-09-19
+
+**Status:** Active
+
+**Decision:** `InvoicePrinter` builds a **content** model (`InvoiceSheet`, via
+`buildSheet`) and then renders it (`buildDocument`), instead of laying out the PDF in
+one method. And the intra-state split takes the **rounded** central half and subtracts
+it for the state half, so CGST + SGST always equal the stored `tax_total`.
+
+**Rationale:** Two things, and the first is what made the second findable.
+
+- **A bill is a tax document, so what it says is worth asserting** — and while the
+  layout and the content were one method, the only way to look at any of it from a test
+  was to mock a print channel. Extracting `InvoiceSheet` (heading, title, reference,
+  issued-at, lines, totals, payment, footer) puts the arithmetic, the statutory headings
+  and the formatting on the testable side of the line. This closes the coverage gap
+  `PROGRESS.md` had carried since Phase 3 ("a test would have to mock a platform channel
+  rather than assert a document — the fix is to extract the document builder").
+- **The split was wrong by a paisa.** The old code printed
+  `round2(taxTotal / 2)` and `round2(taxTotal - taxTotal / 2)`. For a tax total with an
+  odd number of paise — half of all two-decimal totals — the unrounded half subtracted
+  gives the *same* number back, so both heads rounded up and their sum was `taxTotal +
+  0.01`: a bill whose own tax heads disagreed with the tax it charged. Taking the
+  rounded half and subtracting *that* makes the heads sum exactly. Nothing about what is
+  stored changes: this is the printed document only, and `sales.tax_total` — the figure
+  the ledger posted — is untouched.
+
+**Consequences:**
+
+- `printReceipt` is now three lines over `buildDocument`, and the provider seam
+  (`invoicePrinterProvider`) is unchanged, so `sale_detail_screen.dart` did not have to
+  move.
+- `InvoiceRow.emphasis` and `.ruleAbove` travel with the row: which figure is the
+  document's headline and where the rule above the total falls are part of what a GST
+  bill looks like, not something the renderer decides from a label.
+- 17 tests in `test/services/invoice_printer_test.dart`: the seller block and its
+  placeholder, the lines and their pricing, both tax splits, the odd-paise case, the
+  discount/discount-absent pair, the total's emphasis and rule, how it was settled, and
+  two that the layout renders a PDF at all.
+- `_money` keeps printing `Rs` rather than `₹`: the PDF package's built-in fonts have no
+  rupee glyph, which the test run now says out loud ("Helvetica has no Unicode support")
+  and which many thermal printers share.
+
+---
+
+## D-058 — A Failure Is Decided Before a Retained Value
+
+**Date:** 2026-09-19
+
+**Status:** Active
+
+**Decision:** A screen that reads an `AsyncValue` renders the **error** when the read
+failed *for what is on screen*, even if Riverpod is holding a previous value — and a
+screen has **one** failure surface, not an error view and a SnackBar reporting the same
+failure twice.
+
+**Rationale:** Open item T-3. `LedgerEntriesController` returns an empty page while no
+party is selected, and Riverpod 3 keeps the last value across a rebuild. So a party
+chosen *after* the first frame arrived with that empty page attached, and
+`page.hasError && !page.hasValue` — the condition the body used — was false. The screen
+rendered **"Nothing on this ledger"** for a ledger nobody had managed to read, announced
+the failure in a SnackBar beside it, and offered no retry control: the only way to ask
+again was to navigate away and back. The error was reported and simultaneously hidden.
+
+The general shape is worth naming, because it is this project's recurring bug: **two
+states that mean different things rendered identically.** T-5 is the same defect one
+screen over ("loading the bills" and "no bills exist" were one empty disabled picker),
+D-048 records the rule for the notification widget ("no new notifications" must be
+visible, not absent), and the same file's `T-4` is its sibling in the form's dead
+branches. Here the fix is ordering: an error is about the party currently on screen, so
+it wins over a value that belongs to a different question — or to no question at all.
+
+**Consequences:**
+
+- `_LedgerBody` checks `page.hasError` first, and the screen-level `ref.listen` SnackBar
+  is gone: the `ErrorView` already names the failure and carries the retry, so a second
+  report of the same failure was noise. The load-more path is untouched and still keeps
+  its rows and reports through a SnackBar — there the page on screen is still *true*,
+  which is the distinction.
+- The "failure arrived while stale rows are on screen" case is now a retry, not a stale
+  page: after recording a payment, a failed re-read shows "could not load that ledger"
+  rather than a ledger that does not include the payment.
+- The same ordering was applied to the sale detail screen, found while writing its
+  tests: a bill that is **gone** renders *Bill not found* instead of a spinner that
+  never resolves (`saleDetailProvider` answers `null` for an id that is no longer there).
+  The check is `!isLoading` rather than `value == null` alone, because a *retry* also
+  holds no value while it is in flight — the same conflation, one step in the other
+  direction.
+- Tests: the ledger's first-read failure now asserts **one** failure surface (it
+  asserted two, deliberately, under the old design), and a new test reproduces T-3
+  exactly — a party picked after the first frame whose read fails must offer a retry.
+
+---
+
+## D-059 — Phase 6 Ships Web First, Android Second, and Does Not Chase iOS
+
+**Date:** 2026-09-19
+
+**Status:** Active
+
+**Decision:** Phase 6's deployment targets are **Web (Vercel) primary** and **Android
+(APK, then Play) secondary**. **iOS is out of scope** for this phase and documented as a
+runbook for whoever has a Mac. **Windows is not a launch target** — the build is fixed
+because a broken build is a lie about the repository, not because a desktop build is
+wanted. This supersedes MASTER_PLAN's "iOS TestFlight" deliverable for the phase.
+
+**Rationale:** The student is the platform, so the target has to fit the toolchain and
+the workflow. Web is where the counter work happens and it has no review cycle between
+a fix and a live app; Android is the only place the camera-dependent workflows (bill
+photography, product photos) are reliable; iOS cannot be built on this host at all —
+no macOS, no Xcode, no way to upload — so listing it as a deliverable would be a
+promise nothing here can keep. Windows had a fixable build (`permission_handler_windows`
+compiles through `<experimental/coroutine>`, which MSVC 14.51 refuses as error
+C2338/STL1011) and one line of CMake repairs it, which is worth doing and is not worth
+a release process.
+
+**Consequences:**
+
+- The deploy work and the Edge Function secrets land in that order, and the credentials
+  that are needed for each are known up front: a Vercel account, a Google Play developer
+  account, and (for dispatch) Meta + SendGrid.
+- `flutter build windows --debug` was run and produced
+  `build\windows\x64\runner\Debug\app.exe`; the **release** Windows build was
+  deliberately not run (the debug build already proves the CMake fix, and a release
+  build costs minutes of toolchain time). `docs/DEPLOYMENT.md` says so explicitly so
+  nobody mistakes it for verified.
+- The CMake fix is scoped to `permission_handler_windows_plugin` via `if(TARGET …)`
+  rather than added to `APPLY_STANDARD_SETTINGS`, which every plugin links through: a
+  deprecation inside a third-party plugin is not a reason to stop reporting one in code
+  we write. The definition is to be removed when that plugin moves to C++/WinRT 2.x.
+- `docs/USER_MANUAL.md` and `docs/DEPLOYMENT.md` arrive with this decision, because
+  "production readiness" is not a build artifact.

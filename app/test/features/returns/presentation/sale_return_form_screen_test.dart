@@ -308,14 +308,49 @@ void main() {
   testWidgets('will not submit until a bill is chosen', (tester) async {
     await _pumpForm(tester);
 
-    // Nothing to credit yet: the button is disabled rather than reporting a
-    // missing bill, which is why the picker's own "Choose a bill" rule never
-    // reaches a user.
+    // The button's disabled state is the *only* place this rule lives. The picker
+    // used to carry a "Choose a bill" validator and `_save` used to report the same
+    // thing, and neither could ever run: nothing reaches either while the button is
+    // dead (T-4).
     expect(tester.widget<ElevatedButton>(_record()).onPressed, isNull);
 
     await _chooseBill(tester);
 
     expect(tester.widget<ElevatedButton>(_record()).onPressed, isNotNull);
+  });
+
+  testWidgets('says the bills are loading rather than that there are none', (
+    tester,
+  ) async {
+    final gate = Completer<void>();
+    final sale = buildSale();
+
+    await pumpSaleReturnApp(
+      tester,
+      repository: _returns(sale),
+      sales: FakeSalesRepository(sales: <Sale>[sale])..listGate = gate,
+      products: FakeProductsRepository(
+        products: <Product>[buildProduct('Dolo 650', id: 'product-1')],
+      ),
+    );
+
+    // The read is held open. "No sales yet" would be a claim about a question this
+    // form has not been answered yet, and an empty disabled picker saying it is
+    // exactly what T-5 recorded.
+    expect(find.text('Loading the bills…'), findsOneWidget);
+    expect(find.text('No sales yet'), findsNothing);
+    expect(tester.widget<ElevatedButton>(_record()).onPressed, isNull);
+
+    gate.complete();
+    await tester.pumpAndSettle();
+
+    expect(find.text('Loading the bills…'), findsNothing);
+    expect(
+      find.text('Which bill'),
+      findsOneWidget,
+      reason:
+          'the hint answers the question it was asking instead of denying it',
+    );
   });
 
   testWidgets('will not submit twice while the write is in flight', (

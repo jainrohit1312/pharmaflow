@@ -195,14 +195,14 @@ begin
     v_pharmacy, 'DOLO-650 TAB', public.normalize_product_name('DOLO-650 TAB'), v_p500, null
   ) returning id into v_alias_global;
 
-  -- Both rows exist for one printed text. They *can*, because supplier_id is
-  -- nullable and Postgres treats NULLs as distinct in a unique index - which is
-  -- the fact behind open item N-5: the same text written twice with no supplier
-  -- is two rows rather than one update.
+  -- Both rows exist for one printed text, and both should: they are two different
+  -- values of supplier_id, so they are two different keys. (The N-5 defect was that
+  -- two rows with the *same*, NULL supplier also coexisted; migration 00030 closed
+  -- it, and this coexistence is unaffected by that.)
   v_log := array_append(
     v_log,
     case when v_alias_scoped <> v_alias_global then 'PASS' else 'FAIL' end
-      || ': 2. a supplier-scoped alias and a pharmacy-wide alias for one text coexist (the N-5 fact)'
+      || ': 2. a supplier-scoped alias and a pharmacy-wide alias for one text coexist'
   );
 
   -- ------------------------------------------------------------------ as the user

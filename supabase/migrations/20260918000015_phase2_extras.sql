@@ -349,8 +349,16 @@ create index if not exists products_generic_name_trgm_idx
 
 -- Alias write path. product_aliases carried only plain indexes (00009), so the
 -- alias tab could not upsert at all: PostgREST's `on_conflict` target needs a
--- unique index over real columns. supplier_id stays nullable on purpose - rows
--- with a NULL supplier never conflict, which is the right behaviour for manual
--- aliases that are not tied to one distributor.
+-- unique index over real columns. supplier_id stays nullable on purpose: a row
+-- with no supplier is a pharmacy-wide alias, not one tied to a distributor.
+--
+-- The sentence that stood here claimed NULL-supplier rows "never conflict", and
+-- called that the right behaviour. They do not conflict under NULLS DISTINCT -
+-- which was the bug rather than the intent: it made the second manual alias for
+-- one printed text a duplicate row instead of an update, while
+-- `ProductsRepository.addAlias` documented the opposite. Migration 00030
+-- rebuilds this index NULLS NOT DISTINCT and closes it (open item N-5). The
+-- statement below is left exactly as applied, and points forward the way 00010
+-- points at 00015 (D-013).
 create unique index if not exists product_aliases_pharmacy_supplier_normalized_key
   on public.product_aliases (pharmacy_id, supplier_id, normalized_name);

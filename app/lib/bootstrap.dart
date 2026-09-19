@@ -27,10 +27,11 @@ Future<void> bootstrap() async {
   Env.assertLoaded();
   await Supabase.initialize(
     url: Env.supabaseUrl,
-    // `anonKey` is the argument name the project spec mandates, paired with the
-    // SUPABASE_ANON_KEY env var; `publishableKey` would rename that contract.
-    // ignore: deprecated_member_use
-    anonKey: Env.supabaseAnonKey,
+    // Only the argument was renamed: 2.17 deprecated `anonKey` in favour of
+    // `publishableKey` for the same public key. The env var stays
+    // SUPABASE_ANON_KEY, which is the contract `.env.example` and the README
+    // document, so the two names deliberately differ here.
+    publishableKey: Env.supabaseAnonKey,
   );
   FlutterError.onError = (FlutterErrorDetails details) {
     appLogger.e(

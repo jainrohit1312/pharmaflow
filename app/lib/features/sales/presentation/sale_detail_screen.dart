@@ -7,6 +7,7 @@ import 'package:app/core/utils/formatters.dart';
 import 'package:app/core/utils/logger.dart';
 import 'package:app/core/widgets/app_back_button.dart';
 import 'package:app/core/widgets/app_button.dart';
+import 'package:app/core/widgets/app_empty_view.dart';
 import 'package:app/core/widgets/app_scaffold.dart';
 import 'package:app/core/widgets/error_view.dart';
 import 'package:app/core/widgets/loading_view.dart';
@@ -53,10 +54,28 @@ class SaleDetailScreen extends ConsumerWidget {
 
     final data = detail.value;
     if (data == null) {
+      // `saleDetail` answers `null` for an id that is no longer there, and a spinner
+      // is not an answer to that - the bill is not loading, it is not in the
+      // pharmacy's records. Checked *after* `isLoading` because a retry holds no
+      // value while it is in flight either, and reporting a missing bill during one
+      // would be the same conflation the other way round.
+      if (detail.isLoading) {
+        return const AppScaffold(
+          title: 'Bill',
+          leading: _backToSales,
+          body: LoadingView(message: 'Loading the bill…'),
+        );
+      }
       return const AppScaffold(
         title: 'Bill',
         leading: _backToSales,
-        body: LoadingView(message: 'Loading the bill…'),
+        body: AppEmptyView(
+          icon: Icons.receipt_long_outlined,
+          title: 'Bill not found',
+          message:
+              'This bill is no longer in the pharmacy’s records. It may have '
+              'been opened from a link that is out of date.',
+        ),
       );
     }
 

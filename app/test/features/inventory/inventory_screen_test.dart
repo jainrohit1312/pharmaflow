@@ -6,6 +6,7 @@ import 'package:app/data/models/batch_status.dart';
 import 'package:app/data/models/product.dart';
 import 'package:app/data/models/product_stock.dart';
 import 'package:app/data/models/stock_adjustment.dart';
+import 'package:app/features/inventory/presentation/widgets/low_stock_card.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -72,12 +73,47 @@ void main() {
     await _openTab(tester, 'Low stock');
 
     expect(find.text('Paracetamol'), findsOneWidget);
-    expect(find.text('Reorder at 10'), findsOneWidget);
+    expect(find.text('2 units · reorder at 10'), findsOneWidget);
+    expect(
+      find.text('Order 8 units'),
+      findsOneWidget,
+      reason: 'the shortfall is the figure the RPC adds: how much to order',
+    );
     expect(
       find.text('Dolo 650'),
       findsNothing,
       reason: 'it is above its level',
     );
+  });
+
+  testWidgets('leads with the worst shortfall and cannot show a stock value', (
+    tester,
+  ) async {
+    await pumpInventoryApp(
+      tester,
+      repository: FakeInventoryRepository(
+        stock: <ProductStock>[
+          buildStock(name: 'Paracetamol', totalQty: 9, minStockLevel: 10),
+          buildStock(name: 'Amoxicillin', totalQty: 0, minStockLevel: 30),
+        ],
+      ),
+    );
+
+    await _openTab(tester, 'Low stock');
+
+    // The order is the server's (shortfall desc), and the tab renders it as
+    // given: 30 units short leads the 1-unit gap.
+    final cards = tester.widgetList<LowStockCard>(find.byType(LowStockCard));
+    expect(cards.map((card) => card.product.name), <String>[
+      'Amoxicillin',
+      'Paracetamol',
+    ]);
+
+    // `low_stock_products()` answers in quantities, not money, so this list
+    // says nothing about value - the rollup's `at cost` figure belongs to the
+    // stock tab, and a default here would print a wrong rupee amount.
+    expect(find.textContaining('at cost'), findsNothing);
+    expect(find.text('Out of stock'), findsOneWidget);
   });
 
   testWidgets('says so when the stock read fails, and retries', (tester) async {

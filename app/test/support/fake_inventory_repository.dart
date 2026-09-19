@@ -3,6 +3,7 @@
 /// Not a `_test.dart` file, so `flutter test` does not try to run it.
 library;
 
+import 'package:app/data/models/alert_payloads.dart';
 import 'package:app/data/models/batch_status.dart';
 import 'package:app/data/models/product_stock.dart';
 import 'package:app/data/models/stock_adjustment.dart';
@@ -134,15 +135,28 @@ class FakeInventoryRepository implements InventoryRepository {
   }
 
   @override
-  Future<List<ProductStock>> lowStock({required String pharmacyId}) async {
-    final below = stock
+  Future<List<LowStockProduct>> lowStock({required String pharmacyId}) async {
+    // The server's own rule, in the server's own order: below its level, with
+    // a level configured, worst shortfall first and name breaking the tie
+    // (migration 20260919000027). The real repository asks the RPC for exactly
+    // this, so a test fixture that satisfies the fake satisfies the function.
+    final products = stock
         .where((row) => row.minStockLevel > 0 && row.isLowStock)
+        .map(
+          (row) => LowStockProduct(
+            productId: row.productId,
+            name: row.name,
+            genericName: row.genericName,
+            totalQty: row.totalQty,
+            minStockLevel: row.minStockLevel,
+            shortfall: row.minStockLevel - row.totalQty,
+          ),
+        )
         .toList(growable: false);
-    return below..sort(
-      (a, b) => (a.totalQty - a.minStockLevel).compareTo(
-        b.totalQty - b.minStockLevel,
-      ),
-    );
+    return products..sort((a, b) {
+      final byShortfall = b.shortfall.compareTo(a.shortfall);
+      return byShortfall != 0 ? byShortfall : a.name.compareTo(b.name);
+    });
   }
 
   @override

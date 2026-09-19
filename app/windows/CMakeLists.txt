@@ -57,6 +57,30 @@ add_subdirectory("runner")
 # them to the application.
 include(flutter/generated_plugins.cmake)
 
+# permission_handler_windows (which permission_handler 11.3.1 pulls in) implements
+# its Windows permission checks on C++/WinRT's pre-2.0 ABI, and that compiles
+# through <experimental/coroutine>. MSVC 14.51 - the toolchain in Visual Studio
+# 2026 - turned that deprecation into a hard error: C2338 with "error STL1011: The
+# /await compiler option, <experimental/coroutine> ... are deprecated by Microsoft
+# and will be REMOVED SOON". Without this, nothing here builds for Windows at all
+# (W-1), because the plugin is compiled for every desktop target whether or not the
+# app uses it.
+#
+# The macro is the escape hatch that error message names itself, and it is scoped
+# to the single target that needs it rather than added to APPLY_STANDARD_SETTINGS -
+# that function is what every plugin links through, and a deprecation inside a
+# third-party plugin is not a reason to stop reporting one in code we write.
+#
+# Remove this when permission_handler ships a Windows implementation built on
+# C++/WinRT 2.x, which no longer uses the experimental header.
+#
+# Guarded by `if(TARGET ...)` because the plugin list above is generated: a pubspec
+# that ever drops permission_handler must not leave this line breaking the build.
+if(TARGET permission_handler_windows_plugin)
+  target_compile_definitions(permission_handler_windows_plugin PRIVATE
+    _SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS)
+endif()
+
 
 # === Installation ===
 # Support files are copied into place next to the executable, so that it can

@@ -16,6 +16,7 @@ import 'package:app/features/inventory/application/stock_list_controller.dart';
 import 'package:app/features/inventory/data/inventory_repository.dart';
 import 'package:app/features/inventory/presentation/widgets/expiry_batch_card.dart';
 import 'package:app/features/inventory/presentation/widgets/expiry_bucket_bar.dart';
+import 'package:app/features/inventory/presentation/widgets/low_stock_card.dart';
 import 'package:app/features/inventory/presentation/widgets/product_stock_card.dart';
 import 'package:app/features/inventory/presentation/widgets/stock_adjustment_sheet.dart';
 import 'package:flutter/material.dart';
@@ -268,10 +269,10 @@ class _LowStockTab extends ConsumerWidget {
         itemCount: items.length,
         separatorBuilder: (context, index) => const SizedBox(height: 12),
         itemBuilder: (context, index) {
-          final stock = items[index];
-          return ProductStockCard(
-            stock: stock,
-            onTap: () => context.go(Routes.productDetail(stock.productId)),
+          final product = items[index];
+          return LowStockCard(
+            product: product,
+            onTap: () => context.go(Routes.productDetail(product.productId)),
           );
         },
       );
