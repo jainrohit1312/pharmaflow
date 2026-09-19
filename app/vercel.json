@@ -1,0 +1,18 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": null,
+  "installCommand": "",
+  "buildCommand": "export FLUTTER_SUPPRESS_ANALYTICS=true && export PATH=\"$HOME/flutter/bin:$PATH\" && curl -fsSL \"https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_${FLUTTER_VERSION:-3.44.8}-stable.tar.xz\" -o /tmp/flutter.tar.xz && mkdir -p \"$HOME/flutter\" && tar -xJf /tmp/flutter.tar.xz -C \"$HOME/flutter\" --strip-components=1 && git config --global --add safe.directory \"$HOME/flutter\" && flutter --version && flutter pub get && dart run build_runner build --delete-conflicting-outputs && { echo \"SUPABASE_URL=$SUPABASE_URL\"; echo \"SUPABASE_ANON_KEY=$SUPABASE_ANON_KEY\"; } > .env && flutter build web --release",
+  "outputDirectory": "build/web",
+  "rewrites": [
+    { "source": "/(.*)", "destination": "/index.html" }
+  ],
+  "headers": [
+    {
+      "source": "/flutter_service_worker.js",
+      "headers": [
+        { "key": "Cache-Control", "value": "no-cache" }
+      ]
+    }
+  ]
+}

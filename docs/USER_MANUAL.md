@@ -163,6 +163,15 @@ Purchase → the bill reader.
 4. **Save.** The purchase is written, stock moves, and what you confirmed is
    remembered as an alias — so the next bill from that supplier is easier.
 
+**If the reader got the bill wrong, you can have it read again.** Under the photo
+there is a small **"Read it again"** with a counter beside it — *Attempt 2 of 3*. It
+asks first, because a read costs one AI call, and the counter says which attempt your
+tap would spend. **A bill gets three reads**; after the third the button says "Max
+attempts reached", and choosing the file again is how you start over. Reading again
+**keeps everything you have already corrected** — the supplier, your notes, and every
+line you have touched — and replaces only what the reader produced: the invoice number,
+the date and the lines.
+
 If the reader is busy (the model is rate-limited), the app says so once and offers a
 retry. It does not retry by itself: a second attempt costs the same quota, and doing
 it invisibly would spend it twice.

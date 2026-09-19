@@ -355,4 +355,115 @@ void main() {
       expect(state.errorIsRetryable, isFalse);
     });
   });
+
+  group('the reads one bill is allowed', () {
+    test(
+      'counts the read, and the automatic retry is not a second one',
+      () async {
+        final repository = FakePurchaseOcrRepository();
+        repository.parseFailures.addAll(<Exception?>[
+          busyReaderFailure(),
+          null,
+        ]);
+        final container = _container(repository);
+
+        await container
+            .read(purchaseOcrControllerProvider.notifier)
+            .pickAndScan(
+              bytes: List<int>.filled(64, 1),
+              mimeType: 'image/jpeg',
+            );
+
+        final state = container.read(purchaseOcrControllerProvider);
+        expect(
+          repository.parses,
+          2,
+          reason: 'the automatic retry is a second request to the reader',
+        );
+        expect(
+          state.reads,
+          1,
+          reason: 'but it is the same read given its second chance (D-032)',
+        );
+        expect(state.nextRead, 2);
+        expect(state.canReadAgain, isTrue);
+      },
+    );
+
+    test(
+      'counts a read that failed, because it still spent a request',
+      () async {
+        final repository = FakePurchaseOcrRepository();
+        repository.parseFailures.add(busyReaderFailure());
+        final container = _container(repository);
+
+        await container
+            .read(purchaseOcrControllerProvider.notifier)
+            .pickAndScan(
+              bytes: List<int>.filled(64, 1),
+              mimeType: 'image/jpeg',
+            );
+
+        final state = container.read(purchaseOcrControllerProvider);
+        expect(state.error, isNotNull);
+        expect(
+          state.reads,
+          1,
+          reason: 'a limit that counted only answers would bound nothing',
+        );
+      },
+    );
+
+    test('saturates at the cap, however many times the bill is read', () async {
+      final repository = FakePurchaseOcrRepository();
+      final container = _container(repository);
+      final controller = container.read(purchaseOcrControllerProvider.notifier);
+
+      await controller.pickAndScan(
+        bytes: List<int>.filled(64, 1),
+        mimeType: 'image/jpeg',
+      );
+      for (var read = 0; read < 4; read++) {
+        await controller.rescan();
+      }
+
+      final state = container.read(purchaseOcrControllerProvider);
+      expect(repository.parses, 5);
+      expect(state.reads, PurchaseOcrState.maxReads);
+      expect(state.nextRead, PurchaseOcrState.maxReads);
+      expect(state.canReadAgain, isFalse);
+    });
+
+    test(
+      'belongs to the bill: forgetting it starts the allowance over',
+      () async {
+        final repository = FakePurchaseOcrRepository();
+        final container = _container(repository);
+        final controller = container.read(
+          purchaseOcrControllerProvider.notifier,
+        );
+
+        await controller.pickAndScan(
+          bytes: List<int>.filled(64, 1),
+          mimeType: 'image/jpeg',
+        );
+        await controller.rescan();
+        expect(container.read(purchaseOcrControllerProvider).reads, 2);
+
+        controller.clear();
+        await controller.pickAndScan(
+          bytes: List<int>.filled(64, 1),
+          mimeType: 'image/jpeg',
+        );
+
+        final state = container.read(purchaseOcrControllerProvider);
+        expect(state.hasBill, isTrue);
+        expect(
+          state.reads,
+          1,
+          reason: 'another bill is another allowance, in the same session',
+        );
+      },
+    );
+  });
 }

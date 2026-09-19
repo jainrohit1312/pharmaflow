@@ -106,6 +106,16 @@ Future<void> chooseProductWhileBusy(WidgetTester tester, String name) async {
   await tester.pump(const Duration(milliseconds: 400));
 }
 
+/// Taps the read-back card's re-read and answers its dialog.
+///
+/// The dialog is the point of the button: a read costs a call, so a test that
+/// stopped at the tap would be asserting that nothing happened.
+Future<void> readAgain(WidgetTester tester) async {
+  await tapVisible(tester, find.text('Read it again'));
+  await tester.tap(find.text('Re-read'));
+  await tester.pumpAndSettle();
+}
+
 void main() {
   testWidgets('offers both ways to choose a bill, and says what it needs', (
     tester,
@@ -689,5 +699,204 @@ void main() {
           'the old flow spent after the human re-picked the dropped supplier, '
           'without the extra tap',
     );
+  });
+
+  testWidgets('offers to read a bill that is already on screen again', (
+    tester,
+  ) async {
+    final scanner = FakePurchaseOcrRepository();
+    await pumpPurchaseOcrApp(tester, scanner: scanner);
+
+    await chooseAFile(tester);
+
+    expect(find.text('Read it again'), findsOneWidget);
+    expect(
+      find.text('Attempt 2 of 3'),
+      findsOneWidget,
+      reason:
+          'the read that put this form up was attempt 1, so the counter names the '
+          'one a tap would spend',
+    );
+  });
+
+  testWidgets('re-reads only after saying what the read costs', (tester) async {
+    final scanner = FakePurchaseOcrRepository();
+    await pumpPurchaseOcrApp(tester, scanner: scanner);
+
+    await chooseAFile(tester);
+    expect(scanner.parses, 1);
+
+    await tapVisible(tester, find.text('Read it again'));
+
+    expect(find.text('Re-read?'), findsOneWidget);
+    expect(
+      find.textContaining('Uses one AI call'),
+      findsOneWidget,
+      reason: 'the price is the reason the question is asked',
+    );
+    expect(
+      scanner.parses,
+      1,
+      reason: 'nothing is spent until the question is answered',
+    );
+
+    await tester.tap(find.text('Cancel'));
+    await tester.pumpAndSettle();
+
+    expect(scanner.parses, 1, reason: 'canceled is not spent');
+    expect(
+      find.text('Attempt 2 of 3'),
+      findsOneWidget,
+      reason: 'and a read that was not made is not counted',
+    );
+
+    await readAgain(tester);
+
+    expect(scanner.parses, 2);
+    expect(
+      find.text('Attempt 3 of 3'),
+      findsOneWidget,
+      reason: 'the count moves with the reads, not with the taps in between',
+    );
+  });
+
+  testWidgets('the re-read keeps what the human decided (N-8, reachable)', (
+    tester,
+  ) async {
+    final scanner = FakePurchaseOcrRepository(
+      bill: billOfLines(<String>['Dolo 650 Tab 15s']),
+    );
+    final matcher = FakeMatchService();
+
+    await pumpPurchaseOcrApp(
+      tester,
+      scanner: scanner,
+      matcher: matcher,
+      suppliers: <Supplier>[buildSupplier()],
+    );
+
+    await chooseAFile(tester);
+    await chooseSupplier(tester, 'Arihant Distributors');
+    await tester.enterText(
+      find.widgetWithText(TextFormField, 'Notes'),
+      'Check the expiry on this one',
+    );
+    await tester.pumpAndSettle();
+
+    expect(matcher.matchCalls, hasLength(1));
+    expect(find.text('Line 2'), findsNothing);
+
+    // The reader is given a better look at the same paper: a longer bill, and a
+    // different invoice number. Before N-8 the form was keyed on the *parse*, so
+    // this replaced the whole state - and the supplier the human had chosen, the
+    // notes they had written and the offers ranked for their lines went with it.
+    scanner.bill = buildOcrBill(
+      document: const OcrDocument(invoiceNo: 'INV-2026-0099'),
+      lines: billOfLines(<String>['Dolo 650 Tab 15s', 'Cetzine 10mg']).lines,
+    );
+
+    await readAgain(tester);
+
+    expect(scanner.parses, 2, reason: 'read again, not uploaded again');
+    expect(scanner.uploads, 1);
+    // The reader's own facts are replaced...
+    expect(find.text('Line 2'), findsOneWidget);
+    expect(find.text('Cetzine 10mg'), findsOneWidget);
+    expect(find.text('INV-2026-0099'), findsOneWidget);
+    // ...and the human's are not.
+    expect(
+      find.text('Arihant Distributors'),
+      findsOneWidget,
+      reason: 'the same paper came from the same distributor (D-036)',
+    );
+    expect(
+      find.text('Check the expiry on this one'),
+      findsOneWidget,
+      reason: 'a re-read must never throw away what somebody typed',
+    );
+    expect(
+      matcher.matchCalls,
+      hasLength(2),
+      reason:
+          'the lines are new, so the offers ranked for the old ones are asked for '
+          'again rather than shown against the wrong lines',
+    );
+  });
+
+  testWidgets('stops offering a re-read once the bill has had three reads', (
+    tester,
+  ) async {
+    final scanner = FakePurchaseOcrRepository();
+    await pumpPurchaseOcrApp(tester, scanner: scanner);
+
+    await chooseAFile(tester);
+    expect(find.text('Attempt 2 of 3'), findsOneWidget);
+
+    await readAgain(tester);
+    expect(find.text('Attempt 3 of 3'), findsOneWidget);
+
+    await readAgain(tester);
+
+    expect(
+      scanner.parses,
+      3,
+      reason: 'three reads is the allowance, not a loop',
+    );
+    expect(find.text('Max attempts reached'), findsOneWidget);
+    expect(
+      find.text('Attempt 3 of 3'),
+      findsOneWidget,
+      reason: 'a spent allowance still shows what it spent',
+    );
+    expect(
+      tester
+          .widget<TextButton>(
+            find.widgetWithText(TextButton, 'Max attempts reached'),
+          )
+          .onPressed,
+      isNull,
+    );
+    expect(
+      find.text('Read it again'),
+      findsNothing,
+      reason: 'the label says which state the button is in, not only the color',
+    );
+  });
+
+  testWidgets('does not offer a second read while one is already out', (
+    tester,
+  ) async {
+    final scanner = FakePurchaseOcrRepository();
+    await pumpPurchaseOcrApp(tester, scanner: scanner);
+
+    await chooseAFile(tester);
+    expect(scanner.parses, 1);
+
+    // The reader is slow this time, so the test can stand inside the read.
+    scanner.gate = Completer<void>();
+
+    await tapVisible(tester, find.text('Read it again'));
+    await tester.tap(find.text('Re-read'));
+    await tester.pump();
+    await tester.pump();
+
+    expect(scanner.parses, 2);
+    expect(
+      find.text('Reading the bill again…'),
+      findsOneWidget,
+      reason: 'the form is otherwise still for as long as the reader takes',
+    );
+    expect(
+      tester
+          .widget<TextButton>(find.widgetWithText(TextButton, 'Read it again'))
+          .onPressed,
+      isNull,
+      reason: 'a second tap would spend a second call on the same bill',
+    );
+
+    scanner.gate!.complete();
+    await tester.pumpAndSettle();
+
+    expect(find.text('Attempt 3 of 3'), findsOneWidget);
   });
 }

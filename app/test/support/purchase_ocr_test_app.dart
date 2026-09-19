@@ -57,11 +57,12 @@ GoRouter purchaseOcrTestRouter({String initialLocation = Routes.purchaseOcr}) =>
 /// waiting, and a test that wants to *see* the retry passes something it can pump
 /// through.
 ///
-/// [configure] runs against the container before the first frame, which is the only
-/// way to drive a controller the screen only ever reaches through a button. A
-/// *re-read* of a bill that is already on screen is exactly that: the form's own
-/// "Read it again" sits behind a failure, and a failure needs a read to have failed,
-/// so nothing a test can tap produces the second parse (N-8).
+/// [configure] runs against the container before the first frame, which is how a
+/// test reaches the controller without going through the screen. A *re-read* is no
+/// longer one of the cases it is needed for — the read-back card carries the
+/// screen's own "Read it again" (N-8's follow-on) — but a trigger no widget offers
+/// (a retry policy, a background refresh) still has to be driven from here, and so
+/// does a test that wants the state to have moved before the tree is built.
 Future<GoRouter> pumpPurchaseOcrApp(
   WidgetTester tester, {
   required FakePurchaseOcrRepository scanner,

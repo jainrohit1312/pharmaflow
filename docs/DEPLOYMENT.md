@@ -6,10 +6,13 @@ scope** for now (it needs a Mac; the procedure is written out below for whoever 
 one).
 
 > **Status of this file.** The **Android sideload APK has been built and shipped**
-> (section 3.1, D-061) — that is the one step here that has been executed. Everything
-> else — the Vercel web deploy, the publish-time Android keystore and Play listing, the
-> iOS runbook — is written to be runnable and **has not been run**. Where a step was
-> verified in development, it says so.
+> (section 3.1, D-061) — that is the one step here that has been executed. The
+> **Vercel deploy now has a configuration and its own runbook** (`app/vercel.json`
+> and [`docs/DEPLOY_VERCEL.md`](DEPLOY_VERCEL.md), §2 below), and **neither has been
+> run**: nothing has been imported into Vercel yet, so the first deploy is the test of
+> both. The publish-time Android keystore and Play listing, and the iOS runbook, are
+> written to be runnable and **have not been run** either. Where a step was verified
+> in development, it says so.
 
 ---
 
@@ -42,7 +45,7 @@ dart format lib test
 dart run build_runner build --delete-conflicting-outputs
 dart run custom_lint
 flutter analyze
-flutter test            # 627 tests
+flutter test            # 637 tests
 
 cd ..
 deno test supabase/functions          # 181 tests
@@ -100,7 +103,16 @@ printf 'SUPABASE_URL=%s\nSUPABASE_ANON_KEY=%s\n' "$SUPABASE_URL" "$SUPABASE_ANON
 
 ### 2.2 Deploying
 
-Vercel's build image does not ship the Flutter SDK, so the reliable shape is:
+**The repository now ships the config for this route: `app/vercel.json`, documented
+step by step in [`docs/DEPLOY_VERCEL.md`](DEPLOY_VERCEL.md).** Import the repo into
+Vercel, set **Root Directory** to `app`, set the two environment variables, and push.
+That file installs the Flutter SDK in the build container, regenerates the
+`build_runner` output (which is gitignored, so a fresh clone has no `.g.dart` files
+at all), writes `.env` from `SUPABASE_URL`/`SUPABASE_ANON_KEY`, and builds — because
+Vercel's build image does **not** ship the Flutter SDK, and nothing outside the
+project directory survives between builds, every deploy spends minutes installing it.
+
+If you would rather not pay that on every push, the alternative is still valid:
 **build the static bundle, deploy the output**. Nothing about the running site needs
 Flutter.
 
@@ -111,31 +123,16 @@ vercel login
 vercel deploy app\build\web --prod     # static output; no build step on Vercel
 ```
 
-If you would rather have Vercel build it, the project needs an install step that
-installs Flutter into the build container and a build command of
-`cd app && flutter build web --release`, with `app/build/web` as the output
-directory. That works, but it makes every deploy spend minutes installing an SDK, so
-the prebuilt route is the one to prefer for a small team.
+The prebuilt route needs the Supabase values **at build time** either way (§2.1), and
+`vercel deploy <dir>` deploys that directory as the whole site — so if you use it,
+leave the Vercel project's Root Directory unset and ignore `app/vercel.json`, which
+belongs to the other route.
 
-A `vercel.json` is only needed if you take the build-on-Vercel route or want
-rewrites/caching headers. If you add one, the two things that matter for this app
-are:
-
-```json
-{
-  "installCommand": "echo 'no install needed for a prebuilt static bundle'",
-  "outputDirectory": "app/build/web",
-  "headers": [
-    {
-      "source": "/flutter_service_worker.js",
-      "headers": [{ "key": "Cache-Control", "value": "no-cache" }]
-    }
-  ]
-}
-```
-
-The service-worker header matters: a cached service worker is how a web deploy
-"does not take" for a user who already visited.
+Whichever route you take, `app/vercel.json` carries the two things this app needs on
+top of static file serving: the **SPA rewrite** (every route to `index.html`, so a
+deep link is not a 404) and a **`no-cache` header on `flutter_service_worker.js`** — a
+cached service worker is how a web deploy "does not take" for a user who has already
+visited.
 
 ### 2.3 What to verify after the first deploy
 
@@ -406,11 +403,11 @@ a hand-edited `auth.users` row is correct.
 
 ## 8. What is still outstanding
 
-Honest list, current as of Phase 6 chunk 1:
+Honest list, current as of Phase 6 chunk 3:
 
 | Outstanding | Needs |
 | --- | --- |
-| Vercel web deploy | A Vercel account/project |
+| Vercel web deploy | **Configured, not run.** `app/vercel.json` + `docs/DEPLOY_VERCEL.md` are written; the Vercel account exists; the project has not been imported and no deploy has been made |
 | Android APK for sideloading | **Shipped** — `flutter build apk --release`, debug-signed (D-061, §3.1) |
 | Play Store publication | A generated keystore, a Google Play developer account, privacy policy and data-safety form — and one uninstall/reinstall per staff device (D-061) |
 | WhatsApp/email dispatch (alerts, auto-send PO) | Meta WhatsApp Cloud API + SendGrid accounts |

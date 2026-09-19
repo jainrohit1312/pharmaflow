@@ -65,14 +65,34 @@ class PurchaseOcrState {
   /// Creates a state.
   const PurchaseOcrState({
     this.scan,
+    this.reads = 0,
     this.isBusy = false,
     this.isRetrying = false,
     this.error,
     this.errorIsRetryable = false,
   });
 
+  /// How many times one bill may be sent to the reader in one session.
+  ///
+  /// Three, and it is a *cost* limit rather than a quality one: the reader runs
+  /// on a per-minute key (N-2/D-032) and every read is a request to a paid model,
+  /// so a bill gets three and then has to be chosen again.
+  static const int maxReads = 3;
+
   /// The bill being worked on, once it has been read.
   final OcrScan? scan;
+
+  /// How many times this bill has been sent to the reader, this session.
+  ///
+  /// Counted when a read *starts*, not when it answers: a read that times out
+  /// still spent a request, and a limit that counted only successes would bound
+  /// nothing. The one automatic retry a busy reader earns (D-032) is *inside* a
+  /// read rather than a second one — it is the same read given its second chance.
+  ///
+  /// Held here rather than in the screen because it is a property of the bill,
+  /// and the screen is rebuilt for every frame it is on: the read that counts is
+  /// the read, whichever button asked for it.
+  final int reads;
 
   /// Whether a bill is being uploaded or read right now.
   final bool isBusy;
@@ -101,12 +121,41 @@ class PurchaseOcrState {
   /// rather than as an empty form.
   bool get hasBill => scan?.bill != null;
 
+  /// Whether the reader may be asked about this bill again.
+  bool get canReadAgain => reads < maxReads;
+
+  /// The read a re-read would be — the number the counter beside the button says.
+  ///
+  /// Capped at [maxReads], so a bill that has spent everything shows "3 of 3"
+  /// rather than a number past the limit; a form is reached through a successful
+  /// read, so the first number a person sees is 2 (the first read happened).
+  int get nextRead => reads >= maxReads ? maxReads : reads + 1;
+
   /// A copy holding [value], with nothing in flight and no failure.
-  PurchaseOcrState withSuccess(OcrScan value) => PurchaseOcrState(scan: value);
+  PurchaseOcrState withSuccess(OcrScan value) =>
+      PurchaseOcrState(scan: value, reads: reads);
 
   /// A copy that is busy, and no longer failed.
-  PurchaseOcrState withBusy({required bool retrying}) =>
-      PurchaseOcrState(scan: scan, isBusy: true, isRetrying: retrying);
+  PurchaseOcrState withBusy({required bool retrying}) => PurchaseOcrState(
+    scan: scan,
+    reads: reads,
+    isBusy: true,
+    isRetrying: retrying,
+  );
+
+  /// A copy with one more read of this bill counted, and the previous failure
+  /// cleared: the bill is on its way to the reader again.
+  PurchaseOcrState withReadStarted() {
+    final spent = reads + 1;
+    return PurchaseOcrState(
+      scan: scan,
+      // Saturating rather than growing: what is kept is "this bill has had its
+      // reads", and a count that ran past [maxReads] would only be there to be
+      // clamped again wherever it is shown.
+      reads: spent > maxReads ? maxReads : spent,
+      isBusy: true,
+    );
+  }
 
   /// A copy carrying [failure].
   ///
@@ -116,6 +165,7 @@ class PurchaseOcrState {
   /// fine" (T-3's shape, one feature over).
   PurchaseOcrState withError(Object failure) => PurchaseOcrState(
     scan: scan,
+    reads: reads,
     error: failure,
     errorIsRetryable: isRetryableOcrError(failure),
   );
@@ -220,13 +270,19 @@ class PurchaseOcrController extends _$PurchaseOcrController {
   }
 
   /// Reads the same bill again, without uploading it a second time.
+  ///
+  /// Not refused past [PurchaseOcrState.maxReads] here: what the limit caps is
+  /// the re-read *offered on a bill that was read*, and one path that has to keep
+  /// working is the recovery from a first read that never succeeded (D-033) —
+  /// there the bill is not on screen, nothing about it can be saved, and refusing
+  /// the only retry would strand the file. The screen decides what to offer; this
+  /// spends a read when it is asked to.
   Future<void> rescan() async {
     final scan = state.scan;
     if (scan == null) {
       return;
     }
 
-    state = state.withBusy(retrying: false);
     await _read(
       storagePath: scan.storagePath,
       bytes: scan.bytes,
@@ -244,6 +300,10 @@ class PurchaseOcrController extends _$PurchaseOcrController {
     required String mimeType,
   }) async {
     final repository = ref.read(purchaseOcrRepositoryProvider);
+
+    // Counted before the first request goes out: the bill has now been read this
+    // many times, whether or not the answer arrives.
+    state = state.withReadStarted();
 
     for (var attempt = 1; attempt <= attempts; attempt++) {
       try {

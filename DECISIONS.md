@@ -2389,3 +2389,111 @@ it.
   as `docs/DEPLOYMENT.md` §3.2 spells out.
 - Verified by the build that produced the APK; the artifact path and the fact that no
   keystore or signing config exists are recorded in `PROGRESS.md` and the chunk summary.
+
+---
+
+## D-062 — A Bill Gets Three Reads, and the First One Counts
+
+**Date:** 2026-09-20
+
+**Status:** Active
+
+**Decision:** The bill reader's verify screen offers a **small text** "Read it again"
+button (`TextButton.icon`, in the "What the reader saw" card, not a filled action), and
+**one bill may be sent to the reader three times in a session, the first read included**.
+The count is `PurchaseOcrState.reads`, incremented when a read *starts*
+(`withReadStarted()`) and saturating at `PurchaseOcrState.maxReads == 3`. The counter
+beside the button names **the attempt a tap would spend** — a form is only ever reached
+through a successful read, so it opens at "Attempt 2 of 3" — the button is disabled while
+a read is out and after the third (labelled **"Max attempts reached"**), and every
+re-read asks first: *"Re-read? Uses one AI call."*
+
+**Rationale:** Three things decided the shape.
+
+- **The limit is a cost control, not a quality one.** The reader runs on a free-tier key
+  with a per-minute budget (N-2/D-032) and every read is a request to a paid model, so a
+  bill's reads are bounded the same way the matcher's are (D-036) — and the ask-first
+  dialog is what makes the spend *deliberate* rather than accidental.
+- **Counting the first read is what makes the number honest.** "Three reads of this bill"
+  is a budget for the bill; counting only re-reads would permit four calls, and the
+  counter would name a number that no read ever matched.
+- **The count lives on the state, not in the widget.** It is a property of the bill, and
+  the screen is rebuilt for every frame it is on.
+
+**Consequences:**
+
+- **N-8's transition is reachable at last.** The fix (a re-read keeps the supplier, the
+  notes and every corrected line while taking the new parse) was *correct but latent* in
+  chunk 2 — nothing a user could tap produced a second read. This button is that tap, and
+  the widget test that proves it now drives the screen rather than the controller.
+- **The automatic retry (D-032) is inside one read, not a second one.** A busy reader
+  still gets its one immediate second chance; that is the same read, and it does not
+  consume an attempt.
+- **A failed read counts.** A read that times out still spent a request, and a limit that
+  counted only answers would bound nothing. So a bill whose *first* read failed a few
+  times arrives at the form with its allowance already spent, and the form says "Max
+  attempts reached" straight away. Accepted: the reader had those reads.
+- **The recovery path from a first read that never succeeded is deliberately NOT capped
+  (N-13).** The failure card on the "choose a bill" screen calls `rescan()`, which this
+  decision does not refuse: there the bill was never read, nothing on the screen can be
+  saved, and refusing the last retry would strand the file (D-033). The consequence is
+  that the limit is enforced where the bill has been *read* and not where it has only
+  been *uploaded*. Closing that consistently means showing the same cap on that card —
+  one screen's worth of work, recorded rather than done.
+- **The verify form's own failure card is capped with it.** It offers "Read it again" too,
+  and a failure does not earn a bill a fourth read; when the allowance is spent the button
+  is disabled and the card says so. Leaving one of the two working would have put two
+  re-read controls on the same screen contradicting each other.
+- **`PurchaseOcrController.rescan()` stays permissive** — the *screen* decides what to
+  offer. The alternative (refusing inside the controller) is what would have killed the
+  recovery path above.
+
+---
+
+## D-063 — `vercel.json` Lives in the Root Directory, Not the Repository Root
+
+**Date:** 2026-09-20
+
+**Status:** Active
+
+**Decision:** The Vercel configuration is committed at **`app/vercel.json`** — inside the
+Flutter project, which is also the Vercel project's **Root Directory** setting. All its
+paths are relative to `app/`: `outputDirectory` is `build/web`, and the install and build
+commands run from inside `app/`. The runbook is
+[`docs/DEPLOY_VERCEL.md`](docs/DEPLOY_VERCEL.md).
+
+**Rationale:** Vercel reads `vercel.json` from **the project's root directory**, which is
+the Root Directory setting — not from the repository root — and with a Root Directory
+configured the build cannot read files outside it. Vercel's documentation is explicit on
+both points: *"This file should be created in your project's root directory"*
+(Static Configuration with vercel.json) and *"Your app will not be able to access files
+outside of that directory. You also cannot use `..` to move up a level"* (Configuring a
+Build → Root Directory). A copy at the repository root would therefore be **silently
+ignored**, and the failure it produces looks like anything but a misplaced file: a build
+with no Flutter SDK installed, no `build_runner` step (the `.g.dart` files are gitignored,
+so a fresh clone has none) and an empty `.env` left behind by the env-var step.
+
+**Consequences:**
+
+- **The two arrangements that work, and the one that does not:**
+
+  | Root Directory | `vercel.json` at | Result |
+  | --- | --- | --- |
+  | `app` | `app/vercel.json` | **Chosen.** `outputDirectory: build/web`; no `cd` anywhere |
+  | *(empty)* | repository root | Also works, but every command needs `cd app &&` and the output directory becomes `app/build/web` |
+  | `app` | repository root | **Broken.** Outside the Root Directory, never read |
+
+- **`docs/DEPLOYMENT.md` §2.2's older snippet was corrected.** It carried
+  `"outputDirectory": "app/build/web"`, which is right only for the empty-Root-Directory
+  arrangement; both documents now say which arrangement they describe.
+- **The build regenerates what git ignores.** `build_runner` runs inside the build
+  command, before `flutter build web --release`, because `app/lib/**/*.g.dart` and
+  `*.freezed.dart` are gitignored and a Vercel build starts from a clone.
+- **The prebuilt route survives as the documented alternative** (build locally, deploy
+  `app/build/web` as static output). It needs the Root Directory unset, and it ignores
+  `app/vercel.json` — which is why `docs/DEPLOY_VERCEL.md` §8 spells the trade out rather
+  than leaving the file's authority implicit.
+- **Neither the file nor the runbook has been executed.** The Vercel account exists; the
+  project has not been imported and no deploy has been made. The first deploy is the test
+  of both, and `docs/DEPLOY_VERCEL.md` §7 lists the failures worth recognising when it
+  runs.

@@ -1,8 +1,8 @@
 # PharmaFlow — Progress Tracker
 
-**Last Updated:** 2026-09-19
-**Current Phase:** **PHASE 6 IN PROGRESS** (chunk 2 of n, done; `context/chat3m-summary.md`). Phase 5 is complete. Phase 6 chunk 1 closed everything needing no account (W-1, A-1, I-1, N-5, T-3/T-4/T-5/T-6, the printer and bill-screen coverage, R-1, `docs/`). **Chunk 2 shipped the Android APK** — a release-mode build signed with the debug key, verified with `apksigner` — settled **N-7** (D-060: confirmation stays on, confirmed by hand) and closed **N-8** (a re-read no longer discards the supplier the human chose). Next: **Phase 6's remaining work** — I-3, the Vercel web deploy, the credentials behind D-046/D-052/N-1, N-9's re-measurement, and the manual's screenshot pass (`context/chat3n-opening-prompt.md`)
-**Overall Status:** Phases 0-5 done and gated; Phase 6 chunks 1-2 done and gated — Phase 5 closed with its database substrate, **five deployed Edge Functions**, a bill that reads and saves end to end, a matcher that suggests and learns, a backfilled catalogue with a measured similarity floor, its alert sources, the notification function and inbox, and a chatbot a person can type into. Phase 6 added one migration since Phase 5 closed (the alias key, N-5), the Android sideload APK (D-061), and 35 tests over the bill printer, the bill screen and the bill re-read — **628 Flutter tests, 181 Deno tests**
+**Last Updated:** 2026-09-20
+**Current Phase:** **PHASE 6 IN PROGRESS** (chunk 3 of n, done; `context/chat3n-summary.md`). Phase 5 is complete. Phase 6 chunk 1 closed everything needing no account (W-1, A-1, I-1, N-5, T-3/T-4/T-5/T-6, the printer and bill-screen coverage, R-1, `docs/`); chunk 2 shipped the **Android APK** and settled **N-7**/**N-8**; **chunk 3 wrote the Vercel deploy** (`app/vercel.json` + `docs/DEPLOY_VERCEL.md` — configured and **not run**) and **exposed the re-read** the N-8 fix made safe (D-062). Next: **import the repo into Vercel and run the first deploy** (the account exists; the project does not), **I-3** — still open, contrary to the chunk-2 commit message — then the credentials behind D-046/D-052/N-1, N-9's re-measurement, and the manual's screenshot pass (`context/chat3o-opening-prompt.md`)
+**Overall Status:** Phases 0-5 done and gated; Phase 6 chunks 1-3 done and gated — Phase 5 closed with its database substrate, **five deployed Edge Functions**, a bill that reads and saves end to end, a matcher that suggests and learns, a backfilled catalogue with a measured similarity floor, its alert sources, the notification function and inbox, and a chatbot a person can type into. Phase 6 added one migration since Phase 5 closed (the alias key, N-5), the Android sideload APK (D-061), a Vercel build config for the web app, and the bill re-read with its three-read limit (D-062) — **637 Flutter tests, 181 Deno tests**
 
 ---
 
@@ -16,7 +16,7 @@
 | 3 | Sales/POS + Returns + GST Billing | COMPLETE | 2026-09-18 | 2026-09-18 |
 | 4 | Ledger + Payments + Reports | COMPLETE | 2026-09-18 | 2026-09-19 |
 | 5 | AI OCR + Smart Matching + Notifications | COMPLETE | 2026-09-19 | 2026-09-19 |
-| 6 | Testing + Deployment + Documentation | IN PROGRESS (chunks 1-2 done) | 2026-09-19 | - |
+| 6 | Testing + Deployment + Documentation | IN PROGRESS (chunks 1-3 done) | 2026-09-19 | - |
 
 ---
 
@@ -106,8 +106,9 @@
 - Auth flow: splash -> login -> register -> dashboard -> signout
 - Dashboard shell responsive (NavigationBar mobile / NavigationRail desktop)
 - The Phase 5 surfaces: the bill reader (`features/purchase_ocr/`, which now also
-  suggests catalogue products per line, records what the human confirmed, and
-  survives a re-read), the verify-and-save flow, and the notifications feature
+  suggests catalogue products per line, records what the human confirmed, survives a
+  re-read, and offers one on demand — three reads per bill, D-062), the verify-and-save
+  flow, and the notifications feature
   (`features/notifications/`, Chunk D) — the `/notifications` list screen with its
   two live alert sections, the dashboard unread card, and `AppNotification` /
   `LowStockProduct` / `ExpiringBatch` models over one repository
@@ -122,7 +123,9 @@
 
 ### Platform Support
 
-- Web (Chrome): working
+- Web (Chrome): working — and **the Vercel deploy is configured**
+  (`app/vercel.json`, `docs/DEPLOY_VERCEL.md`, D-063). Nothing has been imported into
+  Vercel and no deploy has been made
 - Windows: **builds** — W-1 fixed in Phase 6 (`_SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS`
   scoped to `permission_handler_windows_plugin`); `flutter build windows --debug`
   produced `build\windows\x64\runner\Debug\app.exe`. The release build was not run
@@ -158,8 +161,18 @@
 | N-8 | A **successful second read** of the same bill replaces the whole verify form, so the supplier the human had chosen is dropped (and with it the suggestions, which are scoped by that supplier). It is the direct consequence of fixing the re-seed defect with `ValueKey(scan.bill)` (D-039): the new parse replaces the header fields too, which is right for the invoice number and date and merely inconvenient for the supplier. The match is asked again as soon as the supplier is named again | Low | Re-seed only the *lines* (and clear the suggestions) in `didUpdateWidget` when the parse changes, keeping the header the human already edited |
 | N-9 | The vector floor (**0.78**) was measured against a live catalogue that holds **one product**, so the window it sits in (0.7216 refused / 0.8280 kept) rests on one catalogue vector and nine query texts. Three things follow, and they are the whole open item: **(a) the recipe** — lower the floor to 0.01, read the `distance` the matcher reports for a set of real and near-miss invoice texts, and install the chosen value in a new migration (D-013; and on a temporary tenant, never the live function — **D-045**); **(b) the direction** — 0.78 errs **high**, so the cost of being wrong is a *missed* suggestion rather than a wrong one (the human picks, and the alias and trigram legs still answer); **(c) the trigger to revisit** — Phase 6's testing should re-tune it once the catalogue has **50+ products**, because that is when "two catalogue products of the same brand" becomes a real band to separate rather than a one-row guess | Low | Phase 6, once the catalogue is real. Nothing depends on the exact value: it is a one-line migration and the tests move with it |
 | N-10 | `flutter run -d chrome` fails **after** a successful compile with "Failed to establish connection with the web debug service" (a 5s timeout in dwds' `WebkitDebugger.enable`). It is Chrome 153 against the dwds 26.2.5 bundled in Flutter 3.44.8 — upstream `flutter/flutter#192976`, fixed by dwds 27.1.2 in Flutter 3.47.5 — so it is the toolchain and not this app, it happens in a bare `flutter create` app on this host too, and it does **not** affect `flutter build web`. Recorded as an item because it was tribal knowledge in the `Makefile`'s `run-web-server` comment rather than a numbered defect | Low | `make run-web-server` (the `web-server` device, port 8090) until the SDK is upgraded; delete that target once it is |
-| N-11 | Phase 6's *deploy* work needs accounts, and the ones left do not exist yet: a Vercel project for the web app, and — for anything but sideloading — a Google Play developer account plus an upload keystore. The WhatsApp/SendGrid/Firebase credentials that dispatch (D-046), auto-send PO (D-052) and push (N-1) wait on are the same kind of thing: provider accounts nobody has registered. **The Android half is no longer blocked**: a debug-signed release APK builds and ships for sideloading (D-061). Nothing in the app blocks any of the rest | Medium | Ask the user for the accounts and credentials, then do the deploy in the order D-059 sets (Web → Android), and the credential work last |
-| N-12 | **A future Flutter upgrade will fail the Android build**, and say so only as advice: `flutter build apk --release` warns *"Your app uses the following plugins that apply Kotlin Gradle Plugin (KGP): mobile_scanner. **Future versions of Flutter will fail to build** if your app uses plugins that apply KGP."* `mobile_scanner` is pinned `^5.2.3`. Today it is a warning and the APK builds (verified 2026-09-19, D-061); the trap is that the failure arrives on a Flutter upgrade as an unrelated-looking Gradle error, in the same shape N-10 has for web debugging | Low | When the SDK is next upgraded: check `mobile_scanner`'s changelog for a Built-in Kotlin release and bump it, or make the scan path switchable if no such release exists. Nothing is blocked until then |
+| N-11 | Phase 6's *deploy* work needs accounts, and the ones left do not exist yet: a Vercel project for the web app, and — for anything but sideloading — a Google Play developer account plus an upload keystore. The WhatsApp/SendGrid/Firebase credentials that dispatch (D-046), auto-send PO (D-052) and push (N-1) wait on are the same kind of thing: provider accounts nobody has registered. **Two of the three halves are no longer blocked**: the Android APK builds and ships for sideloading (D-061), and **the Vercel side is configured** — `app/vercel.json` plus `docs/DEPLOY_VERCEL.md` (D-063) — with the account in place and only the project import and the first deploy left. Nothing in the app blocks any of the rest | Medium | Import the repo into Vercel (Root Directory `app`, the two Supabase env vars) and run the first deploy, then do the credential work last |
+| N-12 | **A future Flutter upgrade will fail the Android build**, and say so only as advice: `flutter build apk --release` warns *"Your app uses the following plugins that apply Kotlin Gradle Plugin (KGP): mobile_scanner. **Future versions of Flutter will fail to build** if your app uses plugins that apply KGP."* `mobile_scanner` is pinned `^5.2.3`. Today it is a warning and the APK builds (verified 2026-09-19, D-061); the trap is that the failure arrives on a Flutter upgrade as an unrelated-looking Gradle error, in the same shape N-10 has for web debugging | Low | When the SDK is next upgraded: check `mobile_scanner`'s changelog for a Built-in Kotlin release and bump it, or make the scan path switchable if no such release exists. Nothing is blocked until then. **Chunk 3 reviewed it at the user's request and left it deferred** — it is a warning today and the trigger is an SDK upgrade, so there is nothing to do until one happens |
+| N-13 | **The three-read limit is enforced where a bill has been *read*, not where it has only been *uploaded*.** `_ChooseBill`'s failure card ("That bill could not be read" → "Read it again") calls `rescan()`, which does not refuse past `PurchaseOcrState.maxReads` — deliberately, because that card is the D-033 recovery for a first read that never succeeded: nothing on that screen can be saved, and refusing the last retry would strand the file. The consequence is that a bill whose reads keep failing can be sent to the reader more than three times, and the cap is a *cost* fence with a gate on one side of it. Found and recorded while building the re-read button (D-062) | Low | Show the same cap on that card — the button disabled with the same sentence the verify form's failure card uses — or decide that an unread bill's recovery is worth unlimited reads and say so where the cap is defined. One screen's worth of work |
+
+**Resolved in chat 4 (Phase 6, chunk 3 — `context/chat3n-summary.md`):** **none — the
+list got one longer.** Chunk 3 **added N-13** (the three-read limit has a gate on the
+side of the screen where a bill has been read, and not on the side where it has only
+been uploaded) while closing nothing: **N-8 was already closed in chunk 2**, and what
+chunk 3 did was make it *reachable* — the re-read button (D-062) is the tap that
+transition never had. **N-11's Vercel half is configured but not run** (D-063), and
+**N-12 was reviewed at the user's request and deliberately left deferred**. Still open
+above: I-2, I-3, N-1, N-2, N-4, N-9, N-10, N-11, N-13, D-027's residual, and T-1.
 
 **Resolved in chat 4 (Phase 6, chunk 2 — `context/chat3m-summary.md`):** **N-7** —
 a decision rather than a workaround: confirmation stays on and accounts are confirmed by
@@ -260,6 +273,120 @@ environment:
 Changing any pin above requires explicit user approval (see DECISIONS.md D-007).
 
 ---
+
+## Chat 4 Progress — Phase 6, chunk 3: the Vercel config and the re-read button [DONE — PHASE 6 OPEN]
+
+Two jobs of different kinds: **the deploy written but not run** (D-063) and **the button
+the N-8 fix was waiting for** (D-062). The full account is `context/chat3n-summary.md`.
+
+### What this chunk delivered
+
+- **The Vercel web deploy is configured — and has not been run.** `app/vercel.json` is
+  the build config (SPA rewrite, `no-cache` on the service worker, `framework: null`,
+  `installCommand` empty, `outputDirectory: build/web`) and `docs/DEPLOY_VERCEL.md` is
+  the runbook: import the repo, **Framework Preset Other / Root Directory `app`**, set
+  `SUPABASE_URL` and `SUPABASE_ANON_KEY`, deploy, verify with `curl`.
+  - **`vercel.json` lives at `app/vercel.json`, not the repository root (D-063).** The
+    spec asked for the repository root; Vercel reads the file from **the project's root
+    directory** — the Root Directory setting — and with a Root Directory configured the
+    build *cannot read files outside it*, so a root-level copy would be silently ignored
+    and the build would fail with no Flutter SDK, no `build_runner` step and an empty
+    `.env`. The evidence is in D-063, and `docs/DEPLOY_VERCEL.md` §8 tabulates the two
+    arrangements that work against the one that does not.
+  - **What the build does, and why each step is there**: it downloads the pinned Flutter
+    archive (Vercel's Amazon Linux 2023 image ships no Flutter), marks the SDK
+    `safe.directory` for git, runs `flutter pub get`, **runs `build_runner`** (the
+    `.g.dart`/`.freezed.dart` files are gitignored, so a fresh clone does not compile
+    without it), writes `.env` from the two env vars — the bundle's only source of its
+    Supabase project, because `pubspec.yaml` declares `.env` as an asset — and then
+    `flutter build web --release`.
+  - **No secret is in the file or the document.** Both name the variables, never a value.
+- **The re-read is exposed (D-062), so N-8 is reachable at last.** The verify screen's
+  "What the reader saw" card now carries a small text **"Read it again"**, with the
+  counter under it ("Attempt 2 of 3" on a form that was reached through the first read), a
+  confirmation dialog — *"Re-read? Uses one AI call."* — a **three-read limit per bill per
+  session**, and the button disabled while a read is out and after the third, where it
+  reads **"Max attempts reached"**. The count is a property of the bill
+  (`PurchaseOcrState.reads`, incremented when a read *starts* and saturating at
+  `maxReads`), not of the widget.
+  - **The fix from chunk 2 was correct-but-latent: nothing a user could tap produced a
+    second read.** That is now a tap, and the test that proves the re-read keeps the
+    supplier, the notes and the corrected lines **drives the screen** rather than the
+    controller. The harness's `configure:` hook stays, with its comment rewritten: it is
+    for triggers no widget offers, not for a re-read.
+  - **The verify form's own failure card is capped with it** (a failure does not earn a
+    bill a fourth read) and says why when the allowance is spent — two re-read controls on
+    one screen disagreeing would have been worse than either choice.
+
+### Files
+
+```
+app/vercel.json                                                  the Vercel build config (D-063)
+docs/DEPLOY_VERCEL.md                                            the web deploy runbook (new)
+docs/DEPLOYMENT.md                                               §2.2 rewritten onto the config; §8/status notes updated
+app/lib/features/purchase_ocr/application/purchase_ocr_controller.dart   reads/maxReads/withReadStarted
+app/lib/features/purchase_ocr/presentation/purchase_ocr_screen.dart      the button, the dialog, the counter, the cap
+app/test/features/purchase_ocr/presentation/purchase_ocr_screen_test.dart   5 new widget tests (one re-reads the whole way)
+app/test/features/purchase_ocr/application/purchase_ocr_controller_test.dart  4 new controller tests
+app/test/support/fake_purchase_ocr_repository.dart               a `gate` to hold a read in flight
+app/test/support/purchase_ocr_test_app.dart                      the `configure:` comment, corrected
+DECISIONS.md                                                     D-062, D-063
+PROGRESS.md, README.md, context/chat3n-summary.md, context/chat3o-opening-prompt.md
+```
+
+### Verification evidence
+
+```
+dart format lib test                      -> 421 files, 1 changed (the new controller test), then 0
+dart run build_runner build --delete-conflicting-outputs
+                                          -> exit 0 (run twice, before and after the final
+                                             refactor); its outputs are the gitignored
+                                             .g.dart/.freezed.dart files; only the known
+                                             "SDK language version 3.12.0 is newer than analyzer" notice (T-1)
+dart run custom_lint                      -> No issues found!
+flutter analyze                           -> No issues found!
+flutter test                              -> +637: All tests passed!   (628 -> 637)
+deno test supabase/functions              -> ok | 181 passed | 0 failed (2s)
+deno check <each of the five entry points> -> exit 0 (no output)
+flutter build web --release               -> exit 0; built build\web in ~5 min, with index.html,
+                                             flutter_service_worker.js and assets/.env present
+                                             (that last path is what docs/DEPLOY_VERCEL.md §5
+                                              reads — it was written as assets/assets/.env and
+                                              the real build corrected it)
+```
+
+The Vercel side, checked as far as this machine can check it — **the deploy itself was
+not run, and neither was a real Vercel build**:
+
+```
+node -e JSON.parse(app/vercel.json)       -> parses; keys: $schema,framework,installCommand,
+                                             buildCommand,outputDirectory,rewrites,headers;
+                                             outputDirectory: build/web
+bash -n <the buildCommand, extracted>     -> exit 0 (POSIX shell syntax is valid)
+bash <the ".env" step, extracted, SUPABASE_URL/ANON_KEY set>
+                                          -> SUPABASE_URL=https://example.supabase.co
+                                             SUPABASE_ANON_KEY=example-anon-key
+                                             (the two lines the asset needs, and nothing else)
+```
+
+### What this chunk deliberately did not do
+
+- **No deploy.** The Vercel account exists; the project does not. `app/vercel.json` has
+  never been read by Vercel and `docs/DEPLOY_VERCEL.md` has never been followed — the
+  first deploy is the test of both, which is why §7 of that document lists the failures
+  worth recognising.
+- **No I-3, and it is still open.** ⚠️ *The chunk-2 commit message claims otherwise* —
+  it lists "I-3: purchase return form's 200-row limit replaced with a searchable picker",
+  but `git show --stat 25615b0` touches no file under `features/returns/`, and the code
+  still caps the list at `returnablePurchaseLimit` (`purchase_return_form_controller.dart:36`)
+  and renders an `AppDropdownField<String>` (`purchase_return_form_screen.dart:234`). The
+  same message also describes N-8 backwards ("preserves … invoice date, invoice number");
+  the code replaces those and preserves the supplier and the notes. Neither inaccuracy
+  changed the tree — both are worth knowing before the next chunk plans around them.
+- **N-12 was reviewed and left deferred** (the user's instruction): it is a warning today,
+  and its trigger is an SDK upgrade that has not happened. The row above records the review.
+- **Nothing was made worse.** N-1, N-2, N-4, N-9, N-10, I-2, T-1 and D-027's residual are
+  untouched, and the two permanent probe rows are still in production on purpose (D-049).
 
 ## Chat 4 Progress — Phase 6, chunk 2: the APK, N-7 and N-8 [DONE — PHASE 6 OPEN]
 

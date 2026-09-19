@@ -24,6 +24,7 @@ import 'package:app/core/widgets/app_date_field.dart';
 import 'package:app/core/widgets/app_dropdown_field.dart';
 import 'package:app/core/widgets/app_scaffold.dart';
 import 'package:app/core/widgets/app_text_field.dart';
+import 'package:app/core/widgets/confirm_dialog.dart';
 import 'package:app/core/widgets/section_card.dart';
 import 'package:app/data/models/ocr_purchase_bill.dart';
 import 'package:app/data/models/product_match.dart';
@@ -81,6 +82,11 @@ class PurchaseOcrScreen extends ConsumerWidget {
               key: ValueKey<String>(scan.storagePath),
               scan: scan,
               bill: bill,
+              // The state owns the counting rule (D-062); the form changes only
+              // its words.
+              canReadAgain: state.canReadAgain,
+              nextRead: state.nextRead,
+              isBusy: state.isBusy,
               failure: state.error,
               failureIsRetryable: state.errorIsRetryable,
             )
@@ -231,6 +237,9 @@ class _VerifyForm extends ConsumerStatefulWidget {
   const _VerifyForm({
     required this.scan,
     required this.bill,
+    required this.canReadAgain,
+    required this.nextRead,
+    required this.isBusy,
     super.key,
     this.failure,
     this.failureIsRetryable = false,
@@ -238,6 +247,21 @@ class _VerifyForm extends ConsumerStatefulWidget {
 
   final OcrScan scan;
   final OcrPurchaseBill bill;
+
+  /// Whether the reader may be asked about this bill again
+  /// (`PurchaseOcrState.canReadAgain`).
+  final bool canReadAgain;
+
+  /// The read a re-read would be (`PurchaseOcrState.nextRead`).
+  ///
+  /// Shown beside the button, so the person spending the request can see what is
+  /// left before they spend it.
+  final int nextRead;
+
+  /// Whether the reader is busy right now — which, on this form, is a re-read:
+  /// the form only exists once a bill has been read, and choosing another bill
+  /// clears the scan first.
+  final bool isBusy;
 
   /// A failure from a re-read, which must not be mistaken for a fresh parse.
   final Object? failure;
@@ -418,6 +442,37 @@ class _VerifyFormState extends ConsumerState<_VerifyForm> {
     });
   }
 
+  /// What the counter beside the re-read button says.
+  ///
+  /// While a read is out, the wait is what the line is for — the form is
+  /// otherwise still for as long as the reader takes, and a button that is merely
+  /// disabled reads as broken.
+  String get _counterLabel => widget.isBusy
+      ? 'Reading the bill again…'
+      : 'Attempt ${widget.nextRead} of ${PurchaseOcrState.maxReads}';
+
+  /// Asks the reader about the same bill again, having said what it costs.
+  ///
+  /// The reader runs on a per-minute key (N-2/D-032) and every read is a request
+  /// to a paid model, so a re-read is spent on purpose or not at all — the same
+  /// rule the matcher's "Look again" follows. What a re-read *keeps* is what makes
+  /// it safe to offer at all: the supplier, the notes and every line the human
+  /// has corrected survive it (N-8).
+  Future<void> _readAgain() async {
+    final confirmed = await showConfirmDialog(
+      context,
+      title: 'Re-read?',
+      message:
+          'Uses one AI call. The supplier, the notes and the lines you have '
+          'corrected are kept.',
+      confirmLabel: 'Re-read',
+    );
+    if (!confirmed || !mounted) {
+      return;
+    }
+    await ref.read(purchaseOcrControllerProvider.notifier).rescan();
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -457,16 +512,36 @@ class _VerifyFormState extends ConsumerState<_VerifyForm> {
                   AppButton.outlined(
                     label: 'Read it again',
                     icon: Icons.refresh,
-                    onPressed: () => ref
-                        .read(purchaseOcrControllerProvider.notifier)
-                        .rescan(),
+                    // The same cap as the read-back card's own button: a failure
+                    // does not earn a bill a fourth read.
+                    onPressed: widget.canReadAgain && !widget.isBusy
+                        ? _readAgain
+                        : null,
                   ),
+                  if (!widget.canReadAgain) ...<Widget>[
+                    const SizedBox(height: 8),
+                    Text(
+                      'This bill has had all ${PurchaseOcrState.maxReads} of its '
+                      'reads. Choose the file again to start over.',
+                      style: theme.textTheme.bodySmall,
+                    ),
+                  ],
                 ],
               ),
             ),
             const SizedBox(height: 12),
           ],
-          _ReadBack(scan: widget.scan),
+          _ReadBack(
+            scan: widget.scan,
+            canReadAgain: widget.canReadAgain,
+            counterLabel: _counterLabel,
+            // Null while a read is out, and null once the bill has had its
+            // reads: a tap either spends a call or does nothing, and a button
+            // that does nothing is not offered.
+            onReadAgain: widget.canReadAgain && !widget.isBusy
+                ? _readAgain
+                : null,
+          ),
           const SizedBox(height: 12),
           SectionCard(
             title: 'The bill',
@@ -702,10 +777,33 @@ class _VerifyFormState extends ConsumerState<_VerifyForm> {
 }
 
 /// The image beside what was read, and what the reader was unsure about.
+///
+/// It carries the re-read as well, because a second reading of this bill is the
+/// one thing that belongs to what the reader said rather than to the bill's own
+/// fields — and because the alternative for a bill that *did* read is nothing at
+/// all: the failure card's "Read it again" needs a read to have failed (N-8).
 class _ReadBack extends StatelessWidget {
-  const _ReadBack({required this.scan});
+  const _ReadBack({
+    required this.scan,
+    required this.canReadAgain,
+    required this.counterLabel,
+    required this.onReadAgain,
+  });
 
   final OcrScan scan;
+
+  /// Whether the reader may be asked about this bill again.
+  ///
+  /// Separate from [onReadAgain] being non-null because the two say different
+  /// things: this one decides the *label*, and a read that is merely out is not a
+  /// bill that has run out of reads.
+  final bool canReadAgain;
+
+  /// The counter, or the wait, under the button.
+  final String counterLabel;
+
+  /// Re-reads the bill, having asked first; `null` when it may not be offered.
+  final VoidCallback? onReadAgain;
 
   @override
   Widget build(BuildContext context) {
@@ -759,6 +857,21 @@ class _ReadBack extends StatelessWidget {
                 ],
               ),
             ),
+          const SizedBox(height: 4),
+          // A text button rather than a filled one: reading the bill was the
+          // screen's purpose and this is the small way back to it, not an action
+          // competing with "Save as a draft".
+          Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton.icon(
+              onPressed: onReadAgain,
+              icon: const Icon(Icons.refresh, size: 18),
+              label: Text(
+                canReadAgain ? 'Read it again' : 'Max attempts reached',
+              ),
+            ),
+          ),
+          Text(counterLabel, style: theme.textTheme.bodySmall),
         ],
       ),
     );

@@ -125,8 +125,11 @@ bill picker distinguishes loading from empty (T-4, T-5), the invoice printer's
 content is testable and its CGST/SGST halves add up to the tax charged, the bill
 screens have widget tests, **an Android release APK builds and ships for
 sideloading** (debug-signed — D-061), a re-read of a bill no longer discards the
-supplier the human chose (N-8), and the email-confirmation policy is settled
-(D-060). **Outstanding**: the Vercel web deploy, a Play Store listing (needs a
+supplier the human chose (N-8) and is now **offered on the verify screen** with a
+three-read limit per bill (D-062), **the Vercel web deploy is configured**
+(`app/vercel.json` + [`docs/DEPLOY_VERCEL.md`](docs/DEPLOY_VERCEL.md) — D-063,
+written and **not run**), and the email-confirmation policy is settled (D-060).
+**Outstanding**: the Vercel import and first deploy, a Play Store listing (needs a
 keystore), the still-unset Edge Function secrets (WhatsApp, SendGrid, Firebase),
 and the searchable purchase picker (I-3).
 
@@ -148,14 +151,15 @@ PharmaFlow/
 │   │   │                         ledger, reports, expenses, notifications, chatbot,
 │   │   │                         settings
 │   │   └── services/             OCR, matching, chatbot, notifications, printing
-│   ├── test/                     unit + widget tests (627)
+│   ├── test/                     unit + widget tests (637)
+│   ├── vercel.json               the web deploy's build config (Root Directory `app`, D-063)
 │   └── pubspec.yaml
 ├── supabase/
 │   ├── migrations/               30 ordered migrations
 │   ├── functions/                5 Edge Functions + _shared, 181 Deno tests
 │   ├── tests/                    SQL tests, one per migration of consequence
 │   └── config.toml               retained for `supabase link` (local-stack keys only)
-├── docs/                         user manual + deployment runbook
+├── docs/                         user manual + deployment runbook + Vercel runbook
 ├── context/                      per-chunk handoff briefs and summaries
 ├── Makefile                      the same commands, wrapped
 └── DECISIONS.md, PROGRESS.md, MASTER_PLAN.md, HANDOFF_PROTOCOL.md
@@ -386,7 +390,8 @@ is measured separately and is far more generous). A burst is shed as
 itself (D-032/D-033). The WhatsApp and SendGrid secrets are **not set**: a
 dispatch without them is recorded as `skipped` and names the missing secret.
 
-See [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) for the deploy runbook, and
+See [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) for the deploy runbook,
+[`docs/DEPLOY_VERCEL.md`](docs/DEPLOY_VERCEL.md) for the web deploy specifically, and
 [`docs/USER_MANUAL.md`](docs/USER_MANUAL.md) for how to use the app.
 
 ---
@@ -397,6 +402,7 @@ See [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) for the deploy runbook, and
 | --- | --- |
 | [`docs/USER_MANUAL.md`](docs/USER_MANUAL.md) | How to run a pharmacy on it, screen by screen |
 | [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) | Web, Android, iOS, Windows and the Edge Function secrets |
+| [`docs/DEPLOY_VERCEL.md`](docs/DEPLOY_VERCEL.md) | The Vercel web deploy, step by step (§2 above points here) |
 | [`PROGRESS.md`](PROGRESS.md) | What is done, what is open, and the evidence |
 | [`DECISIONS.md`](DECISIONS.md) | Every architecture decision, and why |
 | [`MASTER_PLAN.md`](MASTER_PLAN.md) | The phase plan |

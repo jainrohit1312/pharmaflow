@@ -8,6 +8,8 @@
 /// single flag could not say "busy, then fine".
 library;
 
+import 'dart:async';
+
 import 'package:app/core/errors/app_exception.dart';
 import 'package:app/data/models/ocr_purchase_bill.dart';
 import 'package:app/features/purchase_ocr/data/purchase_ocr_repository.dart';
@@ -56,6 +58,14 @@ class FakePurchaseOcrRepository implements PurchaseOcrRepository {
   /// The name the last upload was stored under.
   String? lastFileName;
 
+  /// Held open to keep a read in flight while a test does something else.
+  ///
+  /// What the screen does *during* a read cannot be asserted any other way, and
+  /// the two things worth asserting about it are both about a second request:
+  /// that the re-read button is not offered while one is out, and that the
+  /// counter says the wait rather than a number.
+  Completer<void>? gate;
+
   @override
   Future<String> uploadBill({
     required String pharmacyId,
@@ -101,6 +111,11 @@ class FakePurchaseOcrRepository implements PurchaseOcrRepository {
   Future<OcrPurchaseBill> parseBill({required String storagePath}) async {
     parses++;
     parsedPaths.add(storagePath);
+
+    final held = gate;
+    if (held != null) {
+      await held.future;
+    }
 
     final failure = _next(parseFailures);
     if (failure != null) {
