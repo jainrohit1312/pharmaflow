@@ -1992,3 +1992,120 @@ Templating removes the possibility structurally, not via prompt engineering.
   `metric_used`, `returns_not_netted: true`, `limit`) and `dead_stock` its own
   (`as_of`, `quiet_days`, `limit`), so a surface renders the caveat under an answer —
   a reader can see *why* a product is top rather than having to know the rule.
+
+---
+
+## D-054 — The Chatbot Is a Top-Level Shell Destination
+
+**Date:** 2026-09-19
+
+**Status:** Active
+
+**Decision:** `/chatbot` is a **top-level shell destination**, treated as a
+cross-cutting utility in the way `/notifications` and `/settings` are. It is the
+**thirteenth** entry in the navigation rail, placed **after Notifications and before
+Settings**; it is in the mobile drawer and **not** in the bottom bar
+(`inBottomBar: false`, the D-022 flag). The route is declared in `app_router.dart` as a
+shell child.
+
+**Rationale:** The same argument D-048 made for notifications, and it lands harder
+here. The chatbot answers from `report_summary`, `low_stock_products`,
+`expiring_batches`, `top_products` and `dead_stock` — a low-stock question is
+inventory, what sells best is sales, what is expiring is stock, what is still owed is
+purchases and the ledger. **No domain owns it**, so nesting it under whichever module
+was chosen first would make the other four look like second-class answers, and the
+user's mental model ("ask the pharmacy a question") would be buried inside one of the
+five things they might ask about. The rail's utility group now reads
+Notifications → Chatbot → Settings: the three entries that are *about* the pharmacy
+rather than *one of* its trading surfaces. The bottom bar still carries the same four
+trading surfaces, because that is what `inBottomBar` exists for.
+
+**Consequences:**
+
+- **Three lists moved together and the existing tests hold two of them**: `Routes.chatbot`
+  plus its `Routes.shellPaths` entry, the `_navDestinations` entry, and
+  `DashboardShell.destinationPaths` — which `dashboard_shell_test.dart` and
+  `widget_test.dart` already assert against `Routes.shellPaths`, and which now assert a
+  length of **13**. Nothing had to be added to the test suite for this destination; the
+  parity tests were the whole enforcement, which is what they were built for.
+- A half-added destination fails in the tests rather than in production: a rail entry
+  that navigates nowhere, or a route with nothing leading to it, is a missing entry in
+  one of the two lists.
+- **The bottom bar is untouched** — `_bottomBarDestinations` filters on `inBottomBar`,
+  so the thirteenth entry cannot leak into it, and the two utility destinations are
+  asserted to stay out.
+- What nests *under* it later goes at `/chatbot/…`, the way `/reports/expenses` sits
+  under reports and `/notifications/…` is reserved for dispatch settings, so the rail
+  keeps highlighting the parent.
+- The dashboard deliberately gains **no card** for this: D-048's unread-count widget
+  earned its place by being a number that changes without the user asking, while a
+  chatbot has nothing to say until someone asks it something.
+
+---
+
+## D-055 — A Conversation Is Controller State, Not an `AsyncValue`
+
+**Date:** 2026-09-19
+
+**Status:** Active
+
+**Decision:** `/chatbot`'s screen holds its conversation in a `ChatController` whose
+`build()` returns a plain `const ChatState()` and **never throws**, with three separate
+fields: `messages` (turns that happened), `asking` (the question in flight) and
+`failure` (a question that could not be asked). The three situations a user can be in
+are therefore three *structures*, not three captions on one:
+
+| situation | what it is | what the screen shows |
+|---|---|---|
+| nothing asked yet | `messages` empty, nothing in flight | the invitation, with example questions |
+| still waiting | `asking` is the question text | the question plus a spinner |
+| no answer to that | a **message**, with `rpc: null` | the server's sentence as prose, in an ordinary answer bubble |
+| could not ask | `failure`, which is **not** a message | an error icon, the server's sentence, one retry |
+
+**Rationale:** Two decisions in one, and both are forced by this project's own history.
+
+- **Not an `AsyncValue`.** A conversation cannot be one `AsyncValue`: the transcript,
+  the outstanding question and the failed question are not three states of one read,
+  and collapsing them loses exactly the distinctions the screen exists to keep.
+- **A plain state whose build cannot fail.** Riverpod 3 re-runs a provider whose
+  *build* threw, on its own backoff (D-051), so an error state reached that way is not
+  stable across pumps. Reaching it from a failed write — as here — is. This is the
+  `SaleReturnFormController` shape, chosen deliberately over the throwing-build one.
+- **A failure is not a message.** `ChatMessage` is what the conversation *contains*;
+  a failure is a turn that did not happen — no answer, never sent to the server, not in
+  the history. Making that structural rather than cosmetic is what makes *"I cannot
+  answer that"* (an answer, `rpc: null`, D-026) impossible to confuse with *"could not
+  ask"* (a failure). T-5 records this project's version of the bug where those two look
+  alike; here the types do not permit it.
+- **One model call per user action, and nothing retries by itself** (N-2, D-032). The
+  key is a free tier of five requests a minute shared with the bill reader, so `ask`
+  refuses a second question while one is in flight *before* any call is made, and the
+  only retry is `retry()` on a user's tap, re-asking the failed question verbatim. The
+  retry sentence is `isRetryableChatError`'s — `provider_unavailable` or `unreachable` —
+  and it only ever changes a sentence, never a behaviour.
+
+**Consequences:**
+
+- The failure's rendering uses `describeError` and the button primitives `ErrorView` is
+  built from, rather than `ErrorView` itself: a failure here is one turn in a transcript
+  and the question it belongs to has to stay visible. "Retry" is offered for every
+  failure, because re-asking is the only action a failure leaves a user; retryability
+  adds the sentence *"The assistant was busy, not beaten — worth another go."* — which is
+  D-033's distinction, kept in the client because the client is where a wait can be
+  explained.
+- A new question supersedes a previous failure rather than stacking it: the failure
+  described one question's attempt and the user has moved on. The failed question is
+  only held while it is the newest turn.
+- **The client sends the question and a bounded history** — the last
+  `chatHistoryTurns` (6) completed turns, mirroring the function's own
+  `MAX_HISTORY_TURNS`. Both bounds are "at most", so they cannot disagree in a way that
+  matters, and a transcript that grows all afternoon does not grow into the request.
+- **Nothing on the screen computes a figure.** The sentence is the server's, rendered
+  in code from a report's own `jsonb` (D-053), and the note under it
+  (`describeAnswerOrigin`) names the report, the arguments it was handed and the caveats
+  its `meta` states — including `returns_not_netted`, which has no sentence anywhere
+  else. A widget that formatted its own number would be a second implementation of
+  D-053 on the wrong side of the wire.
+- The `data` field is decoded and kept **verbatim**, not re-modelled into five report
+  shapes: nothing on this screen reads a figure out of it, and five models would be five
+  chances to lose the caveat that is the point of keeping it.

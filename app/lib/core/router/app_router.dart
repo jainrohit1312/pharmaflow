@@ -14,6 +14,7 @@ import 'package:app/features/auth/data/auth_repository.dart';
 import 'package:app/features/auth/presentation/login_screen.dart';
 import 'package:app/features/auth/presentation/register_screen.dart';
 import 'package:app/features/auth/presentation/splash_screen.dart';
+import 'package:app/features/chatbot/presentation/chatbot_screen.dart';
 import 'package:app/features/customers/presentation/customers_detail_screen.dart';
 import 'package:app/features/customers/presentation/customers_form_screen.dart';
 import 'package:app/features/customers/presentation/customers_screen.dart';
@@ -325,6 +326,14 @@ final appRouterProvider = Provider<GoRouter>((ref) {
             path: Routes.notifications,
             name: 'notifications',
             builder: (context, state) => const NotificationsScreen(),
+          ),
+          // The second top-level utility, declared beside the first (D-054). It
+          // answers about every domain, so it belongs to none of them, and its
+          // path shares a prefix with nothing here.
+          GoRoute(
+            path: Routes.chatbot,
+            name: 'chatbot',
+            builder: (context, state) => const ChatbotScreen(),
           ),
           GoRoute(
             path: Routes.settings,

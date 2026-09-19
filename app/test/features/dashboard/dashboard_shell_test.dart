@@ -24,10 +24,13 @@ const List<String> _labels = <String>[
   'Returns',
   'Ledger',
   'Reports',
-  // The twelfth destination, and the only one that is a cross-cutting utility
-  // rather than a domain: it sits after Reports and before Settings (D-048), and
-  // is not one of the four the bottom bar carries.
+  // The twelfth destination, and the first cross-cutting utility rather than a
+  // domain: it sits after Reports and before Settings (D-048), and is not one of
+  // the four the bottom bar carries.
   'Notifications',
+  // The thirteenth, and the second utility: it answers about every domain, so it
+  // sits beside Notifications rather than under one of them (D-054).
+  'Chatbot',
   'Settings',
 ];
 
@@ -121,7 +124,7 @@ void main() {
     );
   });
 
-  testWidgets('the twelfth destination stays out of the mobile bottom bar', (
+  testWidgets('the utility destinations stay out of the mobile bottom bar', (
     tester,
   ) async {
     await _pumpShell(tester, size: const Size(500, 900));
@@ -131,6 +134,11 @@ void main() {
       DashboardShell.bottomBarPaths.contains(Routes.notifications),
       isFalse,
       reason: 'the bar carries the four trading surfaces and no more (D-048)',
+    );
+    expect(
+      DashboardShell.bottomBarPaths.contains(Routes.chatbot),
+      isFalse,
+      reason: 'the chatbot is a utility, not one of the four (D-054)',
     );
   });
 

@@ -35,10 +35,10 @@ void main() {
   test('the shell exposes every post-login destination', () {
     expect(
       Routes.shellPaths,
-      hasLength(12),
+      hasLength(13),
       reason:
           'dashboard, products, suppliers, customers, inventory, purchase, '
-          'sales, returns, ledger, reports, notifications, settings',
+          'sales, returns, ledger, reports, notifications, chatbot, settings',
     );
   });
 

@@ -212,6 +212,18 @@ abstract final class Routes {
   /// rail keeps highlighting this destination.
   static const String notifications = '/notifications';
 
+  /// The chatbot: questions about this pharmacy's stock, sales and expiry,
+  /// answered from its own numbers.
+  ///
+  /// A **top-level destination** for [notifications]' reason (D-048), applied again
+  /// (D-054): the reports it answers from span every domain — a low-stock question
+  /// is inventory, what sells best is sales, what is expiring is stock, what is
+  /// still owed is purchases and the ledger — so nesting it under whichever module
+  /// was chosen first would make the others look like second-class answers. It sits
+  /// with `/notifications` and `/settings` in the utility group at the foot of the
+  /// rail, and is not one of the four the bottom bar carries.
+  static const String chatbot = '/chatbot';
+
   /// Application and pharmacy settings (Phase 1 placeholder).
   static const String settings = '/settings';
 
@@ -241,6 +253,7 @@ abstract final class Routes {
     ledger,
     reports,
     notifications,
+    chatbot,
     settings,
   ];
 }

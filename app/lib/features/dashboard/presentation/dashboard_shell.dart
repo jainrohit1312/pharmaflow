@@ -115,6 +115,16 @@ const List<_NavDestination> _navDestinations = <_NavDestination>[
     icon: Icons.notifications_none,
     selectedIcon: Icons.notifications,
   ),
+  // The thirteenth destination, and the second cross-cutting utility: it answers
+  // about stock, sales, payables and expiry, so no domain owns it (D-054). It sits
+  // with Notifications and Settings at the foot of the rail and stays out of the
+  // bottom bar, which carries the four trading surfaces and no more (D-022).
+  _NavDestination(
+    path: Routes.chatbot,
+    label: 'Chatbot',
+    icon: Icons.forum_outlined,
+    selectedIcon: Icons.forum,
+  ),
   _NavDestination(
     path: Routes.settings,
     label: 'Settings',
@@ -252,7 +262,7 @@ class _DashboardShellState extends State<DashboardShell> {
             // the rail's default, which is "no labels" - what extended mode
             // wants.
             labelType: isExpanded ? null : NavigationRailLabelType.all,
-            // Twelve destinations do not fit a short window: without this the
+            // Thirteen destinations do not fit a short window: without this the
             // rail overflows rather than scrolling.
             scrollable: true,
             // `leading` is pinned above the scroll area by default, so the

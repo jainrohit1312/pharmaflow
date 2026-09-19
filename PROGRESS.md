@@ -1,8 +1,8 @@
 # PharmaFlow — Progress Tracker
 
 **Last Updated:** 2026-09-19
-**Current Phase:** Phase 5 IN PROGRESS — **Chunk E part 1 complete**: migration **00029** (`top_products`, `dead_stock` — D-026's last two aggregates) is applied and asserted (36 PASS), and **`chat-sql-agent` is built, deployed and live-probed** — the classification, the parameters, the model name (`gemini-3.6-flash`), the numbers and the refusal path were all verified against the live model (D-053). Next: **Chunk E part 2 — the `/chatbot` Dart surface** (`context/chat3k-opening-prompt.md`) — then Phase 5 is closed and Phase 6 begins (auto-send PO is Phase 6's, D-052)
-**Overall Status:** Phases 0-4 done and gated; Phase 5 has its database substrate, **five deployed Edge Functions** (four live-verified against their provider, one live-probed below the credential, one live-probed end to end), a bill that reads and saves end to end, a matcher that suggests and learns, a backfilled catalogue with a measured similarity floor, its alert sources, the notification function and inbox, and the chatbot server — **544 Flutter tests, 181 Deno tests**
+**Current Phase:** **PHASE 5 COMPLETE** (chunks A–E). Chunk E part 2 — the `/chatbot` surface — is built, tested and gated: `ChatService` over `functions.invoke('chat-sql-agent')`, the plain-class answer envelope, the conversation controller, a screen whose four situations (invitation / waiting / refusal / failure) cannot be confused, and the **13th shell destination** (D-054, D-055). Next: **Phase 6** — W-1, R-1, N-1, D-046's credentials and triggers, D-052's auto-send PO, N-9, N-5, I-1 (`context/chat3l-opening-prompt.md`)
+**Overall Status:** Phases 0-5 done and gated; Phase 5 closed with its database substrate, **five deployed Edge Functions** (four live-verified against their provider, one live-probed below the credential, one live-probed end to end), a bill that reads and saves end to end, a matcher that suggests and learns, a backfilled catalogue with a measured similarity floor, its alert sources, the notification function and inbox, and a chatbot a person can type into — **593 Flutter tests, 181 Deno tests**
 
 ---
 
@@ -15,7 +15,7 @@
 | 2 | Purchase + Inventory + Batch Tracking | COMPLETE | 2026-09-18 | 2026-09-18 |
 | 3 | Sales/POS + Returns + GST Billing | COMPLETE | 2026-09-18 | 2026-09-18 |
 | 4 | Ledger + Payments + Reports | COMPLETE | 2026-09-18 | 2026-09-19 |
-| 5 | AI OCR + Smart Matching + Notifications | IN PROGRESS (A–D complete; Chunk E part 1 — the last two aggregates + `chat-sql-agent` — done, deployed and probed; **part 2 — the `/chatbot` surface — next**) | 2026-09-19 | - |
+| 5 | AI OCR + Smart Matching + Notifications | COMPLETE | 2026-09-19 | 2026-09-19 |
 | 6 | Testing + Deployment + Documentation | PENDING | - | - |
 
 ---
@@ -111,6 +111,14 @@
   (`features/notifications/`, Chunk D) — the `/notifications` list screen with its
   two live alert sections, the dashboard unread card, and `AppNotification` /
   `LowStockProduct` / `ExpiringBatch` models over one repository
+- The chatbot (`features/chatbot/`, Chunk E part 2): `/chatbot`, the 13th rail
+  entry (D-054). `ChatService` (`lib/services/chat_service.dart`) over
+  `functions.invoke('chat-sql-agent')`, with the answer as a plain-class
+  `ChatResponse` and `ChatMessage` (`lib/data/models/`), a `ChatController` whose
+  conversation is plain state with the tenant never sent (D-004), and a screen whose
+  invitation, waiting turn, refusal and failure are four different renderings —
+  `describeAnswerOrigin` reads the note under an answer from the envelope's own
+  `rpc`, `params` and `data.meta`, so nothing on the client computes a figure (D-053)
 
 ### Platform Support
 
@@ -225,6 +233,101 @@ environment:
 ```
 
 Changing any pin above requires explicit user approval (see DECISIONS.md D-007).
+
+---
+
+## Chat 4 Progress — Chunk E (PART 2 of 2): the `/chatbot` surface [DONE — PHASE 5 CLOSED]
+
+The client of the chatbot: the service, the models, the controller, the screen and the
+13th shell destination. No migration and no server change — E-part-1 had already
+deployed and live-probed `chat-sql-agent`, so this chunk is Dart only. **Phase 5 ends
+here.** The full account is `context/chat3k-summary.md`.
+
+### What part 2 delivered
+
+- **`ChatService`** (`lib/services/chat_service.dart`, `@riverpod`) in the
+  `OcrService`/`MatchService` shape: an interface, `SupabaseChatService` over
+  `functions.invoke('chat-sql-agent')`, a pure `decodeChatAnswer`, and `chatException` —
+  a thin name over `functionException` (D-042) carrying only this feature's fallback
+  sentence. The tenant never travels (D-004) and **nothing retries** (N-2): a
+  `provider_unavailable` reaches the screen as a `ServerException` the user can act on.
+  `chatHistoryFor` bounds the context to the last six turns, mirroring the function's
+  own `MAX_HISTORY_TURNS`.
+- **The answer as plain classes** (`lib/data/models/chat_response.dart`,
+  `chat_message.dart`), the `ReportSummary` precedent: `ChatResponse` carries the
+  sentence, the nullable `rpc`, the `params` the report was handed, the report's
+  `data` **verbatim and un-modelled**, the model and the warnings. **A body that is not
+  an object, or carries no `answer` string, is a failure** — the blank bubble is the one
+  wrong answer this feature could give. `rpc: null` decodes as a *success*.
+- **`describeAnswerOrigin`** — the one line under an answer, read entirely from the
+  envelope: the report's name, the non-null arguments it was handed (in words: `within
+  90 days`, `at most 5 rows`), and the caveats its own `meta` states — `returns_not_netted`
+  being the one that motivated D-053 and has no sentence anywhere else.
+- **`ChatController`** (`lib/features/chatbot/application/`) — plain state, not an
+  `AsyncValue` (D-055), with `messages` / `asking` / `failure` as three separate fields.
+  One model call per ask, a second refused before any call is spent, `ref.mounted`
+  checked after the await (D-034), and the only retry a user's tap that re-asks the
+  failed question verbatim.
+- **The screen** — a transcript, a composer (Enter *and* a button: web is the first
+  platform here, D-005), an invitation with example questions drawn from the report set,
+  and four situations that cannot be confused: *nothing asked yet*, *still waiting*,
+  *no answer to that* (prose, no error, nothing to retry) and *could not ask* (an error
+  icon, the server's sentence, one retry). Nothing on it computes a figure.
+- **The 13th shell destination** (D-054): `Routes.chatbot`, the `_navDestinations`
+  entry, the router's shell child — Notifications → Chatbot → Settings, `inBottomBar:
+  false`. Three lists moved and the existing parity tests did the enforcing; nothing new
+  had to be added for that.
+
+### Files
+
+```
+lib/services/chat_service.dart                              (new)
+lib/data/models/chat_response.dart                          (new)
+lib/data/models/chat_message.dart                           (new)
+lib/features/chatbot/application/chat_controller.dart       (new)
+lib/features/chatbot/presentation/chatbot_screen.dart       (new)
+lib/features/chatbot/presentation/widgets/message_bubble.dart (new)
+test/services/chat_service_test.dart                        (new, 28 tests)
+test/features/chatbot/application/chat_controller_test.dart (new, 11 tests)
+test/features/chatbot/presentation/chatbot_screen_test.dart (new, 10 tests)
+test/support/fake_chat_service.dart                         (new)
+test/support/chatbot_test_app.dart                          (new)
+context/chat3k-summary.md                                   (new)
+context/chat3l-opening-prompt.md                            (new)
+```
+
+**Modified:** `lib/core/router/routes.dart` (`Routes.chatbot` + `shellPaths`),
+`lib/features/dashboard/presentation/dashboard_shell.dart` (the 13th entry),
+`lib/core/router/app_router.dart` (the shell child),
+`test/features/dashboard/dashboard_shell_test.dart` and `test/widget_test.dart` (12 → 13),
+`DECISIONS.md` (**D-054**, **D-055**), `PROGRESS.md`.
+
+### Verification evidence
+
+```
+dart format lib test                    -> 417 files, 0 changed
+dart run build_runner build --delete-conflicting-outputs -> wrote 2 outputs, no errors
+dart run custom_lint                    -> No issues found!
+flutter analyze                         -> No issues found!
+flutter test                            -> +593: All tests passed!   (544 -> 593)
+deno test supabase/functions            -> ok | 181 passed | 0 failed
+deno check ×5 (ocr, match, backfill, send-notification, chat-sql-agent) -> clean
+```
+
+No migration was added, so no `supabase db push` and no new SQL test. Nothing under
+`supabase/` changed at all — the six Deno lines were run to prove that rather than
+assert it.
+
+### What this chunk deliberately did not do
+
+- **No live end-to-end run.** E-part-1 probed the endpoint itself with the user's
+  session; the widget tests drive the same recorded bodies over the fake. What a live
+  run would add is the browser's own `functions.invoke` path on a **200** — it still
+  could not prove an answer is *useful*. No token was needed or requested (N-7).
+- **No dashboard card** for the chatbot (D-054's note): D-048's unread count is a number
+  that changes without the user asking; a chatbot has nothing to say until asked.
+- **No server change, no new report, no write path.** A question the five reports cannot
+  answer is still answered with a sentence.
 
 ---
 
