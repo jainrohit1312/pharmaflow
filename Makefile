@@ -67,6 +67,7 @@ test-functions:
 	deno check supabase/functions/match-product/index.ts
 	deno check supabase/functions/backfill-embeddings/index.ts
 	deno check supabase/functions/send-notification/index.ts
+	deno check supabase/functions/chat-sql-agent/index.ts
 
 # Phase 5's embedding backfill (chunk C3). ONE invocation embeds ONE batch and
 # answers with `remaining`, so this is a loop the operator runs by hand:

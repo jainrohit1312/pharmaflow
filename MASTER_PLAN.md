@@ -134,6 +134,22 @@ add `device_tokens` table, add `notification_logs` table
 
 **Estimated Context:** ~180k tokens
 
+**Chunks (built in Chat 4):**
+
+- **A** — the database foundation (migration 00022: `pgvector`, the
+  `products.embedding` column, `device_tokens`, `notification_logs`, the private
+  `purchase-bills` bucket)
+- **B** — the AI OCR core (`ocr-purchase-bill`, the capture/verify screen, the save)
+- **C** — smart matching (`match-product`, the embedding backfill, the vector floor)
+- **D** — notifications (`send-notification`, the two alert sources, the in-app inbox)
+- **E** — the chatbot (`chat-sql-agent` and the two remaining aggregates) — **the
+  last Phase 5 chunk**
+
+Auto-send PO — send an approved PO to the supplier over their `preferred_channel` —
+was a candidate sixth chunk and is **deferred to Phase 6** (D-052): it needs a
+WhatsApp Meta account, a SendGrid key and supplier channel preferences, none of which
+exist yet, and manual sending is adequate until they do.
+
 ---
 
 ## Phase 6 — Testing + Deployment + Documentation
@@ -146,6 +162,13 @@ iOS TestFlight, Vercel deploy, Edge Function secrets, user manual.
 **Flutter Files (~50):** expand `app/test/`, `docs/`
 
 **Estimated Context:** ~100k tokens
+
+**Add-ons (deferred from Phase 5):**
+
+- **Auto-send PO** (D-052) — on approval, send the PO to the supplier over their
+  `preferred_channel`. It rides with Phase 6's deployment work because it waits on the
+  same WhatsApp Meta account, SendGrid key and supplier channel preferences that
+  Phase 6's Edge Function secrets and alert triggers (D-046) configure.
 
 ---
 

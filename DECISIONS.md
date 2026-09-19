@@ -1949,3 +1949,46 @@ nothing". Found by the card's own test, not by review.
 - Any future provider that derives an `AsyncValue` from another should do the same,
   and a widget test that expects an error state should expect the error's *sentence*
   rather than pump a fixed number of frames.
+
+---
+
+## D-052 — Auto-send PO Deferred to Phase 6
+
+**Date:** 2026-09-19
+
+**Status:** Active
+
+**Decision:** Phase 5 ends with the chatbot (Chunk E). Auto-send PO on approval moves
+to Phase 6 add-ons.
+
+**Rationale:** Requires WhatsApp Meta account, SendGrid key, and supplier channel
+preferences — none configured. Manual sending is adequate until credentials exist.
+
+**Consequences:** Phase 5 = A + B + C + D + E. Auto-send PO rides with Phase 6
+deployment work.
+
+---
+
+## D-053 — Chatbot Phrasing Is Templated, Not Model-Generated
+
+**Date:** 2026-09-19
+
+**Status:** Active
+
+**Decision:** The chatbot never lets the model produce a numeral. The Gemini call
+returns only `{rpc_name, params}` as a closed-set choice. The RPC returns a `jsonb`
+envelope. Phrasing is a per-RPC template in code, filled with the RPC's own numbers.
+
+**Rationale:** D-026 says "RPCs, never free-form SQL." Extending that: if the model can
+phrase an answer, it can hallucinate a numeral — a "₹45,230" that no RPC produced.
+Templating removes the possibility structurally, not via prompt engineering.
+
+**Consequences:**
+
+- Adding a new chatbot capability = adding an RPC + a template, not a prompt. The
+  model's job is classification only.
+- **No invisible semantics: an aggregate states its own window and caveats in the
+  envelope.** `top_products` carries a `meta` block (`window_from`, `window_to`,
+  `metric_used`, `returns_not_netted: true`, `limit`) and `dead_stock` its own
+  (`as_of`, `quiet_days`, `limit`), so a surface renders the caveat under an answer —
+  a reader can see *why* a product is top rather than having to know the rule.

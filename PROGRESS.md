@@ -1,8 +1,8 @@
 # PharmaFlow — Progress Tracker
 
 **Last Updated:** 2026-09-19
-**Current Phase:** Phase 5 IN PROGRESS — **Chunk D complete**: `send-notification` is deployed and live-probed, the in-app `/notifications` list and the dashboard unread widget are built (D-048), the two alert sources are rendered live, and `NotificationService` has its Phase 5 meaning. Next: **Chunk E — the chatbot** (`chat-sql-agent`, the last Phase 5 function), then Phase 6
-**Overall Status:** Phases 0-4 done and gated; Phase 5 has its database substrate, four deployed Edge Functions (three live-verified against their provider, one live-probed below the credential), a bill that reads and saves end to end, a matcher that suggests and learns, a backfilled catalogue with a measured similarity floor, its alert sources, and the notification function and inbox — 544 Flutter tests, 129 Deno tests
+**Current Phase:** Phase 5 IN PROGRESS — **Chunk E part 1 complete**: migration **00029** (`top_products`, `dead_stock` — D-026's last two aggregates) is applied and asserted (36 PASS), and **`chat-sql-agent` is built, deployed and live-probed** — the classification, the parameters, the model name (`gemini-3.6-flash`), the numbers and the refusal path were all verified against the live model (D-053). Next: **Chunk E part 2 — the `/chatbot` Dart surface** (`context/chat3k-opening-prompt.md`) — then Phase 5 is closed and Phase 6 begins (auto-send PO is Phase 6's, D-052)
+**Overall Status:** Phases 0-4 done and gated; Phase 5 has its database substrate, **five deployed Edge Functions** (four live-verified against their provider, one live-probed below the credential, one live-probed end to end), a bill that reads and saves end to end, a matcher that suggests and learns, a backfilled catalogue with a measured similarity floor, its alert sources, the notification function and inbox, and the chatbot server — **544 Flutter tests, 181 Deno tests**
 
 ---
 
@@ -15,7 +15,7 @@
 | 2 | Purchase + Inventory + Batch Tracking | COMPLETE | 2026-09-18 | 2026-09-18 |
 | 3 | Sales/POS + Returns + GST Billing | COMPLETE | 2026-09-18 | 2026-09-18 |
 | 4 | Ledger + Payments + Reports | COMPLETE | 2026-09-18 | 2026-09-19 |
-| 5 | AI OCR + Smart Matching + Notifications | IN PROGRESS (A–D complete; Chunk E — the chatbot — next) | 2026-09-19 | - |
+| 5 | AI OCR + Smart Matching + Notifications | IN PROGRESS (A–D complete; Chunk E part 1 — the last two aggregates + `chat-sql-agent` — done, deployed and probed; **part 2 — the `/chatbot` surface — next**) | 2026-09-19 | - |
 | 6 | Testing + Deployment + Documentation | PENDING | - | - |
 
 ---
@@ -51,7 +51,7 @@
 
 ### Backend (Supabase Hosted)
 
-- 28 migrations applied, all idempotent (`supabase migration list`: 28/28 local
+- 29 migrations applied, all idempotent (`supabase migration list`: 29/29 local
   and remote match)
 - 24 tables and 2 views (`product_stock`, `batch_status`), RLS enforced on every
   business table; migration 00022 added `device_tokens`, `notification_logs`, the
@@ -59,8 +59,8 @@
   (00019-00021 added one table, `invoice_counters`, and no view), 00023 added
   the two matching functions, 00024 the alias-learning function, 00025 the
   backfill pair, 00026 the re-tuned vector floor, 00027 the two alert sources,
-  and 00028 `queue_notification` — none of those six added a table, a column or
-  a view
+  00028 `queue_notification`, and 00029 the chatbot's two aggregates — none of
+  those seven added a table, a column or a view
 - Helper functions: `get_my_pharmacy_id()`, `get_my_role()`,
   `normalize_product_name()` (identity and scope); the automation layer
   (`ledger_auto_entry_*`, `stock_*`, `write_audit_log`, `set_updated_at`,
@@ -68,15 +68,18 @@
   `next_sale_invoice_no`, `record_payment`, `report_summary`); the sales
   payment guard (`sales_payment_check`); the matcher
   (`product_embedding_text`, `match_products`, `learn_product_aliases`,
-  `products_to_embed`, `set_product_embeddings`); and the alert sources
-  (`low_stock_products`, `expiring_batches`)
-- **Four Edge Functions deployed**: `ocr-purchase-bill` (chunk B1, verified against
+  `products_to_embed`, `set_product_embeddings`); and the five aggregates the
+  alerts and the chatbot share (`low_stock_products`, `expiring_batches`,
+  `top_products`, `dead_stock`, plus `report_summary`)
+- **Five Edge Functions deployed**: `ocr-purchase-bill` (chunk B1, verified against
   the live model), `match-product` (chunk C1), `backfill-embeddings` (chunk C3,
-  verified live) and `send-notification` (chunk D part 2, live-probed: it answers
-  `skipped` naming the missing `WHATSAPP_TOKEN` and writes both rows). `supabase/functions/_shared/`
+  verified live), `send-notification` (chunk D part 2, live-probed: it answers
+  `skipped` naming the missing `WHATSAPP_TOKEN` and writes both rows) and
+  `chat-sql-agent` (chunk E part 1, live-probed end to end: the classification, the
+  parameters, the model name, the figures and the refusal path). `supabase/functions/_shared/`
   carries errors, the JSON envelope + CORS, the caller-scoped client, base64, the
   shared Gemini poster (`gemini.ts`) and the embedding convention (`embedding.ts`).
-  **129 Deno tests** are gates (**N-3 resolved**), and `make test-functions` runs them
+  **181 Deno tests** are gates (**N-3 resolved**), and `make test-functions` runs them
   plus a `deno check` per entry point
 - Indexes and triggers per migration: `set_updated_at` on every business table,
   and every stock and ledger effect attached as a trigger rather than left to a
@@ -222,6 +225,79 @@ environment:
 ```
 
 Changing any pin above requires explicit user approval (see DECISIONS.md D-007).
+
+---
+
+## Chat 4 Progress — Chunk E (PART 1 of 2): the last two aggregates, and the chatbot function [DONE, live-probed]
+
+The server side of Chunk E: migration 00029 (`top_products`, `dead_stock`) and
+`chat-sql-agent`, deployed and probed. **Part 2 — the `/chatbot` Dart surface — is briefed
+in `context/chat3k-opening-prompt.md`**; the full account is `context/chat3j-summary.md`.
+
+### What part 1 delivered
+
+- **`supabase/migrations/20260919000029_phase5_chat_aggregates.sql`**, applied — two
+  functions and their grants; no table, no column, no trigger, no view. `top_products(...)`
+  (30-day rolling window, units by default, revenue available, ranked by either) and
+  `dead_stock(...)` (stock on hand that has not sold in `p_days`), both `stable security
+  definer`, tenant from `get_my_pharmacy_id()`, `authenticated` only with
+  `revoke … from anon, public`. Both return `{meta, rows}`: the `meta` block is D-053's
+  no-invisible-semantics rule, and it is why these two carry an envelope while 00027's two
+  carry a bare array. The rules recorded in the migration: **a return does not subtract**
+  and `returns_not_netted` says so rather than hiding it; dead means the last sale is
+  strictly older than `p_days` (exactly `p_days` ago is still moving — the boundary day is
+  inside the window); never-sold is dead stock with a null `days_since`; a product whose
+  only stock has expired is still dead stock (a different question from `expiring_batches`);
+  nothing on the shelf is not; and **neither function filters `is_active`** (what sold,
+  sold; and a discontinued product with stock left is the most stuck cash).
+- **`supabase/tests/phase5_chat_aggregates.sql`** — **36 PASS / 0 FAIL of 37 assertions**,
+  atomic and self-rolling-back (verified: 0 ZZTEST rows survive). The fixtures are real
+  sales written through `checkout_sale()` (D-021), so the stock trigger ran and refused to
+  oversell; only their dates were moved afterwards.
+- **`supabase/functions/chat-sql-agent/`** (`index`, `deps`, `handler`, `schema`, `answer`
+  plus three test files) — deployed, `verify_jwt` on, acting as the caller. **The model
+  chooses; the database answers** (D-026): one `generateContent` call with a
+  `responseSchema` whose `rpc` is an **`enum`** of the five reports plus `unsupported`, and
+  **phrasing templated in code** (D-053) — `answer.ts` renders each report's sentence from
+  that report's own `jsonb`, so no model output is ever rendered and no invented figure can
+  appear. Every parameter is validated before use; **one request makes one model call with
+  no internal retry** (N-2); a question no report covers is a **200** with `rpc: null`.
+  **52 new Deno tests** (129 → **181**).
+- The gate wiring: `Makefile` and `HANDOFF_PROTOCOL.md` gained the fifth `deno check`.
+
+### The probe (4 invocations, one model call each — N-7)
+
+```
+POST chat-sql-agent {"question":"what is low on stock?"}
+  -> 200 rpc=low_stock_products, answer quoting the RPC's own row
+         ("…dolo 650: 20 units short (0 in stock against a level of 20)."),
+         data = the live tenant's real row, meta.model = gemini-3.6-flash
+POST chat-sql-agent {"question":"what sells best this month?"}
+  -> 200 rpc=top_products, data.meta = {window_from 2026-08-21, window_to 2026-09-19,
+         metric_used units, returns_not_netted true}, rows [] (no sales yet)
+POST chat-sql-agent {"question":"what is the weather in Mumbai?"}
+  -> 200 rpc=null, answer = "I cannot answer that. I can answer questions about …"
+OPTIONS -> 204 Access-Control-Allow-Origin: *
+POST "this is not json" -> 400 {"error":{"code":"invalid_request","message":…}}
+```
+
+Proves the classification, the parameters, the model name, the figures coming from the
+report, and the refusal path. It cannot prove an answer is *useful*. **D-045 respected** —
+every probe is a read, and the function writes nothing.
+
+### Files
+
+```
+supabase/migrations/20260919000029_phase5_chat_aggregates.sql   (new, applied)
+supabase/tests/phase5_chat_aggregates.sql                       (new, 37 assertions)
+supabase/functions/chat-sql-agent/{index,deps,handler,schema,answer}.ts   (new, deployed)
+supabase/functions/chat-sql-agent/{schema,answer,handler}_test.ts          (new, 52 tests)
+context/chat3j-summary.md                                        (new)
+context/chat3k-opening-prompt.md                                 (new, E-part-2's brief)
+```
+
+**Modified:** `Makefile`, `HANDOFF_PROTOCOL.md`, `DECISIONS.md` (**D-052**, **D-053**),
+`MASTER_PLAN.md`, `context/chat3-opening-prompt.md`, `PROGRESS.md`.
 
 ---
 
@@ -1853,13 +1929,34 @@ flutter test               -> +113: All tests passed!
 
 ## Next Action
 
-**Phase 5 Chunk E — the chatbot** (`chat-sql-agent`, the last Phase 5 function), then
-Phase 6. Chunk D is done, deployed and probed (above); what remains in Phase 5 is the
-one function the master plan has always listed and no chunk has built. Its brief is
+**Phase 5 Chunk E — the chatbot** (`chat-sql-agent`), the last Phase 5 function and the
+last Phase 5 chunk. **Next Action once Chunk E completes = Phase 6.** Auto-send PO is
+no longer a Phase 5 chunk — it moves to Phase 6's add-ons (D-052). Chunk D is done,
+deployed and probed (above); what remains in Phase 5 is the one function the master
+plan has always listed and no chunk has built. Its brief is
 `context/chat3j-opening-prompt.md`, and **D-026 is the constraint that shapes it**:
 the chatbot answers through **RPCs, never free-form SQL** — a model that writes SQL
 against a live tenant is a model that can be talked into writing it somewhere else,
 and the parameterised RPC is the boundary that makes the question safe. Concretely:
+
+**Chunk E is split two ways, and part 1 is done, deployed and probed:**
+
+- **E-part-1 (done):** migration **00029** (`top_products`, `dead_stock`, the last two
+  of D-026's four aggregates) with `supabase/tests/phase5_chat_aggregates.sql` —
+  **36 PASS / 0 FAIL of 37 assertions** — and **`chat-sql-agent` built, deployed and
+  live-probed** (4 invocations: `low_stock_products`, `top_products` with its `meta`
+  window and `returns_not_netted`, an `rpc: null` refusal, and the preflight/400 paths),
+  covered by 52 new Deno tests (the full suite is **181 passed**). **D-053** records the
+  phrasing rule (templated in code, never model-generated) and **D-052** the auto-send PO
+  deferral. The Makefile and `HANDOFF_PROTOCOL.md` carry the new `deno check` line.
+- **E-part-2 (next):** the `/chatbot` Dart surface (service + controller + screen +
+  widget tests, the 13th shell destination). Briefed in
+  `context/chat3k-opening-prompt.md`. **The endpoint itself needs no further probing** —
+  it was verified end to end in part 1; a token is only needed if an end-to-end run of the
+  Flutter build is wanted.
+
+The notes below are E-part-1's implementation record, kept because E-part-2's screen
+depends on the contract they describe:
 
 - `_shared/gemini.ts` already carries the poster (`postGemini`) and the error
   vocabulary, and D-030 named the vision model in code; the chatbot's **text** model
@@ -1886,8 +1983,9 @@ is registered (N-1), and the two rows the probe wrote stay in production on purp
 
 Then **Phase 6**: testing, deployment, documentation — the Windows build fix (W-1),
 the README refresh (R-1), push registration (N-1), the SendGrid/WhatsApp credentials
-and the alert triggers (D-046), N-9's re-measurement once the catalogue is real, and
-N-5's index.
+and the alert triggers (D-046), N-9's re-measurement once the catalogue is real, N-5's
+index, and **auto-send PO** (D-052 — it needs the same WhatsApp/SendGrid credentials
+the alert triggers do).
 
 What Phase 5 builds on, and must not break:
 

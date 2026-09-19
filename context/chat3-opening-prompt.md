@@ -320,15 +320,19 @@ point, not a mandate):
    WhatsApp Cloud API + SendGrid + `features/notifications/` + implement the
    four service stubs.
 5. **Chunk E — Chatbot:** `chat-sql-agent` edge function + chatbot surface
-   (natural-language → SQL SELECT → RLS-scoped answer).
-6. **Chunk F — Auto-send PO:** hook into the approval flow — on approve, send
-   the PO PDF to the supplier via their `preferred_channel`. This depends on
-   Chunk D being done.
+   (natural-language → SQL SELECT → RLS-scoped answer). **This is the last
+   Phase 5 chunk.**
+
+Auto-send PO — hook into the approval flow, and on approve send the PO PDF to the
+supplier via their `preferred_channel` — was a candidate sixth chunk and is
+**deferred to Phase 6 add-ons** (D-052): it needs a WhatsApp Meta account, a
+SendGrid key and supplier channel preferences, none of which exist yet, and
+manual sending is adequate until they do.
 
 Realistically, chunks B and D are each likely to need their own split. You
 decide.
 
-**When Phase 5 is fully done** (all six chunks), the last chunk's handoff
+**When Phase 5 is fully done** (all five chunks, A–E), the last chunk's handoff
 should also preview Phase 6. Do not start Phase 6 in the same session as a
 Phase 5 chunk.
 
