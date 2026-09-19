@@ -56,11 +56,13 @@ no tenant to scope a query to.
 | `cashier` | The counter |
 | `viewer` | Someone who needs to look, not touch |
 
-> **On the hosted project, email confirmation is required.** A new sign-up cannot
-> sign in until the address is confirmed. If you are running the hosted deployment,
-> either confirm accounts deliberately or turn "Confirm email" off in the Supabase
-> dashboard (Authentication → Providers → Email) — but decide which, because the two
-> are different policies. See open item N-7 in `PROGRESS.md`.
+> **Account confirmation is deliberate (D-060).** The hosted project requires a
+> confirmed email address, and that stays on: creating an account is two steps — sign
+> the person up, then confirm the address in the Supabase dashboard
+> (Authentication → Users). A user who has not been confirmed yet is told their address
+> is not confirmed rather than that their password is wrong. This is a policy for a
+> shop with a handful of accounts, not a self-service signup, and it can be revisited
+> if that changes.
 
 ---
 

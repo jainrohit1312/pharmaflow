@@ -17,8 +17,10 @@ import 'package:app/data/models/product_match.dart';
 import 'package:app/data/models/purchase.dart';
 import 'package:app/data/models/supplier.dart';
 import 'package:app/features/purchase/presentation/widgets/product_picker_field.dart';
+import 'package:app/features/purchase_ocr/application/purchase_ocr_controller.dart';
 import 'package:app/features/purchase_ocr/presentation/purchase_ocr_screen.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import '../../../support/fake_bill_picker.dart';
@@ -622,6 +624,70 @@ void main() {
       matcher.matchCalls,
       isEmpty,
       reason: 'the re-read starts an unasked form, like the first read did',
+    );
+  });
+
+  testWidgets('a re-read takes the new parse but keeps what the human decided', (
+    tester,
+  ) async {
+    final scanner = FakePurchaseOcrRepository(
+      bill: billOfLines(<String>['Dolo 650 Tab 15s']),
+    );
+    final matcher = FakeMatchService();
+    late ProviderContainer container;
+
+    await pumpPurchaseOcrApp(
+      tester,
+      scanner: scanner,
+      matcher: matcher,
+      // The builder's own default name, so the dropdown and the assertion below
+      // cannot drift apart.
+      suppliers: <Supplier>[buildSupplier()],
+      configure: (value) => container = value,
+    );
+
+    await chooseAFile(tester);
+    await chooseSupplier(tester, 'Arihant Distributors');
+    await tester.enterText(
+      find.widgetWithText(TextFormField, 'Notes'),
+      'Check the expiry on this one',
+    );
+    await tester.pumpAndSettle();
+
+    expect(matcher.matchCalls, hasLength(1));
+    expect(find.text('Line 2'), findsNothing);
+
+    // The reader is asked about the same paper again and reads it better: a longer
+    // bill, and a different invoice number. Before N-8 was closed the form was keyed
+    // on the *parse*, so this replaced the whole state - and the supplier the human
+    // had chosen, the notes they had written and the offers ranked for their lines
+    // all went with it.
+    scanner.bill = buildOcrBill(
+      document: const OcrDocument(invoiceNo: 'INV-2026-0099'),
+      lines: billOfLines(<String>['Dolo 650 Tab 15s', 'Cetzine 10mg']).lines,
+    );
+    await container.read(purchaseOcrControllerProvider.notifier).rescan();
+    await tester.pumpAndSettle();
+
+    // The reader's own facts are replaced...
+    expect(find.text('Line 2'), findsOneWidget);
+    expect(find.text('Cetzine 10mg'), findsOneWidget);
+    expect(find.text('INV-2026-0099'), findsOneWidget);
+    // ...and the human's are not.
+    expect(
+      find.text('Arihant Distributors'),
+      findsOneWidget,
+      reason: 'the same paper came from the same distributor (D-036)',
+    );
+    expect(find.text('Check the expiry on this one'), findsOneWidget);
+    expect(
+      matcher.matchCalls,
+      hasLength(2),
+      reason:
+          'the lines are new, so the offers ranked for the old ones are asked for '
+          'again rather than shown against the wrong lines - the same one request '
+          'the old flow spent after the human re-picked the dropped supplier, '
+          'without the extra tap',
     );
   });
 }

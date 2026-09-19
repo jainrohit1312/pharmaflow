@@ -2305,3 +2305,87 @@ a release process.
   we write. The definition is to be removed when that plugin moves to C++/WinRT 2.x.
 - `docs/USER_MANUAL.md` and `docs/DEPLOYMENT.md` arrive with this decision, because
   "production readiness" is not a build artifact.
+
+---
+
+## D-060 — Email Confirmation Stays On, and Accounts Are Confirmed by Hand
+
+**Date:** 2026-09-19
+
+**Status:** Active
+
+**Decision:** The hosted project keeps **"Confirm email" ON**. New sign-ups are
+confirmed deliberately by the owner in the Supabase dashboard. **No app change**, no
+"resend confirmation" affordance, no workaround, and no hand-editing of
+`auth.users.email_confirmed_at`.
+
+**Rationale:** N-7 was an open item because the repository's own belief contradicted
+reality — `supabase/config.toml` says `enable_confirmations = false`, but that key only
+ever configures a **local stack** (D-003), while the hosted project requires a confirmed
+address: a sign-up returns `confirmation_sent_at` with no session, and the password grant
+answers `email_not_confirmed`. So a throwaway probe account could not sign in, and the
+obvious workaround — writing `auth.users.email_confirmed_at` by hand — is an
+auth-weakening write to production, which the auto-mode guard correctly refuses.
+
+The choice was the user's to make rather than a defect to fix: this is a pharmacy shop
+with a handful of accounts created deliberately by the owner, not a self-service product
+where a signup must work unattended. Turning confirmation off would be a *different*
+policy, not a bug fix — and adding a resend affordance would be building UI for a flow
+nobody is expected to hit.
+
+**Consequences:**
+
+- **For an operator**: creating an account is two steps — sign the user up, then confirm
+  the address in the dashboard. The app tells an unconfirmed user that their address is
+  not confirmed, rather than pretending the password was wrong.
+- **For probes and tests that need a session**: use a real signed-in account
+  (`owner@pharmaflow.dev`), which is what every live probe since chunk C2 has done. The
+  guard that refuses a hand-edited auth row stays exactly as it is.
+- **For the app**: nothing changes. A future decision to allow self-service signup would
+  revisit this and turn the dashboard setting off, or add the resend flow; the comment in
+  `.env.example`, the README and the user manual now state the policy so the repository
+  stops believing the opposite.
+- **`config.toml`'s key is left alone**: it is not wrong, it is about a stack this
+  project does not use.
+
+---
+
+## D-061 — Phase 6 Ships a Debug-Signed Release APK, for Sideloading
+
+**Date:** 2026-09-19
+
+**Status:** Active
+
+**Decision:** The Android deliverable for Phase 6 is a **release-mode APK signed with
+the debug key**, built with `flutter build apk --release`, copied to staff devices by
+USB or a file share. **No upload keystore, no `key.properties`, no signing config**, and
+**no Play Store listing**. `app/android/app/build.gradle.kts` keeps the Flutter
+template's `signingConfig = signingConfigs.getByName("debug")`.
+
+**Rationale:** The distribution channel the user actually needs is a handful of known
+staff devices, not a store. A keystore is not a formality — it is a long-lived secret
+whose loss is permanent (an app can never be updated under the same listing again) and
+which has to be backed up and shared like one. Creating one now would be a decision made
+without a reason, and generating and storing a key "just in case" is how a key gets lost.
+The Play Console also brings a developer account, a data-safety declaration, a privacy
+policy URL and a review cycle — all of which belong with the publish decision, not before
+it.
+
+**Consequences:**
+
+- **The build is `--release`**, so it is AOT-compiled, not debuggable, and does not carry
+  the debug banner: it is a real build of the app. It is *signed* with the debug key,
+  which affects only how Android attributes the install — sideloading is unaffected.
+- **A future Play publish is a reinstall for every staff device.** Play identifies an app
+  by its signing key, so a proper upload key means a different signature, and Android
+  will refuse to update over an install signed with another key. Staff must uninstall and
+  reinstall once. This is accepted deliberately, and `docs/DEPLOYMENT.md` says so where
+  somebody will read it before publishing.
+- **`docs/DEPLOYMENT.md` keeps the full keystore/signing procedure**, marked as the
+  publish-time work rather than deleted: the steps are the same whenever they are needed,
+  and the file is where a future maintainer will look.
+- **Nothing about the app depends on this.** When a keystore does arrive, the change is
+  confined to `build.gradle.kts` plus a gitignored `key.properties` and `*.jks`, exactly
+  as `docs/DEPLOYMENT.md` §3.2 spells out.
+- Verified by the build that produced the APK; the artifact path and the fact that no
+  keystore or signing config exists are recorded in `PROGRESS.md` and the chunk summary.

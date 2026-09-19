@@ -56,6 +56,12 @@ GoRouter purchaseOcrTestRouter({String initialLocation = Routes.purchaseOcr}) =>
 /// default here is zero so a test that only cares about the outcome is not kept
 /// waiting, and a test that wants to *see* the retry passes something it can pump
 /// through.
+///
+/// [configure] runs against the container before the first frame, which is the only
+/// way to drive a controller the screen only ever reaches through a button. A
+/// *re-read* of a bill that is already on screen is exactly that: the form's own
+/// "Read it again" sits behind a failure, and a failure needs a read to have failed,
+/// so nothing a test can tap produces the second parse (N-8).
 Future<GoRouter> pumpPurchaseOcrApp(
   WidgetTester tester, {
   required FakePurchaseOcrRepository scanner,
@@ -66,6 +72,7 @@ Future<GoRouter> pumpPurchaseOcrApp(
   FakeMatchService? matcher,
   Duration retryDelay = Duration.zero,
   String initialLocation = Routes.purchaseOcr,
+  void Function(ProviderContainer container)? configure,
 }) async {
   tester.view.physicalSize = const Size(1200, 4000);
   tester.view.devicePixelRatio = 1;
@@ -75,26 +82,35 @@ Future<GoRouter> pumpPurchaseOcrApp(
   final router = purchaseOcrTestRouter(initialLocation: initialLocation);
   addTearDown(router.dispose);
 
+  // The override list is left untyped on purpose: `Override` is declared in
+  // `riverpod`, which `flutter_riverpod` does not re-export, so naming the element
+  // type would need an extra import for no benefit (D-015 notes).
+  final container = ProviderContainer(
+    overrides: [
+      purchaseOcrRepositoryProvider.overrideWithValue(scanner),
+      billPickerProvider.overrideWithValue(picker ?? FakeBillPicker()),
+      requirePharmacyIdProvider.overrideWith((ref) => 'ph-1'),
+      ocrRetryDelayProvider.overrideWith((ref) => retryDelay),
+      supplierOptionsProvider.overrideWith((ref) async => suppliers),
+      purchaseTaxSplitProvider.overrideWith(
+        (ref, supplierId) => TaxSplit.intraState,
+      ),
+      if (purchases != null)
+        purchasesRepositoryProvider.overrideWithValue(purchases),
+      if (products != null)
+        productsRepositoryProvider.overrideWithValue(products),
+      // A bill is saveable and readable whether or not the matcher is ever
+      // asked, so a test that is not about matching gets a matcher that answers
+      // nothing rather than no matcher at all.
+      matchServiceProvider.overrideWithValue(matcher ?? FakeMatchService()),
+    ],
+  );
+  addTearDown(container.dispose);
+  configure?.call(container);
+
   await tester.pumpWidget(
-    ProviderScope(
-      overrides: [
-        purchaseOcrRepositoryProvider.overrideWithValue(scanner),
-        billPickerProvider.overrideWithValue(picker ?? FakeBillPicker()),
-        requirePharmacyIdProvider.overrideWith((ref) => 'ph-1'),
-        ocrRetryDelayProvider.overrideWith((ref) => retryDelay),
-        supplierOptionsProvider.overrideWith((ref) async => suppliers),
-        purchaseTaxSplitProvider.overrideWith(
-          (ref, supplierId) => TaxSplit.intraState,
-        ),
-        if (purchases != null)
-          purchasesRepositoryProvider.overrideWithValue(purchases),
-        if (products != null)
-          productsRepositoryProvider.overrideWithValue(products),
-        // A bill is saveable and readable whether or not the matcher is ever
-        // asked, so a test that is not about matching gets a matcher that answers
-        // nothing rather than no matcher at all.
-        matchServiceProvider.overrideWithValue(matcher ?? FakeMatchService()),
-      ],
+    UncontrolledProviderScope(
+      container: container,
       child: MaterialApp.router(routerConfig: router),
     ),
   );

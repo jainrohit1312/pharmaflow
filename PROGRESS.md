@@ -1,8 +1,8 @@
 # PharmaFlow — Progress Tracker
 
 **Last Updated:** 2026-09-19
-**Current Phase:** **PHASE 6 IN PROGRESS** (chunk 1 of n, `context/chat3l-summary.md`). Phase 5 is complete, and Phase 6's no-external-input half is now closed: W-1, A-1, I-1, N-5, T-3/T-4/T-5, T-6 and the two named coverage gaps are all done and gated, with R-1's README refresh plus `docs/USER_MANUAL.md` and `docs/DEPLOYMENT.md`. This chunk's job was to make what Phase 5 built deployable, documented and measured — and it is: `flutter build windows --debug` produces `app.exe`; 30/30 migrations match; and the suite is **627 Flutter tests / 181 Deno tests**, all green. Next: **Phase 6's deploy half** — the Vercel web deploy, the Android APK and Play listing, the credentials behind D-046/D-052/N-1, I-3, N-9's re-measurement, and the user manual's remaining gaps (`context/chat3m-opening-prompt.md`)
-**Overall Status:** Phases 0-5 done and gated; Phase 6 chunk 1 done and gated — Phase 5 closed with its database substrate, **five deployed Edge Functions** (four live-verified against their provider, one live-probed below the credential, one live-probed end to end), a bill that reads and saves end to end, a matcher that suggests and learns, a backfilled catalogue with a measured similarity floor, its alert sources, the notification function and inbox, and a chatbot a person can type into. Phase 6 chunk 1 added the first migration since Phase 5 closed (the alias key, N-5) and 34 tests over the bill printer and the bill screen — **627 Flutter tests, 181 Deno tests**
+**Current Phase:** **PHASE 6 IN PROGRESS** (chunk 2 of n, done; `context/chat3m-summary.md`). Phase 5 is complete. Phase 6 chunk 1 closed everything needing no account (W-1, A-1, I-1, N-5, T-3/T-4/T-5/T-6, the printer and bill-screen coverage, R-1, `docs/`). **Chunk 2 shipped the Android APK** — a release-mode build signed with the debug key, verified with `apksigner` — settled **N-7** (D-060: confirmation stays on, confirmed by hand) and closed **N-8** (a re-read no longer discards the supplier the human chose). Next: **Phase 6's remaining work** — I-3, the Vercel web deploy, the credentials behind D-046/D-052/N-1, N-9's re-measurement, and the manual's screenshot pass (`context/chat3n-opening-prompt.md`)
+**Overall Status:** Phases 0-5 done and gated; Phase 6 chunks 1-2 done and gated — Phase 5 closed with its database substrate, **five deployed Edge Functions**, a bill that reads and saves end to end, a matcher that suggests and learns, a backfilled catalogue with a measured similarity floor, its alert sources, the notification function and inbox, and a chatbot a person can type into. Phase 6 added one migration since Phase 5 closed (the alias key, N-5), the Android sideload APK (D-061), and 35 tests over the bill printer, the bill screen and the bill re-read — **628 Flutter tests, 181 Deno tests**
 
 ---
 
@@ -16,7 +16,7 @@
 | 3 | Sales/POS + Returns + GST Billing | COMPLETE | 2026-09-18 | 2026-09-18 |
 | 4 | Ledger + Payments + Reports | COMPLETE | 2026-09-18 | 2026-09-19 |
 | 5 | AI OCR + Smart Matching + Notifications | COMPLETE | 2026-09-19 | 2026-09-19 |
-| 6 | Testing + Deployment + Documentation | IN PROGRESS (chunk 1 of n) | 2026-09-19 | - |
+| 6 | Testing + Deployment + Documentation | IN PROGRESS (chunks 1-2 done) | 2026-09-19 | - |
 
 ---
 
@@ -127,7 +127,10 @@
   scoped to `permission_handler_windows_plugin`); `flutter build windows --debug`
   produced `build\windows\x64\runner\Debug\app.exe`. The release build was not run
   (deliberately — see D-059). Not a launch target.
-- Android: configured, APK not yet built (needs release signing — N-11)
+- Android: **builds and ships** — `flutter build apk --release` →
+  `app/build/app/outputs/flutter-apk/app-release.apk` (80,295,479 bytes), signed with
+  the debug key and verified with `apksigner` (`CN=Android Debug`). Sideloading only;
+  no keystore and no Play listing (D-061)
 - iOS: configured, out of scope this phase (needs a Mac — D-059)
 
 ---
@@ -155,7 +158,16 @@
 | N-8 | A **successful second read** of the same bill replaces the whole verify form, so the supplier the human had chosen is dropped (and with it the suggestions, which are scoped by that supplier). It is the direct consequence of fixing the re-seed defect with `ValueKey(scan.bill)` (D-039): the new parse replaces the header fields too, which is right for the invoice number and date and merely inconvenient for the supplier. The match is asked again as soon as the supplier is named again | Low | Re-seed only the *lines* (and clear the suggestions) in `didUpdateWidget` when the parse changes, keeping the header the human already edited |
 | N-9 | The vector floor (**0.78**) was measured against a live catalogue that holds **one product**, so the window it sits in (0.7216 refused / 0.8280 kept) rests on one catalogue vector and nine query texts. Three things follow, and they are the whole open item: **(a) the recipe** — lower the floor to 0.01, read the `distance` the matcher reports for a set of real and near-miss invoice texts, and install the chosen value in a new migration (D-013; and on a temporary tenant, never the live function — **D-045**); **(b) the direction** — 0.78 errs **high**, so the cost of being wrong is a *missed* suggestion rather than a wrong one (the human picks, and the alias and trigram legs still answer); **(c) the trigger to revisit** — Phase 6's testing should re-tune it once the catalogue has **50+ products**, because that is when "two catalogue products of the same brand" becomes a real band to separate rather than a one-row guess | Low | Phase 6, once the catalogue is real. Nothing depends on the exact value: it is a one-line migration and the tests move with it |
 | N-10 | `flutter run -d chrome` fails **after** a successful compile with "Failed to establish connection with the web debug service" (a 5s timeout in dwds' `WebkitDebugger.enable`). It is Chrome 153 against the dwds 26.2.5 bundled in Flutter 3.44.8 — upstream `flutter/flutter#192976`, fixed by dwds 27.1.2 in Flutter 3.47.5 — so it is the toolchain and not this app, it happens in a bare `flutter create` app on this host too, and it does **not** affect `flutter build web`. Recorded as an item because it was tribal knowledge in the `Makefile`'s `run-web-server` comment rather than a numbered defect | Low | `make run-web-server` (the `web-server` device, port 8090) until the SDK is upgraded; delete that target once it is |
-| N-11 | Phase 6's deploy targets need accounts, and none of them exists yet: a Vercel project for the web app, a Google Play developer account (and an upload keystore) for Android, and the WhatsApp/SendGrid/Firebase credentials the dispatch, auto-send PO and push work all wait on (D-059). Nothing in the app blocks any of them | Medium | Ask the user for the accounts and credentials, then do the deploy in the order D-059 sets (Web → Android), and the credential work last |
+| N-11 | Phase 6's *deploy* work needs accounts, and the ones left do not exist yet: a Vercel project for the web app, and — for anything but sideloading — a Google Play developer account plus an upload keystore. The WhatsApp/SendGrid/Firebase credentials that dispatch (D-046), auto-send PO (D-052) and push (N-1) wait on are the same kind of thing: provider accounts nobody has registered. **The Android half is no longer blocked**: a debug-signed release APK builds and ships for sideloading (D-061). Nothing in the app blocks any of the rest | Medium | Ask the user for the accounts and credentials, then do the deploy in the order D-059 sets (Web → Android), and the credential work last |
+| N-12 | **A future Flutter upgrade will fail the Android build**, and say so only as advice: `flutter build apk --release` warns *"Your app uses the following plugins that apply Kotlin Gradle Plugin (KGP): mobile_scanner. **Future versions of Flutter will fail to build** if your app uses plugins that apply KGP."* `mobile_scanner` is pinned `^5.2.3`. Today it is a warning and the APK builds (verified 2026-09-19, D-061); the trap is that the failure arrives on a Flutter upgrade as an unrelated-looking Gradle error, in the same shape N-10 has for web debugging | Low | When the SDK is next upgraded: check `mobile_scanner`'s changelog for a Built-in Kotlin release and bump it, or make the scan path switchable if no such release exists. Nothing is blocked until then |
+
+**Resolved in chat 4 (Phase 6, chunk 2 — `context/chat3m-summary.md`):** **N-7** —
+a decision rather than a workaround: confirmation stays on and accounts are confirmed by
+hand (**D-060**) — and **N-8**, closed by keying the verify form on the stored object and
+letting `didUpdateWidget` decide what a new parse owns (supplier and notes survive, the
+lines and the reader's own header facts are replaced). The **Android APK** shipped
+(**D-061**). Still open above: I-2, I-3, N-1, N-2, N-4, N-9, N-10, N-11, D-027's
+residual, and T-1.
 
 **Resolved in chat 4 (Phase 6, chunk 1 — `context/chat3l-summary.md`):** **W-1**,
 **A-1**, **I-1**, **N-5**, **T-3**, **T-4**, **T-5** and **T-6** (the sale detail
@@ -248,6 +260,94 @@ environment:
 Changing any pin above requires explicit user approval (see DECISIONS.md D-007).
 
 ---
+
+## Chat 4 Progress — Phase 6, chunk 2: the APK, N-7 and N-8 [DONE — PHASE 6 OPEN]
+
+The half of Phase 6 that needed decisions rather than accounts. The full account is
+`context/chat3m-summary.md`; the decisions are **D-060** (email confirmation) and
+**D-061** (the sideload APK).
+
+### What this chunk delivered
+
+- **The Android APK ships.** `flutter build apk --release` →
+  `app/build/app/outputs/flutter-apk/app-release.apk`, **80,295,479 bytes**. Release
+  mode (AOT, no debug banner), signed with the **debug key** because that is what the
+  Flutter template's release `signingConfig` already declares — no keystore, no
+  `key.properties`, no signing-config change, and **no Play Store work** (D-061).
+  **Independently verified, not assumed**: `apksigner verify --print-certs` exits 0 and
+  reports `Signer #1 certificate DN: C=US, O=Android, CN=Android Debug`. The build took
+  ~18 minutes on the first run (Gradle downloads the toolchain), and it emits a Flutter
+  warning that `mobile_scanner` still applies the Kotlin Gradle Plugin — a deprecation
+  notice, not a failure.
+  - **Accepted trade, recorded in D-061**: Play identifies an app by its signing key, so
+    publishing later means a new keystore and **one uninstall/reinstall per staff
+    device**. `docs/DEPLOYMENT.md` §3.1 says so where somebody will read it before
+    publishing, and §3.2–3.5 keep the full keystore/signing/Play procedure marked as
+    publish-time work rather than deleting it.
+- **N-7 settled (D-060).** The hosted project keeps **"Confirm email" ON** and accounts
+  are confirmed by hand in the dashboard. No app change, no resend affordance, no
+  hand-edited `auth.users` row — the guard that refuses that write is correct and stays.
+  The repository's belief that confirmation was off (`config.toml`'s
+  `enable_confirmations`) is a local-stack-only key (D-003), and `.env.example`, the
+  README and the user manual now state the real policy.
+- **N-8 closed.** A successful re-read of a bill used to discard **everything** the
+  human had done to the verify form, because the form was keyed on the *parse*: a new
+  parse meant a new key, a new `State`, and a fresh `initState`. The key is now the
+  **storage path** (the same string for a re-read of the same bill, different for
+  another bill), and `didUpdateWidget` decides what a new parse owns: it replaces the
+  invoice number, the date and the **lines**, and leaves the **supplier** and the
+  **notes** alone. The offers ranked for the old lines are dropped and asked for again
+  when a supplier is already known — the same one embedding request the old flow spent
+  after the human re-picked the supplier it had thrown away, with one tap fewer.
+  - **The test caught a real bug in the fix**: the first version called the matcher from
+    `didUpdateWidget`, which runs *during* a build, and Riverpod refuses a provider write
+    there ("Tried to modify a provider while the widget tree was building"). It is
+    deferred through `WidgetsBinding.instance.addPostFrameCallback` now.
+  - **Reachability, stated plainly**: nothing a user can currently tap produces this
+    transition. The form's own "Read it again" sits behind a failure card, and a failure
+    requires a read to have failed — so a *successful* parse can never be followed by
+    another read while the form is up. The fix is therefore correct-but-latent: it makes
+    the transition safe the moment a trigger exists (and it is the precondition for
+    exposing that button properly). The test drives the controller directly through a
+    new `configure:` hook on the OCR harness, which is the only way to reach it.
+
+### Files
+
+```
+app/lib/features/purchase_ocr/presentation/purchase_ocr_screen.dart   N-8 (key + didUpdateWidget + _applyParse)
+app/test/features/purchase_ocr/presentation/purchase_ocr_screen_test.dart  N-8 test
+app/test/support/purchase_ocr_test_app.dart                           the `configure:` container hook
+docs/DEPLOYMENT.md                                                    §3 rewritten for the sideload APK (D-061)
+DECISIONS.md                                                          D-060, D-061
+PROGRESS.md, README.md, context/chat3m-summary.md, context/chat3n-opening-prompt.md
+```
+
+**Artifact (gitignored, on disk):**
+`app/build/app/outputs/flutter-apk/app-release.apk`.
+
+### Verification evidence
+
+```
+dart format lib test                      -> 421 files, 0 changed
+dart run custom_lint                      -> No issues found!
+flutter analyze                           -> No issues found!
+flutter test                              -> +628: All tests passed!   (627 -> 628)
+flutter build apk --release               -> exit 0, ~18 min, no signing config added
+apksigner verify --print-certs app-release.apk
+                                          -> Signer #1 certificate DN: C=US, O=Android, CN=Android Debug
+                                             (verification exit 0; the debug key, as D-061 says)
+```
+
+### What this chunk deliberately did not do
+
+- **No keystore, no Play listing, no Play Console account** (the user's instruction, and
+  D-061's reasoning). The keystore/signing procedure in `docs/DEPLOYMENT.md` is marked as
+  publish-time work.
+- **No I-3.** The searchable purchase picker for the returns form is the first item of
+  the next chunk — it is a new widget plus its tests, and it was not attempted rather
+  than half-built (see `context/chat3n-opening-prompt.md`).
+- **No Vercel deploy and no credential work** — still waiting on accounts (N-11).
+- **No Windows release build** (D-059) and nothing touched the two probe rows (D-049).
 
 ## Chat 4 Progress — Phase 6, chunk 1: the no-external-input half [DONE — PHASE 6 OPEN]
 

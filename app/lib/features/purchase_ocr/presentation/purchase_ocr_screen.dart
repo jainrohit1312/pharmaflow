@@ -69,12 +69,16 @@ class PurchaseOcrScreen extends ConsumerWidget {
       ],
       body: bill != null && scan != null
           ? _VerifyForm(
-              // Keyed on the parse. The form seeds its lines once, in
-              // `initState`, so without this a *successful* re-read would update
-              // `bill` while the screen went on showing the earlier parse's lines -
-              // and the matcher would go on suggesting products for a bill that is
-              // no longer on screen. A new key re-seeds both.
-              key: ValueKey<OcrPurchaseBill>(bill),
+              // Keyed on the *stored object*, not on the parse. The form takes the
+              // parse's lines, so a re-read has to reach it somehow - and a key on
+              // the parse did that by throwing the whole state away, which also
+              // threw away the supplier the human had chosen and the notes they
+              // had written (N-8). The storage path is the same string for a
+              // re-read of the same bill and a different one for another bill, so
+              // this keeps one form alive across a re-read (and lets
+              // `didUpdateWidget` decide what to replace) while still giving a
+              // different bill a form of its own.
+              key: ValueKey<String>(scan.storagePath),
               scan: scan,
               bill: bill,
               failure: state.error,
@@ -264,8 +268,56 @@ class _VerifyFormState extends ConsumerState<_VerifyForm> {
   @override
   void initState() {
     super.initState();
-    final document = widget.bill.document;
-    final drafts = widget.bill.toLineDrafts();
+    _applyParse(widget.bill);
+  }
+
+  /// A *successful re-read* of the same bill arrived while this form was on screen
+  /// (N-8).
+  ///
+  /// What the reader owns is replaced; what the human decided is not. The invoice
+  /// number and the date are the reader's to re-read — they were just asked for
+  /// again — and so are the lines, because a second reading of one bill is exactly
+  /// the case where the first reading's lines were wrong. The **supplier** and the
+  /// notes stay: the paper came from the same distributor, and the choice is what
+  /// scopes the alias leg (D-036), so re-picking it was pure friction.
+  ///
+  /// The suggestions are dropped rather than kept — they were ranked for lines
+  /// that are no longer on screen — and asked for again when a supplier is already
+  /// known. Before this change a re-read dropped the supplier, and re-picking it
+  /// asked anyway, so this is the same one request per re-read without the extra
+  /// tap, and it still spends nothing on a bill nobody has named a supplier for.
+  @override
+  void didUpdateWidget(_VerifyForm oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.bill == oldWidget.bill) {
+      return;
+    }
+    _applyParse(widget.bill);
+    _suggestions = <int, List<MatchCandidate>>{};
+    if (_supplierId != null) {
+      // Out of this life-cycle on purpose. `didUpdateWidget` runs *during* a build,
+      // and the match controller writes its own state as it starts, which Riverpod
+      // refuses there ("Tried to modify a provider while the widget tree was
+      // building"). A post-frame callback runs once the frame that brought the new
+      // parse has been built, and re-checks that the form is still there and still
+      // has a supplier.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && _supplierId != null) {
+          unawaited(_askForSuggestions());
+        }
+      });
+    }
+  }
+
+  /// Takes the parse's own facts — the invoice number, the date and the lines —
+  /// and leaves every choice the human has made alone.
+  ///
+  /// Shared by `initState` (where there is nothing to preserve) and
+  /// `didUpdateWidget` (where there is), so the two cannot drift into disagreeing
+  /// about what a parse owns.
+  void _applyParse(OcrPurchaseBill bill) {
+    final document = bill.document;
+    final drafts = bill.toLineDrafts();
 
     _invoiceNo.text = document.invoiceNo ?? '';
     _invoiceDate = document.invoiceDate ?? DateTime.now();
@@ -277,7 +329,7 @@ class _VerifyFormState extends ConsumerState<_VerifyForm> {
         _LineSlot(
           id: index,
           draft: drafts[index],
-          invoiceText: widget.bill.lines[index].rawName,
+          invoiceText: bill.lines[index].rawName,
         ),
     ];
     if (_lines.isEmpty) {

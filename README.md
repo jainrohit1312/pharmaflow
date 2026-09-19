@@ -122,10 +122,13 @@ deprecated `anonKey` (A-1), the low-stock list reads the server-side aggregate
 (I-1), the alias key treats "no supplier" as a value (N-5), the ledger's failure
 path offers a retry (T-3), the sale-return form's dead branches are gone and its
 bill picker distinguishes loading from empty (T-4, T-5), the invoice printer's
-content is testable and its CGST/SGST halves add up to the tax charged, and the
-bill screens have widget tests. **Outstanding**: the Vercel web deploy, the
-Android APK + Play listing, the still-unset Edge Function secrets (WhatsApp,
-SendGrid, Firebase), and the user manual.
+content is testable and its CGST/SGST halves add up to the tax charged, the bill
+screens have widget tests, **an Android release APK builds and ships for
+sideloading** (debug-signed — D-061), a re-read of a bill no longer discards the
+supplier the human chose (N-8), and the email-confirmation policy is settled
+(D-060). **Outstanding**: the Vercel web deploy, a Play Store listing (needs a
+keystore), the still-unset Edge Function secrets (WhatsApp, SendGrid, Firebase),
+and the searchable purchase picker (I-3).
 
 ---
 
@@ -326,9 +329,14 @@ flutter run -d windows     # desktop
 
 ```powershell
 flutter build web --release
-flutter build apk --release        # or: flutter build appbundle --release
+flutter build apk --release        # -> app/build/app/outputs/flutter-apk/app-release.apk
 flutter build windows --release
 ```
+
+**The Android APK is the shipping artifact** (D-061): release mode, signed with the
+debug key, installed on staff devices by USB or a file share. Publishing on Play later
+means generating a keystore and reinstalling on every device once — see
+[`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) §3.
 
 ### Web debugging on this toolchain
 

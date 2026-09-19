@@ -5,12 +5,11 @@ How to put PharmaFlow in front of a real pharmacy. The target order is
 scope** for now (it needs a Mac; the procedure is written out below for whoever has
 one).
 
-> **Nothing in this file has been executed yet.** Phase 6 is mid-flight: the web and
-> Android deploys need accounts (a Vercel project, a Google Play developer account)
-> and the Edge Function secrets need provider keys (Meta/WhatsApp, SendGrid,
-> Firebase). Every command below is written to be runnable, and every step that has
-> been verified in development says so explicitly. Where a step produces evidence,
-> say what to paste.
+> **Status of this file.** The **Android sideload APK has been built and shipped**
+> (section 3.1, D-061) — that is the one step here that has been executed. Everything
+> else — the Vercel web deploy, the publish-time Android keystore and Play listing, the
+> iOS runbook — is written to be runnable and **has not been run**. Where a step was
+> verified in development, it says so.
 
 ---
 
@@ -176,7 +175,35 @@ has **not** been run.
 The camera is why Android matters: photographing supplier bills is the workflow web
 handles worst.
 
-### 3.1 A release keystore, once (never in git)
+**Phase 6 ships a sideloading APK, and a debug-signed one** (D-061): a release-mode build
+signed with the debug key, installed on staff devices by USB or a file share. No upload
+keystore, no `key.properties`, no signing config change, and **no Play Store listing**.
+The sections after 3.1 are the **publish-time** work, kept here because this file is
+where a future maintainer will look for it.
+
+### 3.1 The APK that ships
+
+```powershell
+cd app
+flutter build apk --release        # -> build/app/outputs/flutter-apk/app-release.apk
+```
+
+`--release` means the build is AOT-compiled and carries no debug banner: it is a real
+build of the app. It is *signed* with the debug key, which affects only how Android
+attributes the install — sideloading is unaffected. `build.gradle.kts` already declares
+`signingConfig = signingConfigs.getByName("debug")` for the release type (the Flutter
+template's default), which is exactly what this target wants, so no code changes.
+
+To install: copy `app-release.apk` to the device (USB, or a file share the device can
+reach), allow installation from that source, and tap the file. The exact wording differs
+by vendor. The app needs network access and, for the bill reader, camera permission.
+
+> **When Play publication eventually happens, every staff device has to uninstall and
+> reinstall once.** Android identifies an app by its signing key, so it refuses to update
+> an install signed with a different key. That is the accepted cost of not creating a
+> keystore before there was a reason to (D-061).
+
+### 3.2 A release keystore, at publish time (never in git)
 
 ```powershell
 keytool -genkeypair -v -keystore %USERPROFILE%\pharmaflow-upload.jks ^
@@ -197,10 +224,11 @@ keyAlias=pharmaflow-upload
 storeFile=C:/Users/<you>/pharmaflow-upload.jks
 ```
 
-### 3.2 Wire the signing config (a code change, not yet made)
+### 3.3 Wire the signing config (publish time; nothing to do for the sideload APK)
 
-`app/android/app/build.gradle.kts` currently signs `release` with the **debug**
-keys — the Flutter template's placeholder. Replace that with the real config:
+`app/android/app/build.gradle.kts` signs `release` with the **debug** keys — the Flutter
+template's default, and what D-061 relies on. At publish time, replace that with the real
+config:
 
 ```kotlin
 import java.util.Properties
@@ -234,7 +262,7 @@ android {
 
 `key.properties` and `*.jks` must both be gitignored before this lands.
 
-### 3.3 Build
+### 3.4 Build the AAB (publish time)
 
 ```powershell
 cd app
@@ -246,9 +274,10 @@ The app needs `INTERNET` (already declared by the Flutter template) and camera
 access for the bill reader — `mobile_scanner` and `image_picker` are behind guarded
 paths, so a device without a camera still runs everything else.
 
-### 3.4 Play Console
+### 3.5 Play Console (publish time)
 
-Play is mostly paperwork that only the account holder can do:
+Play is mostly paperwork that only the account holder can do. **None of it is in scope
+for Phase 6** (D-061); it is here for when the publish decision is made.
 
 1. Create the app in Play Console; the package id is `com.pharmaflow.app`.
 2. Complete **App content**: privacy policy URL, data safety form (the app sends
@@ -367,10 +396,11 @@ a hand-edited `auth.users` row is correct.
 - [ ] The function gateway answers a POST and a preflight, with CORS
 - [ ] One sale end to end in the browser, on the deployed URL
 - [ ] One purchase received end to end, and the stock moved once
-- [ ] One bill photographed and saved on Android
+- [ ] The account policy for email confirmation is the one you meant: **on**, with
+      accounts confirmed by hand in the dashboard (D-060 — settled, no action needed)
+- [ ] The sideload APK installs on a staff device and the bill reader can use the camera
 - [ ] A bill printed (web: PDF; Windows: native dialog)
-- [ ] `send-notification` answers `sent` (once the secrets exist)
-- [ ] The account policy for email confirmation is the one you meant (N-7)
+- [ ] `send-notification` answers `sent` (once the WhatsApp/SendGrid secrets exist)
 
 ---
 
@@ -381,8 +411,8 @@ Honest list, current as of Phase 6 chunk 1:
 | Outstanding | Needs |
 | --- | --- |
 | Vercel web deploy | A Vercel account/project |
-| Android release signing + APK/AAB | A generated keystore and its passwords |
-| Play Store listing | A Google Play developer account, privacy policy, data-safety form |
+| Android APK for sideloading | **Shipped** — `flutter build apk --release`, debug-signed (D-061, §3.1) |
+| Play Store publication | A generated keystore, a Google Play developer account, privacy policy and data-safety form — and one uninstall/reinstall per staff device (D-061) |
 | WhatsApp/email dispatch (alerts, auto-send PO) | Meta WhatsApp Cloud API + SendGrid accounts |
 | Push notifications | A Firebase project and the web service worker |
 | iOS | A Mac |
