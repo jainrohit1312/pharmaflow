@@ -1304,3 +1304,306 @@ looking perfectly healthy in a raw dump.
 - Generalise it: on this host, a negative result produced by a **filtered** command is
   not evidence until the filter has been re-run case-insensitively. Verified — the
   same class of error as reading a truncated output as a missing line.
+
+---
+
+## D-039 — The Suggestion Is Asked For Once Per Bill, When the Supplier Is Named, and It Never Blocks the Save
+
+**Date:** 2026-09-19
+
+**Status:** Active
+
+**Decision:** The verify screen asks `match-product` **once per bill**, at the moment
+the human names the supplier — not when the parse arrives, and not per line.
+`PurchaseMatchController.matchBill` sends every line in the order the screen holds
+them (a blank line included, so the answer stays aligned by position), keeps the
+answer mapped to the line slot rather than to a position, and treats **every**
+failure as "no suggestions this time, and here is why". Nothing is retried
+automatically: the note carries a **Look again** action, so the choice to spend
+another embedding request is a human's. `ProductPickerField` renders at most
+`maxSuggestions` (3) of the ranked candidates, each with the reason it is offered,
+and only while the line has no product; tapping one applies it through the same
+path the search dialog uses. **A suggestion is offered, never applied** — nothing
+is pre-filled, and a line nobody touches keeps no product.
+
+**Rationale:** Three measurements and one rule, in order of weight:
+
+- **The supplier scopes the alias leg, and the supplier is a human choice.** C1's
+  matcher accepts a supplier-scoped alias only for *this* bill's supplier (D-036),
+  and the reader delivers a supplier's *name*, not a supplier id — matching that
+  text to the pharmacy's own supplier list is a human's job. So a match asked for
+  at parse time could only ever use pharmacy-wide aliases, which is the one leg that
+  makes a repeat bill from a supplier cheap. Asking after the choice is also what
+  keeps it to one request per bill: asking at both points would embed the same lines
+  twice.
+- **A bill must be saveable while the answer is still out.** Twenty lines are one
+  round trip, and the save never consults the matcher: the screen is fully live
+  throughout, and a matcher that never answers cannot stop a receipt. A failure is
+  therefore a sentence above the lines, never an error state the form blocks on.
+  (The repository refuses a line with no product, so "saveable" means the human
+  picked — by hand or by accepting a suggestion — not that the matcher answered.)
+- **The reason has to be visible, so it is a pure function.** `MatchCandidate
+  .reasonLabel` is *also called DOLO-650 TAB*, *87% similar*, or *looks similar* —
+  three different claims about three different legs, asserted in a unit test rather
+  than only by eye.
+- **Three rows, not five.** The server's own limit is 5 (I-3); on a twenty-line bill
+  that is a hundred rows of advice on the screen that already has the most to show,
+  and the search dialog is one tap away for the rest.
+
+**Consequences:**
+
+- A bill whose supplier the user never names gets no suggestions at all, and the
+  note says so rather than leaving the absence unexplained. That is deliberate: they
+  cannot save the bill without naming a supplier anyway.
+- A *changed* supplier clears the offers and asks again — the offers were ranked for
+  another distributor — which is the one case that spends a second embedding
+  request, and it takes a deliberate act.
+- The `_VerifyFormState` re-seed defect found while building this is fixed with it:
+  the form is keyed on the parse (`ValueKey(scan.bill)`), so a successful re-read
+  replaces the lines *and* starts an unasked form. The consequence is that a
+  re-read also drops the supplier choice, which is the right trade for a form whose
+  every other field is replaced by the new parse.
+- The RPC's answer is looked up **by position**, never by `raw_name`: the server
+  trims that echo, so matching on it would shift every later line onto the previous
+  line's candidates.
+- Verified by `purchase_match_controller_test.dart` (one call per bill, alignment
+  with a blank line in the middle, a failure that is not retried, nothing asked when
+  no line has text, the `ref.mounted` guard) and by seven widget tests on the screen
+  (the ask waits for the supplier, tapping a candidate fills the line, a bill saves
+  with the matcher held open, a failed match still saves, the server's warnings are
+  shown, the learning payload, a failed learning write, and the second read).
+
+---
+
+## D-040 — Alias Learning Is One Best-Effort Write Per Bill, of the Text the Bill Printed
+
+**Date:** 2026-09-19
+
+**Status:** Active
+
+**Decision:** At save — after `createPurchase` returns and before navigating — the
+verify screen sends **one** `learn_product_aliases(jsonb)` call for the bill
+(migration 20260919000024), carrying `{raw_name, product_id, supplier_id}` for every
+line where the reader printed text **and** a human chose a product. The text is the
+one the reader saw, held per line slot; `normalize_product_name()` runs **server-
+side**, never in Dart. A failure is swallowed: the purchase is already saved, and
+what is lost is only the next bill's head start. `ProductsRepository.addAlias` and
+the `product_aliases` unique index are untouched (N-5 stays open).
+
+**Rationale:** Only a human's choice is evidence — a suggestion that was not accepted
+teaches nothing, and a line the reader printed but nobody matched teaches nothing
+either — so learning happens once, where the choices are final, rather than at every
+pick. It is one call rather than one per line for `match_products`' reason: a
+twenty-line bill is one round trip, and the alternative is twenty ways to half-teach
+a supplier's abbreviations.
+
+**Consequences:**
+
+- A **supplier-scoped** alias is the normal case (the bill names its supplier), and it
+  does *not* answer the same printed text on another distributor's bill — two
+  suppliers abbreviate differently, and what crosses suppliers is a pharmacy-wide
+  row. The function treats a supplier id that is not this pharmacy's as "no supplier"
+  and writes that pharmacy-wide row rather than refusing the line.
+- The draft's `product_name_raw` keeps its existing behaviour (a pick overwrites it
+  with the catalogue's own spelling, which is what the field then displays), which is
+  exactly why the printed text is held on the line slot instead: a catalogue name is
+  not what the next bill will print.
+- The function is `security definer` with a pinned `search_path`, scopes every
+  statement by `get_my_pharmacy_id()`, and treats every entry as untrusted: a blank or
+  punctuation-only text, a product id that is not a uuid or not in this catalogue, and
+  an entry that is not an object are **skipped with a reason** rather than raising. A
+  bill that cannot teach is not a failure.
+- Where `supplier_id` is null the write is an explicit update-then-insert, because the
+  unique index cannot converge NULL suppliers at all (N-5). That is a sidestep inside
+  the new function, not a fix: the index, `addAlias` and migration 00015's comment are
+  as they were.
+- Verified by `supabase/tests/phase5_learn_product_aliases.sql` — 42 PASS / 0 FAIL,
+  atomic and self-rolling-back: the trim and the server-side normalization, the
+  re-point on a second call, the NULL-supplier convergence, six kinds of untrusted
+  input, tenant isolation both ways, no product, no batch and no purchase row created,
+  and the learned alias answering the **alias leg of a real match** for its own
+  supplier's bill and not another's.
+
+---
+
+## D-041 — The Embedding Budget Is Not the Reader's Five Per Minute (Measured)
+
+**Date:** 2026-09-19
+
+**Status:** Active
+
+**Decision:** The Gemini free-tier limit that shapes Phase 5's design is the **reader's**
+(`generate_content_free_tier_requests`, 5/minute, D-032) and **not** the embedding
+model's. Measured live on 2026-09-19 against the deployed `match-product`: 11
+`batchEmbedContents` requests inside ~3 minutes, all answered, including four batches
+of **20 texts** each (80 texts embedded, `vector_used: true` throughout, no refusal,
+no warning). C3 may therefore batch catalogue rows at 20 per request and pace an
+operator loop without treating 5/minute as the ceiling; the embedding metric's exact
+ceiling remains unmeasured and, for an operator-paced loop, does not need to be.
+
+**Rationale:** N-2 assumed one shared five-a-minute budget, and D-036/D-037 justified
+"one embedding call per bill" partly on it. The measurement separates the two: a
+busy reader does not cost the matcher its vector leg, and a backfill does not starve
+the counter. This is a measured fact, not a documented limit: the probe is the
+evidence, and the exact quota was not driven to refusal because a per-minute ceiling
+is not what the loop is designed against.
+
+**Consequences:**
+
+- "One embedding call per bill" (D-036) stands as a *design* choice — one round trip,
+  one catalogue snapshot for every line — rather than as a quota necessity.
+- The live probe also closed what C1 left unverified: the model name
+  (`gemini-embedding-001`), the `batchEmbedContents` body shape and the 768-dimension
+  parse are confirmed live, and the 200 path carries `Access-Control-Allow-Origin: *`
+  (D-038's contract, now measured on the success path too).
+- The same probe showed the vector leg answering **nothing** while
+  `products.embedding is null` on every real row, which is D-037's prediction and
+  C3's work list.
+- The quota is a **plan** question, not a code one: a paid tier would not change any
+  code written today, because nothing here depends on the ceiling.
+
+---
+
+## D-042 — A Function's Error Envelope Has One Reader in the App Too
+
+**Date:** 2026-09-19
+
+**Status:** Active
+
+**Decision:** The client-side reading of `{ error: { code, message } }` lives in
+`lib/core/errors/function_error.dart` (`functionException`), and `ocrException` — the
+bill reader's name for it — delegates. A feature keeps its own **fallback sentence**
+(`matchException` bakes in the matcher's) and its own retry policy
+(`isRetryableOcrError` stays the reader's alone).
+
+**Rationale:** The same reasoning as `_shared/gemini.ts` on the server side (D-031):
+one contract read in two places is how two features end up describing one provider
+failure in two dialects. The extraction is behaviour-preserving — the body parser and
+the code-to-exception mapping moved verbatim, and `ocr_service_test.dart` asserts the
+same mapping as before.
+
+**Consequences:**
+
+- A new function's failures are classified the moment they are read, with no new
+  vocabulary: `unauthorized` is an auth failure, `invalid_request`/`forbidden`/
+  `too_large` are validation failures, `not_found` is a not-found, and everything else
+  (including `provider_unavailable`) is a server failure in the server's own words.
+- The retry decision does **not** move: the reader retries once, visibly (D-033), and
+  the matcher does not retry at all (D-039). Sharing a parser is not sharing a policy.
+
+---
+
+## D-043 — The Backfill Is Two RPCs and One Operator-Paced Invocation
+
+**Date:** 2026-09-19
+
+**Status:** Active
+
+**Decision:** Embedding the catalogue is three pieces, and no UI:
+
+- **`products_to_embed(p_limit int) → {items, remaining, unembeddable}`** — a
+  `stable security definer` RPC returning one batch of the caller's own un-embedded
+  catalogue rows, each with the text `product_embedding_text()` produces (D-037),
+  plus how much is left and how much can never be done. The batch is 20 by default
+  and clamped to 100, and the limit is applied **after** the un-embeddable rows are
+  dropped, so a batch is never short for no reason.
+- **`set_product_embeddings(p_items jsonb) → {written, remaining, unembeddable,
+  skipped}`** — a `volatile security definer` RPC writing `{product_id, embedding}`
+  rows, each scoped to `get_my_pharmacy_id()` and each cast by the **database** from
+  the vector's own text form, never marshalled by PostgREST (D-027's refusal).
+- **`backfill-embeddings`** — an Edge Function that reads one batch, embeds it in one
+  `batchEmbedContents` request, writes it, and answers `{embedded, remaining,
+  unembeddable, skipped, model}`. **No internal loop**: the operator repeats the
+  invocation (or `make backfill`) until `remaining` is 0. A model failure, a short
+  answer or a hole in the batch refuses the batch **whole** and writes nothing.
+
+**Rationale:** The model call has to happen between a read and a write, and putting it
+inside a SQL transaction is not possible; putting the loop inside the function would
+hold the shared key for minutes and give the operator no place to stop. The loop is
+therefore the operator's, and the state that makes it resumable is the column itself:
+`embedding is null` (D-027), so a second run continues rather than repeating. All or
+nothing per batch is what keeps `NULL` honest as that marker — a half-written batch
+would leave rows looking untouched while having spent requests on them.
+
+**Consequences:**
+
+- **One batch is one embedding request**, and 20 texts is the measured-safe size
+  (D-041). Nothing here needs a queue, a job table or a marker column.
+- The catalogue text is never composed in Deno: it comes back from the database, so
+  the backfill and the match cannot drift (D-037).
+- Every write bumps `products.updated_at`, because `set_updated_at` is a
+  `BEFORE UPDATE` trigger on the table. That is acceptable **because the work list is
+  `embedding is null`**: each product is written exactly once, ever, so this is a
+  one-time stamp at setup rather than a standing distortion of "last changed".
+- The function refuses to embed a batch with a hole in it, which is deliberately
+  stricter than `match-product`, whose vector leg is an enhancement it can degrade
+  without (D-036). The two callers of `_shared/embedding.ts` therefore differ in
+  policy while sharing the convention.
+- **No UI in Phase 5.** A backfill is a one-time setup task, not a daily operation,
+  and Phase 5's scope is the capability rather than an admin screen; if a second
+  pharmacy or frequent new products make it routine, Phase 6 adds a small screen.
+- Verified by `supabase/tests/phase5_embedding_backfill.sql` — 34 PASS / 0 FAIL,
+  atomic and self-rolling-back: the read's scope and shape, the write's cast and its
+  four refusals, tenant isolation **both ways**, resumability (`remaining` shrinking
+  by exactly what was written), the vector leg of a real `match_products` call firing
+  on a row this pair wrote, and nothing else moving (no product, no batch, no
+  purchase).
+
+---
+
+## D-044 — The Vector Floor Is 0.78, Because That Is What Real Vectors Said
+
+**Date:** 2026-09-19
+
+**Status:** Active
+
+**Decision:** `match_products`' `c_vector_min_similarity` is **0.78**, up from
+00023's provisional 0.7. The change is migration
+`20260919000026_phase5_vector_floor.sql`, which is 00023's function **verbatim** with
+one constant moved (D-013: an applied migration is never edited in place). Measured on
+2026-09-19 against the live catalogue, with the floor temporarily lowered to 0.01 so
+the RPC reported every distance:
+
+| invoice text | what it is | cosine |
+|---|---|---|
+| `Dolo 650 Tab`, `DOLO 650` | the product's own name | 1.0 (trigram) |
+| `Dolo650Tab15s` | the real product, run together | **0.8280** |
+| `Dolo 125` | a strength the pharmacy does not stock | **0.7216** |
+| `Dolo 500` | a strength the pharmacy does not stock | **0.7084** |
+| `Paracetamol 500mg` | same molecule, another brand | 0.6695 |
+| `Amoxyclav 625 10s` | an unrelated medicine | 0.5780 |
+| `Cetirizine 10mg Tab` | an unrelated medicine | 0.5546 |
+| `ZZQQ nonsense 9999` | junk | 0.5364 |
+
+**Rationale:** 00023 said the floor was a guess and named the backfill chunk as its
+measurement; C3 produced the vectors and the guess was wrong in the direction that
+matters. At 0.7 **two wrong strengths of the same brand scored above the floor**
+(0.7084, 0.7216) and were offered as high-confidence suggestions for a `dolo 650`
+catalogue — precisely the "plausible-looking wrong suggestion" D-036 said to avoid.
+The window the data leaves open is (0.7216, 0.8280), and 0.78 sits in it: above every
+wrong sibling, below the one true match, and closer to the wrong side on purpose — a
+missed suggestion costs a tap, a wrong one costs trust.
+
+**Consequences:**
+
+- **What the floor does and does not stop, stated exactly:** it stops the *vector*
+  leg asserting a wrong product with a high score. `Dolo 500` still comes back as a
+  **trigram** hit at 0.5556 against a one-product catalogue, labelled `56% similar` —
+  the trigram threshold is 0.35 because that is what reads `Dolo650Tab15s` (0.455),
+  and it is untouched here. The two thresholds do different jobs and the reason each
+  candidate is offered is shown to the user, which is what makes both honest.
+- **00023's note about the model was too high.** It said unrelated short strings sit
+  "around 0.6-0.75"; measured, junk sits at **0.5364** and unrelated medicines at
+  0.55-0.67. A floor anywhere near 0.6 would have offered the whole catalogue for
+  every line.
+- **The measurement rests on one catalogue vector**, because the live pharmacy holds
+  one product. Recorded as **N-9**: the floor stays provisional in that sense, and it
+  errs high rather than low, so a richer catalogue should re-measure it (the same
+  recipe: floor to 0.01, read the distances, put it back).
+- The floor is asserted **behaviourally** rather than textually: migration 00023's
+  test creates synthetic vectors at cosine 0.9987 (kept), 0.80 (just above) and
+  0.5774 (refused), so a future change to the constant fails there. Those three
+  numbers moved with the constant in this chunk, which is the test doing its job.
+- Live end to end, after the backfill and the re-tune: `Dolo650Tab15s` → the real
+  product at `reason: vector`, score 0.8280; `Dolo 650 Tab` → `reason: trigram`,
+  1.0; `Cetirizine 10mg Tab` and `ZZQQ nonsense 9999` → no candidates at all.

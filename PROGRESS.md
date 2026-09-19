@@ -1,8 +1,8 @@
 # PharmaFlow — Progress Tracker
 
 **Last Updated:** 2026-09-19
-**Current Phase:** Phase 5 IN PROGRESS — **Chunk C is split, and C1 (the matcher) is COMPLETE**: `product_embedding_text()` + `match_products()` are live on the hosted project, `match-product` is deployed, and the SQL test asserts all three legs. Next: C2 (the app's seam, alias learning, the picker's suggestions) and C3 (the embedding backfill)
-**Overall Status:** Phases 0-4 done and gated; Phase 5 has its database substrate, a deployed and live-verified OCR function, a working end-to-end bill-reading flow, and a deployed catalogue matcher — 453 Flutter tests, 81 Deno tests
+**Current Phase:** Phase 5 IN PROGRESS — **C1 (the matcher), C2 (the app's seam, alias learning, the suggestions) and C3 (the embedding backfill) are COMPLETE**: `product_embedding_text()`, `match_products()` (vector floor re-tuned to a measured 0.78), `learn_product_aliases()`, the `products_to_embed`/`set_product_embeddings` pair are live on the hosted project; `match-product`, `ocr-purchase-bill` and `backfill-embeddings` are deployed; the live catalogue is embedded and the vector leg fires on it. Next: Chunk D (notifications), then Phase 6
+**Overall Status:** Phases 0-4 done and gated; Phase 5 has its database substrate, three deployed and live-verified Edge Functions, a bill that reads and saves end to end, a matcher that suggests and learns, and a backfilled catalogue — 493 Flutter tests, 92 Deno tests
 
 ---
 
@@ -15,7 +15,7 @@
 | 2 | Purchase + Inventory + Batch Tracking | COMPLETE | 2026-09-18 | 2026-09-18 |
 | 3 | Sales/POS + Returns + GST Billing | COMPLETE | 2026-09-18 | 2026-09-18 |
 | 4 | Ledger + Payments + Reports | COMPLETE | 2026-09-18 | 2026-09-19 |
-| 5 | AI OCR + Smart Matching + Notifications | IN PROGRESS (chunk C1 complete) | 2026-09-19 | - |
+| 5 | AI OCR + Smart Matching + Notifications | IN PROGRESS (C1, C2, C3 complete; Chunk D next) | 2026-09-19 | - |
 | 6 | Testing + Deployment + Documentation | PENDING | - | - |
 
 ---
@@ -51,26 +51,29 @@
 
 ### Backend (Supabase Hosted)
 
-- 23 migrations applied, all idempotent (`supabase migration list`: 23/23 local
+- 26 migrations applied, all idempotent (`supabase migration list`: 26/26 local
   and remote match)
 - 24 tables and 2 views (`product_stock`, `batch_status`), RLS enforced on every
   business table; migration 00022 added `device_tokens`, `notification_logs`, the
   `products.embedding` column and the private `purchase-bills` storage bucket
-  (00019-00021 added one table, `invoice_counters`, and no view), and 00023 added
-  the two matching functions and no table at all
+  (00019-00021 added one table, `invoice_counters`, and no view), 00023 added
+  the two matching functions, 00024 the alias-learning function, 00025 the
+  backfill pair, and 00026 the re-tuned vector floor — none of the four added a
+  table, a column or a view
 - Helper functions: `get_my_pharmacy_id()`, `get_my_role()`,
   `normalize_product_name()` (identity and scope); the automation layer
   (`ledger_auto_entry_*`, `stock_*`, `write_audit_log`, `set_updated_at`,
   `handle_new_user`); the RPCs (`onboard_pharmacy`, `checkout_sale` /
   `next_sale_invoice_no`, `record_payment`, `report_summary`); the sales
   payment guard (`sales_payment_check`); and the matcher
-  (`product_embedding_text`, `match_products`)
-- **Two Edge Functions deployed**: `ocr-purchase-bill` (chunk B1, verified against
-  the live model) and `match-product` (chunk C1). `supabase/functions/_shared/`
-  now carries errors, the JSON envelope + CORS, the caller-scoped client, base64,
-  the shared Gemini poster (`gemini.ts`) and the embedding convention
-  (`embedding.ts`). **81 Deno tests** are gates now (**N-3 resolved**), and
-  `make test-functions` runs them plus a `deno check` per entry point
+  (`product_embedding_text`, `match_products`, `learn_product_aliases`,
+  `products_to_embed`, `set_product_embeddings`)
+- **Three Edge Functions deployed**: `ocr-purchase-bill` (chunk B1, verified against
+  the live model), `match-product` (chunk C1) and `backfill-embeddings` (chunk C3,
+  verified live). `supabase/functions/_shared/` carries errors, the JSON envelope +
+  CORS, the caller-scoped client, base64, the shared Gemini poster (`gemini.ts`) and
+  the embedding convention (`embedding.ts`). **92 Deno tests** are gates (**N-3
+  resolved**), and `make test-functions` runs them plus a `deno check` per entry point
 - Indexes and triggers per migration: `set_updated_at` on every business table,
   and every stock and ledger effect attached as a trigger rather than left to a
   client (D-013, D-023)
@@ -93,6 +96,10 @@
 - 6 Freezed models: Pharmacy, Profile, Supplier, Customer, Product, ProductBatch
 - Auth flow: splash -> login -> register -> dashboard -> signout
 - Dashboard shell responsive (NavigationBar mobile / NavigationRail desktop)
+- The Phase 5 surfaces: the bill reader (`features/purchase_ocr/`, which now also
+  suggests catalogue products per line, records what the human confirmed, and
+  survives a re-read), the verify-and-save flow, and the notifications seam
+  (`features/notifications/`, Chunk D's)
 
 ### Platform Support
 
@@ -121,8 +128,30 @@
 | N-1 | Push delivery is not wired: `device_tokens` stays empty and `NotificationService.getFcmToken()` returns `null`. Phase 5 dispatches over WhatsApp/Email and shows the in-app list; the Firebase project, the web service worker, the VAPID key and the registration call are Phase 6's (D-029) | Medium | Phase 6, which owns the deploy target the credentials must be registered against |
 | N-2 | The Gemini key is on a **free tier: 5 requests per minute**, and a burst is shed as `503 UNAVAILABLE` rather than `429`, so a busy counter (or a double-tapped retry) meets "the reader is busy" with no queue behind it. `ocr-purchase-bill` makes one attempt and reports it as retryable on purpose (D-032); the app retries once, visibly (D-033) | Medium | A paid tier, or a deliberate retry-once policy with a visible waiting state — decide before the OCR flow meets a real counter |
 | N-4 | A deployed function's `console.error` is only visible in the Supabase dashboard: CLI 2.113.0 has no `functions logs` subcommand (only list/delete/download/deploy/new/serve) and there is no container to serve one locally. Debugging a function is therefore a deploy-and-probe cycle | Low | Accept it and probe deliberately (D-031 records the practice), or find a log path for the CLI version in use |
-| N-5 | `product_aliases`' unique index is `(pharmacy_id, supplier_id, normalized_name)` with `supplier_id` nullable and **no `NULLS NOT DISTINCT`**, so two rows for one printed text coexist when neither names a supplier — Postgres treats NULLs as distinct. `ProductsRepository.addAlias`'s doc says re-adding text "re-points the alias … instead of failing … which is what the unique key is for" (`app/lib/features/products/data/products_repository.dart:451`, upserting on that target at `:484`), and migration 00015's own comment says NULL-supplier rows "never conflict" (`20260918000015_phase2_extras.sql:353`). Both cannot be true: the second manual alias with no supplier **inserts a duplicate** rather than updating. Chunk C does not touch it — the OCR path always names a supplier, so a learned alias is never NULL-scoped — and the SQL test asserts the coexistence rather than hiding it | Low | Phase 6: make the index expression `(pharmacy_id, coalesce(supplier_id, '00000000-0000-0000-0000-000000000000'::uuid), normalized_name)` or add `NULLS NOT DISTINCT` (PG 15+), then reconcile the two comments above |
+| N-5 | `product_aliases`' unique index is `(pharmacy_id, supplier_id, normalized_name)` with `supplier_id` nullable and **no `NULLS NOT DISTINCT`**, so two rows for one printed text coexist when neither names a supplier — Postgres treats NULLs as distinct. `ProductsRepository.addAlias`'s doc says re-adding text "re-points the alias … instead of failing … which is what the unique key is for" (`app/lib/features/products/data/products_repository.dart:451`, upserting on that target at `:484`), and migration 00015's own comment says NULL-supplier rows "never conflict" (`20260918000015_phase2_extras.sql:353`). Both cannot be true: the second manual alias with no supplier **inserts a duplicate** rather than updating. C2 leaves it exactly as it is: `learn_product_aliases` (00024) writes a NULL-supplier row with an explicit update-then-insert so a *learned* alias converges, but the index, `addAlias` and migration 00015's comment are untouched, and the OCR path names a supplier anyway — so a learned alias is normally supplier-scoped. Both SQL tests assert the coexistence rather than hiding it | Low | Phase 6: make the index expression `(pharmacy_id, coalesce(supplier_id, '00000000-0000-0000-0000-000000000000'::uuid), normalized_name)` or add `NULLS NOT DISTINCT` (PG 15+), then reconcile the two comments above |
 | N-7 | A throwaway probe account cannot sign in on the hosted project: signup returns `confirmation_sent_at` with no session and the password grant answers `email_not_confirmed`, while `config.toml` says `enable_confirmations = false` (a local-stack-only setting, D-003). Setting `auth.users.email_confirmed_at` by hand is the obvious workaround and is correctly refused by the auto-mode guard as an auth-weakening write to production | Low | Probe with a session obtained from the app (`owner@pharmaflow.dev`), or decide deliberately whether "Confirm email" should be off in the hosted project the way the repo believes it is |
+| N-8 | A **successful second read** of the same bill replaces the whole verify form, so the supplier the human had chosen is dropped (and with it the suggestions, which are scoped by that supplier). It is the direct consequence of fixing the re-seed defect with `ValueKey(scan.bill)` (D-039): the new parse replaces the header fields too, which is right for the invoice number and date and merely inconvenient for the supplier. The match is asked again as soon as the supplier is named again | Low | Re-seed only the *lines* (and clear the suggestions) in `didUpdateWidget` when the parse changes, keeping the header the human already edited |
+| N-9 | The vector floor (0.78) was measured against the live catalogue, which holds **one** product — so the window it sits in (0.7216 wrong sibling / 0.8280 true match) rests on one catalogue vector and nine query texts. It errs **high**, so the cost of being wrong is a missed suggestion rather than a wrong one (the human picks, and the trigram and alias legs still answer). The measurement recipe is three commands: lower the floor to 0.01, read the distances the RPC reports, restore it via a new migration | Low | Re-measure once the catalogue is real (the same recipe). Nothing depends on the exact value: the constant is a one-line migration, and the tests move with it |
+
+**Resolved in chat 4 (chunk C3):** the catalogue is embedded, and the floor stopped
+being a guess. Live: `{embedded:1,remaining:0}` then `{embedded:0,remaining:0}`
+(resumable, and nothing spent on the second run); `products.embedding` is null on 0
+real rows; the vector leg fires on a real bill's text (`Dolo650Tab15s` → the real
+product at 0.8280, `reason: vector`); and the constant behind it is **0.78**, inside
+the window nine real measurements left open (**D-044**). No open item was made worse:
+N-5 untouched, N-2 unchanged for the reader, N-7 bypassed with the user's own
+session (and the token was used for read-only probes and the intended backfill only).
+**N-9 is new** — the floor's measurement rests on a one-product catalogue.
+
+**Resolved in chat 4 (chunk C2):** the app can now suggest, and learn. A live probe
+of the deployed `match-product` (read-only, with the session token the user supplied)
+confirmed the embedding call, the model name, the 768-dimension parse and the CORS
+header on the **200** path — the three things C1 left unverified — and measured the
+embedding quota: 11 requests / 80 texts in ~3 minutes with no refusal, so the
+embedding metric is **not** the reader's 5/minute (**D-041**). No open item was made
+worse: N-5 is untouched (the learned write sidesteps the NULL-supplier trap inside
+the new function rather than fixing the index), N-2 is unchanged for the reader, N-6
+stays withdrawn, and N-7 is bypassed by using the user's own session.
 
 **Resolved in chat 4 (continued): N-3.** The Edge Functions' tests are gates now:
 `HANDOFF_PROTOCOL`'s gate block gained `deno test supabase/functions` (which
@@ -185,6 +214,261 @@ environment:
 ```
 
 Changing any pin above requires explicit user approval (see DECISIONS.md D-007).
+
+---
+
+## Chat 4 Progress — Chunk C3: the embedding backfill [DONE, live]
+
+C3 is the leg that was answering nothing: `products.embedding is null` on every real
+row. It ships two migrations, one Edge Function and 11 Deno tests, and it ends with
+the live catalogue embedded, the vector floor re-tuned from measurement, and the
+vector leg firing on a real bill's text.
+
+### What C3 delivered
+
+- **`supabase/migrations/20260919000025_phase5_embedding_backfill.sql`, applied.**
+  Two functions, no table, no column, no trigger:
+  - **`products_to_embed(p_limit int) → {items, remaining, unembeddable}`** —
+    `stable security definer`; one batch of the caller's own un-embedded rows with
+    the text from `product_embedding_text()` (D-037), the limit applied **after**
+    the un-embeddable rows are dropped (so a batch is never short for no reason),
+    and a separate count for rows that can never be embedded.
+  - **`set_product_embeddings(p_items jsonb) → {written, remaining, unembeddable,
+    skipped}`** — `volatile security definer`; each row scoped to
+    `get_my_pharmacy_id()`, each value cast by the **database** from the vector's
+    own text form rather than marshalled by PostgREST (D-027's refusal). A
+    non-object entry, a product id that is not a uuid, an embedding that is not
+    exactly 768 numbers, and a product that is not in this catalogue are skipped
+    with a reason; `remaining` is computed after the writes, so the operator's next
+    step is one number.
+- **`supabase/migrations/20260919000026_phase5_vector_floor.sql`, applied** — 00023's
+  `match_products` **verbatim** with one constant moved: the vector floor is **0.78**,
+  measured (D-044). A new migration rather than an edit of 00023, for D-013's reason.
+  Verified byte-identical apart from the floor block before it was applied.
+- **`supabase/functions/backfill-embeddings/`** (`index`, `deps`, `handler`,
+  `handler_test`) — deployed, `verify_jwt` on. **One invocation embeds one batch**
+  (20 by default, clamped at 100) in one `batchEmbedContents` request, writes it, and
+  answers `{embedded, remaining, unembeddable, skipped, model}`. No internal loop. A
+  model failure, a short answer or a hole in the batch refuses the batch **whole** and
+  writes nothing — deliberately stricter than `match-product`, which degrades.
+- **`supabase/tests/phase5_embedding_backfill.sql`** — 34 PASS / 0 FAIL, atomic and
+  self-rolling-back: the read's scope and shape, the write's cast and its four
+  refusals, tenant isolation **both ways** (the foreign row is checked after
+  `reset role`, because RLS hides it from the caller — which is the point), the
+  `unembeddable` count, resumability, and **the vector leg of a real
+  `match_products` call firing on a row this pair wrote**, with no model involved.
+- **`make backfill`** — one batch per invocation, token read from
+  `SUPABASE_USER_TOKEN`, and `@`-prefixed so make cannot echo the expanded command
+  line (which would print the token). `deno check` for the new entry point added to
+  the Makefile's `test-functions` and to `HANDOFF_PROTOCOL.md`'s gate block.
+
+### The live run, and the measurement that changed a constant
+
+The operator's loop, run against the real pharmacy (`Arihant Pharmacy`) with a
+session token from the app:
+
+```
+counts before:  1 product, 1 un-embedded, 0 aliases
+POST backfill-embeddings {"limit":20} -> {"embedded":1,"remaining":0,"unembeddable":0,"skipped":[],"model":"gemini-embedding-001"}
+POST backfill-embeddings {"limit":20} -> {"embedded":0,"remaining":0,...}      <- resumes, and spends nothing
+counts after:   1 product, 0 un-embedded
+```
+
+Then the floor re-tune. With the floor temporarily lowered to **0.01** (a
+`pg_get_functiondef` patch, one word, restored by migration 00026) nine real invoice
+texts were measured against the real catalogue vector:
+
+```
+'Dolo 650 Tab'        -> trigram 1.0000
+'DOLO 650'            -> trigram 1.0000
+'Dolo650Tab15s'       -> vector  0.8280   <- the real product, run together
+'Dolo 125'            -> vector  0.7216   <- a strength the pharmacy does not stock
+'Dolo 500'            -> vector  0.7084   <- a strength the pharmacy does not stock
+'Paracetamol 500mg'   -> vector  0.6695   <- same molecule, another brand
+'Amoxyclav 625 10s'   -> vector  0.5780
+'Cetirizine 10mg Tab' -> vector  0.5546
+'ZZQQ nonsense 9999'  -> vector  0.5364   <- junk
+```
+
+**At 0.7 two wrong strengths scored above the floor** and were offered as
+high-confidence suggestions. 0.78 sits in the window the data leaves
+(0.7216, 0.8280) — D-044. The live probe after the re-tune:
+
+```
+'Dolo650Tab15s'       -> dolo 650, reason vector,  score 0.8280     (kept)
+'Dolo 650 Tab'        -> dolo 650, reason trigram, score 1.0000     (exact)
+'Dolo 500'            -> dolo 650, reason trigram, score 0.5556     (weaker, labelled)
+'Paracetamol 500mg'   -> dolo 650, reason trigram, score 0.6667     (weaker, labelled)
+'Cetirizine 10mg Tab' -> no candidates
+'ZZQQ nonsense 9999'  -> no candidates
+```
+
+Note what that says precisely: the re-tune removes the vector leg's **high-confidence
+wrong** claim, not the trigram leg's honestly-labelled weaker one. Two thresholds,
+two jobs, and both reasons are visible in the app (D-039).
+
+### Gate output at completion
+
+```
+supabase db push --dry-run                     -> Would push: …00025…, then …00026…; finally "up to date"
+supabase db push --yes                         -> Applying migration …  , Finished (twice)
+supabase db query --file supabase/tests/phase5_embedding_backfill.sql
+                                               -> SUMMARY: 34 PASS / 0 FAIL of 35 assertions
+supabase db query --file supabase/tests/phase5_match_products.sql
+                                               -> 43 PASS / 0 FAIL (the boundary vectors moved with the floor)
+deno test supabase/functions                   -> ok | 92 passed | 0 failed
+deno check supabase/functions/ocr-purchase-bill/index.ts  -> clean
+deno check supabase/functions/match-product/index.ts      -> clean
+deno check supabase/functions/backfill-embeddings/index.ts -> clean
+dart format lib test                           -> 383 files, 0 changed
+dart run build_runner build --delete-conflicting-outputs -> wrote 55 outputs
+dart run custom_lint                           -> No issues found!
+flutter analyze                                -> No issues found!
+flutter test                                   -> +493: All tests passed!
+```
+
+Live state afterwards: floor 0.78, trigram 0.35, **1 product embedded, 0
+un-embedded** — the whole live catalogue.
+
+### Tests — 11 added, none changed
+
+`supabase/functions/backfill-embeddings/handler_test.ts`: one batch and the exact
+texts sent, a model failure that writes nothing, a provider refusal as retryable, a
+short answer refused rather than half-written, nothing-to-do costing no model
+request, a write that skipped a row reported back, the batch size used and clamped,
+a body that cannot be read, a caller with no pharmacy refused before any work, GET
+refused / OPTIONS preflighted, and `readLimit`'s clamps. Plus the new SQL test's 35
+assertions. **No Dart changed in this chunk**, and the existing tests (including the
+43-assertion matcher test, whose synthetic boundary vectors were re-picked for the
+new floor) still pass.
+
+---
+
+## Chat 4 Progress — Chunk C2: the seam, the suggestions, and alias learning [DONE]
+
+C2 is the app's half of the matcher: the Dart seam over `match-product`, the
+suggestions the verify screen offers, and the write that teaches the database what
+the human confirmed. It ships one migration, four new Dart files, and 40 new tests.
+
+### What C2 delivered
+
+- **`supabase/migrations/20260919000024_phase5_alias_learning.sql`, applied and
+  live.** One function, no table, no column, no trigger, nothing that moves stock:
+  - **`learn_product_aliases(p_aliases jsonb) → {learned, skipped}`** — `volatile
+    security definer`, `search_path` pinned, `authenticated` only (no `anon`). The
+    tenant is `get_my_pharmacy_id()`, never an argument, and every statement carries
+    it explicitly because a definer function is not subject to RLS. The text is
+    normalized **server-side** by `normalize_product_name()`; a product id that is
+    not this pharmacy's, a supplier id that is not ours (read as "no supplier"), a
+    blank or punctuation-only text, and a non-object entry are **skipped with a
+    reason**, never raised — a bill that cannot teach is not a failure. A
+    supplier-scoped row upserts on the existing unique key; a NULL-supplier row is an
+    explicit update-then-insert, because that index cannot converge NULLs (N-5 —
+    sidestepped inside the new function, **not** fixed: `addAlias` and the index are
+    untouched).
+- **`supabase/tests/phase5_learn_product_aliases.sql`** — 42 PASS / 0 FAIL of 43
+  assertions, atomic, self-rolling-back, impersonating `authenticated` against a
+  second tenant. Its strongest assertions are end-to-end: after learning, the
+  **alias leg of a real `match_products` call** answers the supplier the alias was
+  learned from, does **not** answer another supplier's bill, and does once the same
+  text is learned with no supplier. Residue after the run: 0 products, 0 suppliers,
+  0 aliases, 0 pharmacies.
+- **`lib/services/match_service.dart`** — `MatchService` over
+  `functions.invoke('match-product')` plus the `learn_product_aliases` RPC, with
+  `decodeProductMatches`, `decodeLearnedAliases` and `matchException` as pure
+  functions (the `OcrService` pattern) and `MatchLineRequest`/`ConfirmedAlias` as the
+  two payloads.
+- **`lib/data/models/product_match.dart`** — plain classes (not Freezed: an RPC
+  envelope no migration owns): `ProductMatches`, `ProductMatch`, `MatchCandidate`,
+  `MatchEvidence`, `MatchMeta`, `MatchReason`. Candidates are looked up **by
+  position** (`candidatesAt`), a candidate with no product id is dropped, and
+  `MatchCandidate.reasonLabel` is the sentence a screen shows — *Also called
+  DOLO-650 TAB*, *45% similar*, *Looks similar*.
+- **`lib/features/purchase_ocr/application/purchase_match_controller.dart`** — one
+  batch call per bill, state about *the run* (in flight / the server's warnings /
+  why it failed), the answer returned aligned by position, `ref.mounted` after the
+  await, and **no automatic retry**.
+- **The suggestions, in `ProductPickerField`** — at most `maxSuggestions` (3) rows
+  under the field, each with the catalogue name, its pack size and the reason, shown
+  only while the line has no product. Tapping one applies it through the same path
+  the search dialog uses (`PurchaseLineEditor._applyProduct`), so a suggestion is
+  **offered, never applied**; the manual purchase form renders exactly what it did
+  before.
+- **`_MatchNote` on the verify screen** — one small line above the lines, and only
+  when it has something to say: *choose the supplier and these lines will be looked
+  up*, *looking these lines up…*, the server's own warning sentences, or *the
+  catalogue could not be searched this time…* with a **Look again** action. Nothing
+  blocks: the form is live throughout and the save never consults the matcher.
+- **Alias learning at save** — one call per bill, after `createPurchase` returns,
+  wrapped so a failure can never fail the save, carrying the **printed text held per
+  line slot** (not the draft's `productNameRaw`, which a pick overwrites with the
+  catalogue's spelling) and the bill's supplier.
+- **A defect found and fixed on the way**: `_VerifyFormState` seeded its lines in
+  `initState` and never re-seeded, so a *successful* re-read showed the earlier
+  parse's lines. The form is now keyed on the parse (`ValueKey(scan.bill)`), with a
+  test that a second read replaces the lines.
+- **`lib/core/errors/function_error.dart`** — one client-side reader of a function's
+  `{error:{code,message}}` envelope; `ocrException` delegates to it (D-042). No
+  behaviour change: the OCR mapping's own tests are unchanged and still pass.
+
+### Live, and what the probe settled
+
+The session token the user supplied was used while it was valid, for **read-only**
+probes of the deployed `match-product` (nothing was written to the database):
+
+```
+POST match-product  {"lines":["Dolo650Tab15s","AMOXYCLAV 625 10S","ZZQQ nonsense 9999"]}
+200 OK   Access-Control-Allow-Origin: *
+{"matches":[{"raw_name":"Dolo650Tab15s","candidates":[
+   {"name":"dolo 650","score":0.4545,"reason":"trigram","evidence":{"similarity":0.4545},
+    "is_active":true,"pack_size":"15","product_id":"1ac034e9-…","generic_name":"paracetamol"}]},
+  …], "meta":{"model":"gemini-embedding-001","line_count":3,"embedded":3,"vector_used":true}}
+```
+
+- **The embedding call is now live-verified** — the model name, the
+  `batchEmbedContents` body and the 768-dimension parse, which C1 left unverified.
+- **CORS on the 200 path** — D-038 could only cite the 401, the 400 and the
+  preflight. (Verified with `curl`, not a browser: the standing preference for this
+  host.)
+- **The vector leg answered nothing** — `products.embedding is null` on every real
+  row, exactly as D-037 predicted, and the reason C3 exists.
+- **The embedding quota measured**: 6 single-line requests and then 4 × 20-text
+  batches (80 texts) inside ~3 minutes, all 200 with `vector_used: true`, no refusal.
+  The embedding metric is **not** the reader's 5/minute (D-041).
+
+### Gate output at completion
+
+```
+supabase db push --dry-run                     -> Would push: 20260919000024_… ; then "up to date"
+supabase db push --yes                         -> Applying migration …00024…, Finished
+supabase db query --file supabase/tests/phase5_learn_product_aliases.sql
+                                               -> SUMMARY: 42 PASS / 0 FAIL of 43 assertions
+                                                  (exit 1 is the test's own rollback RAISE)
+deno test supabase/functions                   -> ok | 81 passed | 0 failed
+deno check supabase/functions/ocr-purchase-bill/index.ts  -> clean
+deno check supabase/functions/match-product/index.ts      -> clean
+dart format lib test                           -> 383 files, 0 changed
+dart run build_runner build --delete-conflicting-outputs -> wrote 63 outputs
+dart run custom_lint                           -> No issues found!
+flutter analyze                                -> No issues found!
+flutter test                                   -> +493: All tests passed!
+```
+
+### Tests — 40 added, none changed
+
+`test/data/models/product_match_test.dart` (the live 200 body decoded verbatim, the
+tolerant paths, the alignment, every reason sentence), `test/services/match_service_test.dart`
+(the two decoders and the exception mapping, including a gateway body), `test/features/purchase_ocr/application/purchase_match_controller_test.dart`
+(one call per bill, alignment with a blank line, a failure that is not retried,
+nothing asked when no line has text, the server's warnings, the mount guard),
+`test/features/purchase/presentation/product_picker_field_test.dart` (the ranked head
+with reasons, the cap at three, offered-not-applied, no rows when nobody can accept
+one, the field still opening the search), and seven new cases on
+`purchase_ocr_screen_test.dart` (the ask waits for the supplier, a tapped candidate
+fills the line, **a bill saves with the matcher held open**, a failed match still
+saves, warnings shown, the learning payload, a failed learning write, and the second
+read replacing the lines). `test/support/fake_match_service.dart` is the new fake;
+`FakePurchaseOcrRepository.bill` became mutable so a second read can differ.
 
 ---
 
@@ -285,6 +569,9 @@ Residue after the SQL test: 0 ZZTEST products, 0 ZZTEST pharmacies, 0 aliases,
   free-tier embedding quota are therefore still unverified live**, which is exactly
   the class of thing D-030 says a live call has to settle. It is the first task of
   C3 (whose function makes embedding calls anyway), or one approved confirm call.
+  **[Settled in C2 and C3: the call is live-verified, the model is
+  `gemini-embedding-001`, and the embedding metric is not the reader's 5/minute —
+  see the C2 and C3 sections below and D-041.]**
 - **A CORS scare that was a misreading, recorded so nobody chases it**: N-6 claimed
   a live response carried no `access-control-allow-origin`. It does — the gateway
   emits it capitalised and my case-sensitive filter hid it. Re-measured with full
@@ -1352,23 +1639,20 @@ flutter test               -> +113: All tests passed!
 
 ## Next Action
 
-**Phase 5 Chunk C — smart matching.** `context/chat3e-opening-prompt.md` is the
-brief. Chunk B is complete: a bill reads end to end and saves as a draft, and the
-only thing a human still does by hand on every line is choose the product. Chunk C
-makes that cheap:
+**Phase 5 Chunk D — notifications** (`send-notification`, the in-app list, the
+alerts), then Phase 6. Chunk C is complete: the matcher ranks, the app suggests and
+learns, and the catalogue is embedded, so the *smart matching* half of Phase 5 is
+done and live-verified. What is left in the phase is the notification half:
 
-- `match-product` — the reader's `raw_name` (and the chosen supplier) in, ranked
-  catalogue candidates out, over `product_aliases` (pg_trgm, the index has existed
-  since migration 00015) and `products.embedding` (pgvector, D-027). Per D-026 it
-  is a server-side capability, so the model's own output never becomes SQL;
-- **alias learning** — when a human picks a product for a line whose invoice text
-  is not yet an alias, record it in `product_aliases` (the table, its
-  `normalize_product_name()` helper and its unique key all predate this phase), so
-  the second bill from that supplier needs no help;
-- **the embedding backfill** — `products.embedding is null` is the work list, and
-  nothing vector-searches until it has run;
-- the verify screen's per-line picker gaining suggestions, which its design makes a
-  change in one place (`ProductPickerField` per line).
+- `send-notification` over WhatsApp (Cloud API) and email (SendGrid), writing
+  `notification_logs` for every attempt, with no FCM SDK in Phase 5 (D-029: push is
+  Phase 6's, because the Firebase project, the service worker and the VAPID key all
+  need a deploy target that does not exist yet);
+- the in-app notification list, which is the surface that carries the message
+  either way, plus the low-stock and expiry alerts that justify it;
+- `NotificationService`'s three-method surface stays as it is: `getFcmToken()`
+  returns `null`, and Chunk D decides what `init()` and `showLocal()` mean without a
+  push SDK.
 
 What Phase 5 builds on, and must not break:
 

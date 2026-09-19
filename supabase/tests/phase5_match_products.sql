@@ -156,8 +156,12 @@ begin
   -- Synthetic embeddings. Cosine similarity against the query vector (a unit
   -- vector on the first axis) is therefore exact and known:
   --   v_pamox   [1, 0.05, 0, ...]  -> 0.9987   (the one the vector leg should pick)
-  --   v_pcet    [1, 1, 0, ...]     -> 0.7071   (just above the 0.7 floor)
+  --   v_pcet    [1, 0.75, 0, ...]  -> 0.8000   (just above the floor)
   --   v_portho  [1, 1, 1, 0, ...]  -> 0.5774   (below the floor: never a candidate)
+  --
+  -- The floor is 0.78, not 0.7: it was re-tuned in migration 00026 against real
+  -- vectors (D-043), and these three are chosen to straddle whatever it is, so a
+  -- future change fails here rather than passing quietly.
   select '[' || array_to_string(
       array_agg(case when g = 1 then 1 else 0 end order by g), ',') || ']'
     into v_emb_q from generate_series(1, 768) g;
@@ -165,7 +169,7 @@ begin
       array_agg(case when g = 1 then 1.0 when g = 2 then 0.05 else 0 end order by g), ',') || ']'
     into v_emb_amox from generate_series(1, 768) g;
   select '[' || array_to_string(
-      array_agg(case when g <= 2 then 1 else 0 end order by g), ',') || ']'
+      array_agg(case when g = 1 then 1.0 when g = 2 then 0.75 else 0 end order by g), ',') || ']'
     into v_emb_cet from generate_series(1, 768) g;
   select '[' || array_to_string(
       array_agg(case when g <= 3 then 1 else 0 end order by g), ',') || ']'
@@ -385,7 +389,7 @@ begin
   v_log := array_append(
     v_log,
     case when v_n = 1 then 'PASS' else 'FAIL' end
-      || ': 4. a candidate just above the 0.7 floor is offered behind it (found ' || v_n || ')'
+      || ': 4. a candidate just above the floor (cosine 0.80, floor 0.78) is offered behind it (found ' || v_n || ')'
   );
 
   select count(*) into v_n
@@ -394,7 +398,7 @@ begin
   v_log := array_append(
     v_log,
     case when v_n = 0 then 'PASS' else 'FAIL' end
-      || ': 4. a vector below the 0.7 floor is not a suggestion at all (found ' || v_n || ')'
+      || ': 4. a vector below the floor (cosine 0.5774) is not a suggestion at all (found ' || v_n || ')'
   );
 
   -- ---------------------------------------------------- 5. isolation and payload

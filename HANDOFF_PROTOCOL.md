@@ -41,10 +41,11 @@ chat starts by reading the handoff files and ends by writing them.
    deno test supabase/functions
    deno check supabase/functions/ocr-purchase-bill/index.ts
    deno check supabase/functions/match-product/index.ts
+   deno check supabase/functions/backfill-embeddings/index.ts
    ```
    (plus `supabase db push --dry-run` if migrations were added)
 
-   The three Deno lines are the Edge Functions' gates (added with N-3): `deno test`
+   The Deno lines are the Edge Functions' gates (added with N-3): `deno test`
    type-checks and runs every function test it finds, and there is one `deno check`
    per entry point — those cover what no test imports, the entry point and its
    wiring, which is exactly the layer that cannot be exercised locally without a
