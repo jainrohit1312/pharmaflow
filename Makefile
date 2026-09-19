@@ -7,7 +7,7 @@
 # `supabase start`. Migrations reach the linked hosted project via
 # `supabase db push`.
 
-.PHONY: help setup migrate migrate-dry link gen watch lint format test test-functions backfill run run-android run-web clean
+.PHONY: help setup migrate migrate-dry link gen watch lint format test test-functions backfill run run-android run-web run-web-server clean
 
 # The hosted project the backfill posts to. Override on the command line if this
 # repo is ever pointed at another project.
@@ -29,6 +29,7 @@ help:
 	@echo "  run           run the app on Windows"
 	@echo "  run-android   run the app on the attached Android device"
 	@echo "  run-web       run the app in Chrome"
+	@echo "  run-web-server  serve the app for Chrome without the DWDS debug attach"
 	@echo "  clean         flutter clean"
 
 setup:
@@ -92,6 +93,19 @@ run-android:
 
 run-web:
 	cd app && flutter run -d chrome
+
+# `run-web` compiles and then dies attaching to Chrome -- "Failed to establish
+# connection with the web debug service", a 5s timeout in dwds' WebkitDebugger.enable.
+# That is Chrome 153 against the dwds 26.2.5 bundled in Flutter 3.44.8 (upstream
+# flutter/flutter#192976; fixed by dwds 27.1.2 in Flutter 3.47.5), so it is the
+# toolchain, not this app. A non-Chromium device never takes that path --
+# flutter_tools sets `useDwdsWebSocketConnection` to true for it, and dwds then
+# builds the debug connection over its own websocket instead of Chrome's DevTools
+# port -- so this serves the app for a browser you open yourself. Delete this target
+# once the SDK is upgraded.
+# port 8080 is held by Docker Desktop on this machine; 8090 is free.
+run-web-server:
+	cd app && flutter run -d web-server --web-port 8090
 
 clean:
 	cd app && flutter clean
