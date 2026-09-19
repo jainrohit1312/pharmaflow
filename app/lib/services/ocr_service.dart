@@ -1,9 +1,8 @@
 /// The bill reader, as the app sees it: one function call and one envelope.
 library;
 
-import 'dart:convert';
-
 import 'package:app/core/errors/app_exception.dart';
+import 'package:app/core/errors/function_error.dart';
 import 'package:app/data/datasources/supabase_client.dart';
 import 'package:app/data/models/ocr_purchase_bill.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
@@ -109,42 +108,18 @@ OcrPurchaseBill decodeOcrBill(Object? data) {
 
 /// The exception for a failure the function described.
 ///
-/// The function's own sentence is kept verbatim: it is written for the user, the
-/// way a `check_violation` from Postgres is (the same rule, one layer out), and
-/// a screen that rewrites it would be inventing a message for a situation it
-/// does not know.
+/// The mapping itself lives in [functionException], because every function here
+/// refuses in the same envelope and two readers of it would drift. What stays
+/// here is the part that is the reader's own: the fallback sentence.
 AppException ocrException(
   Object? details, {
   required String fallbackMessage,
   int? status,
-}) {
-  final failure = _readFailure(details);
-
-  if (failure == null) {
-    return ServerException(
-      message: fallbackMessage,
-      code: status == null ? null : 'http_$status',
-    );
-  }
-
-  return switch (failure.code) {
-    'unauthorized' => AuthException(
-      message: failure.message,
-      code: failure.code,
-    ),
-    'invalid_request' || 'forbidden' || 'too_large' => ValidationException(
-      message: failure.message,
-      code: failure.code,
-    ),
-    'not_found' => NotFoundException(
-      message: failure.message,
-      code: failure.code,
-    ),
-    // `provider_unavailable`, `not_configured`, `internal` and anything a later
-    // chunk adds: a server-side problem, reported in the server's words.
-    _ => ServerException(message: failure.message, code: failure.code),
-  };
-}
+}) => functionException(
+  details,
+  fallbackMessage: fallbackMessage,
+  status: status,
+);
 
 /// Whether [error] is worth waiting a moment and trying again.
 ///
@@ -157,59 +132,3 @@ bool isRetryableOcrError(Object? error) =>
     error is AppException &&
     (error.code == providerUnavailableOcrCode ||
         error.code == unreachableOcrCode);
-
-/// The code and message inside an error body, when it holds one.
-_OcrFailure? _readFailure(Object? details) {
-  final body = _asObject(details);
-  if (body == null) {
-    return null;
-  }
-
-  final error = _asObject(body['error']);
-  final message = error == null ? null : _asText(error['message']);
-  if (message == null) {
-    return null;
-  }
-
-  return _OcrFailure(
-    code: _asText(error?['code']) ?? 'unknown',
-    message: message,
-  );
-}
-
-/// [value] as a JSON object, decoding it first when it arrived as text.
-///
-/// The client library hands back the decoded body for a non-2xx from the
-/// function — but "the function" is not the only thing that can answer (a gateway
-/// rejection has its own shape), so both forms are accepted rather than assumed.
-Map<String, dynamic>? _asObject(Object? value) {
-  if (value is Map) {
-    return value.cast<String, dynamic>();
-  }
-  if (value is String && value.trim().isNotEmpty) {
-    try {
-      final decoded = jsonDecode(value);
-      return decoded is Map ? decoded.cast<String, dynamic>() : null;
-    } on FormatException {
-      return null;
-    }
-  }
-  return null;
-}
-
-/// A trimmed string, or `null`.
-String? _asText(Object? value) {
-  if (value is String) {
-    final trimmed = value.trim();
-    return trimmed.isEmpty ? null : trimmed;
-  }
-  return null;
-}
-
-/// A failure the function described.
-class _OcrFailure {
-  const _OcrFailure({required this.code, required this.message});
-
-  final String code;
-  final String message;
-}

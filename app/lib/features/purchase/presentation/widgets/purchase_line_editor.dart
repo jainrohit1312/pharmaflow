@@ -6,6 +6,7 @@ import 'package:app/core/utils/validators.dart';
 import 'package:app/core/widgets/app_date_field.dart';
 import 'package:app/core/widgets/app_text_field.dart';
 import 'package:app/data/models/product.dart';
+import 'package:app/data/models/product_match.dart';
 import 'package:app/data/models/purchase_draft.dart';
 import 'package:app/features/purchase/data/purchase_totals.dart';
 import 'package:app/features/purchase/presentation/widgets/product_picker_field.dart';
@@ -35,6 +36,7 @@ class PurchaseLineEditor extends StatefulWidget {
     this.showBatchFields = false,
     this.canRemove = true,
     this.title,
+    this.suggestions = const <MatchCandidate>[],
   });
 
   /// The line as the parent currently holds it; seeds the fields.
@@ -58,6 +60,13 @@ class PurchaseLineEditor extends StatefulWidget {
 
   /// Heading for the card, e.g. `Line 2`.
   final String? title;
+
+  /// Catalogue candidates the matcher offered for this line, best first.
+  ///
+  /// The parent owns them because the parent owns what the bill's lines were: this
+  /// editor knows the line as it now stands, and the screen knows what the reader
+  /// printed on it. They are shown only while the line has no product yet.
+  final List<MatchCandidate> suggestions;
 
   @override
   State<PurchaseLineEditor> createState() => _PurchaseLineEditorState();
@@ -153,20 +162,38 @@ class _PurchaseLineEditorState extends State<PurchaseLineEditor> {
   );
 
   /// Records the product the picker reported.
+  void _onProduct(Product product) => _applyProduct(
+    productId: product.id,
+    name: product.name,
+    hsnCode: product.hsnCode,
+  );
+
+  /// Records a suggestion the human accepted.
   ///
-  /// Only the link and the printed name are taken from the catalogue row; the
+  /// The same write as the search dialog's, minus the HSN code: the matcher
+  /// answers with the candidate's id, name and pack — not the whole catalogue row
+  /// — so there is no HSN to take from it, and whatever the bill printed in that
+  /// field is kept.
+  void _onSuggestion(MatchCandidate candidate) =>
+      _applyProduct(productId: candidate.productId, name: candidate.name);
+
+  /// Links this line to a catalogue product, and says so.
+  ///
+  /// Only the link and the printed name are taken from the catalogue; the
   /// purchase rate and margin are what the invoice says, and pre-filling them
   /// from the last purchase would put a number on this invoice that the supplier
   /// never quoted. The HSN code is a property of the product rather than of the
-  /// deal, so that one is filled in.
-  void _onProduct(Product product) {
+  /// deal, so that one is filled in when the line has none of its own.
+  void _applyProduct({
+    required String productId,
+    required String name,
+    String? hsnCode,
+  }) {
     setState(() {
-      _productId = product.id;
-      _productNameRaw = product.name;
-      final hsn = product.hsnCode;
-      if (hsn != null &&
-          hsn.trim().isNotEmpty &&
-          _hsnCode.text.trim().isEmpty) {
+      _productId = productId;
+      _productNameRaw = name;
+      final hsn = hsnCode?.trim();
+      if (hsn != null && hsn.isNotEmpty && _hsnCode.text.trim().isEmpty) {
         _hsnCode.text = hsn;
       }
     });
@@ -211,7 +238,14 @@ class _PurchaseLineEditorState extends State<PurchaseLineEditor> {
             const SizedBox(height: 4),
             ProductPickerField(
               selectedName: _productNameRaw,
+              // Offered only while the line has no product: once a human has
+              // chosen, advice about what it might have been is noise — and the
+              // rows disappearing is also how the choice is confirmed.
+              suggestions: _productId == null
+                  ? widget.suggestions
+                  : const <MatchCandidate>[],
               onSelected: _onProduct,
+              onSuggestionSelected: _onSuggestion,
             ),
             const SizedBox(height: 12),
             _FieldRow(

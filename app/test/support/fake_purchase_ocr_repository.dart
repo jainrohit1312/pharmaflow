@@ -19,7 +19,11 @@ class FakePurchaseOcrRepository implements PurchaseOcrRepository {
     : bill = bill ?? buildOcrBill();
 
   /// What every successful parse answers with.
-  final OcrPurchaseBill bill;
+  ///
+  /// Mutable on purpose: a test of a *second* read has to change what the reader
+  /// says between the two, or it cannot tell a form that re-seeded itself from one
+  /// still showing the first parse.
+  OcrPurchaseBill bill;
 
   /// Failures `uploadBill` throws, one per call; `null` entries succeed.
   final List<Exception?> uploadFailures = <Exception?>[];

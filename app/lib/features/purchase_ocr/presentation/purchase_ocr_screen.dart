@@ -13,6 +13,8 @@
 /// context, and the computed ones are what gets saved.
 library;
 
+import 'dart:async';
+
 import 'package:app/core/errors/error_message.dart';
 import 'package:app/core/router/routes.dart';
 import 'package:app/core/utils/formatters.dart';
@@ -24,6 +26,7 @@ import 'package:app/core/widgets/app_scaffold.dart';
 import 'package:app/core/widgets/app_text_field.dart';
 import 'package:app/core/widgets/section_card.dart';
 import 'package:app/data/models/ocr_purchase_bill.dart';
+import 'package:app/data/models/product_match.dart';
 import 'package:app/data/models/purchase_draft.dart';
 import 'package:app/data/models/supplier.dart';
 import 'package:app/features/purchase/application/purchase_form_controller.dart';
@@ -32,8 +35,10 @@ import 'package:app/features/purchase/application/purchases_list_controller.dart
 import 'package:app/features/purchase/data/purchase_totals.dart';
 import 'package:app/features/purchase/presentation/widgets/purchase_line_editor.dart';
 import 'package:app/features/purchase/presentation/widgets/purchase_totals_preview.dart';
+import 'package:app/features/purchase_ocr/application/purchase_match_controller.dart';
 import 'package:app/features/purchase_ocr/application/purchase_ocr_controller.dart';
 import 'package:app/features/suppliers/application/supplier_options.dart';
+import 'package:app/services/match_service.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -64,6 +69,12 @@ class PurchaseOcrScreen extends ConsumerWidget {
       ],
       body: bill != null && scan != null
           ? _VerifyForm(
+              // Keyed on the parse. The form seeds its lines once, in
+              // `initState`, so without this a *successful* re-read would update
+              // `bill` while the screen went on showing the earlier parse's lines -
+              // and the matcher would go on suggesting products for a bill that is
+              // no longer on screen. A new key re-seeds both.
+              key: ValueKey<OcrPurchaseBill>(bill),
               scan: scan,
               bill: bill,
               failure: state.error,
@@ -216,6 +227,7 @@ class _VerifyForm extends ConsumerStatefulWidget {
   const _VerifyForm({
     required this.scan,
     required this.bill,
+    super.key,
     this.failure,
     this.failureIsRetryable = false,
   });
@@ -242,16 +254,31 @@ class _VerifyFormState extends ConsumerState<_VerifyForm> {
   bool _isSaving = false;
   String? _saveError;
 
+  /// The matcher's candidates, by line slot.
+  ///
+  /// Keyed by slot rather than by position because the list of lines is the
+  /// user's to change: a line removed while the batch was in flight must not
+  /// shift every later line onto the previous line's suggestions.
+  Map<int, List<MatchCandidate>> _suggestions = <int, List<MatchCandidate>>{};
+
   @override
   void initState() {
     super.initState();
     final document = widget.bill.document;
+    final drafts = widget.bill.toLineDrafts();
 
     _invoiceNo.text = document.invoiceNo ?? '';
     _invoiceDate = document.invoiceDate ?? DateTime.now();
     _lines = <_LineSlot>[
-      for (var index = 0; index < widget.bill.toLineDrafts().length; index++)
-        _LineSlot(id: index, draft: widget.bill.toLineDrafts()[index]),
+      // `toLineDrafts()` maps `lines` one for one, so the printed text and the
+      // draft line up by index - and the index is the slot's id, which is what
+      // the matcher's answer is aligned with.
+      for (var index = 0; index < drafts.length; index++)
+        _LineSlot(
+          id: index,
+          draft: drafts[index],
+          invoiceText: widget.bill.lines[index].rawName,
+        ),
     ];
     if (_lines.isEmpty) {
       // A bill with no readable lines still gets a row to type into: the reader
@@ -284,6 +311,60 @@ class _VerifyFormState extends ConsumerState<_VerifyForm> {
       ? TaxSplit.intraState
       : ref.watch(purchaseTaxSplitProvider(_supplierId!)).value ??
             TaxSplit.intraState;
+
+  /// Records the supplier the bill came from, and asks the matcher about the
+  /// bill's lines.
+  ///
+  /// The ask waits for this choice rather than running when the parse arrives,
+  /// because the supplier is what scopes the alias leg: an alias learned from one
+  /// distributor deliberately does not answer the same printed text on another's
+  /// bill (D-036), so a match asked for before the human named the supplier could
+  /// not use the one leg that makes a repeat bill cheap. Asking once, when the
+  /// choice is made, is also what keeps this to **one embedding request per
+  /// bill** (N-2/D-036): a changed choice asks again and drops the offers that
+  /// were ranked for the previous supplier rather than showing them against the
+  /// wrong one.
+  void _onSupplierChanged(String? supplierId) {
+    setState(() {
+      _supplierId = supplierId;
+      _suggestions = <int, List<MatchCandidate>>{};
+    });
+    if (supplierId == null) {
+      return;
+    }
+    unawaited(_askForSuggestions());
+  }
+
+  /// Asks the matcher about every line, as one batch.
+  ///
+  /// Awaited by nobody: the bill has to be saveable while the call is still out,
+  /// and a call that never returns must not stop the save. The mapping from the
+  /// answer back to the lines is made here, at the moment of asking, because the
+  /// answer is aligned by position with what was sent (the RPC's contract) and the
+  /// slot ids are what survive a line being added or removed in the meantime.
+  Future<void> _askForSuggestions() async {
+    final sent = <int>[for (final slot in _lines) slot.id];
+    final lines = <MatchLineRequest>[
+      for (final slot in _lines)
+        MatchLineRequest(rawName: slot.invoiceText, supplierId: _supplierId),
+    ];
+
+    final matches = await ref
+        .read(purchaseMatchControllerProvider.notifier)
+        .matchBill(lines: lines);
+    if (!mounted) {
+      return;
+    }
+
+    setState(() {
+      _suggestions = <int, List<MatchCandidate>>{
+        for (var index = 0; index < sent.length; index++)
+          sent[index]: matches.length > index
+              ? matches[index].candidates
+              : const <MatchCandidate>[],
+      };
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -344,7 +425,7 @@ class _VerifyFormState extends ConsumerState<_VerifyForm> {
                   value: _supplierId,
                   values: supplierIds,
                   labelOf: (id) => names[id] ?? id,
-                  onChanged: (value) => setState(() => _supplierId = value),
+                  onChanged: _onSupplierChanged,
                   validator: (value) => value == null
                       ? 'Choose the supplier this bill came from'
                       : null,
@@ -389,6 +470,11 @@ class _VerifyFormState extends ConsumerState<_VerifyForm> {
             ),
             child: Column(
               children: <Widget>[
+                _MatchNote(
+                  hasSupplier: _supplierId != null,
+                  state: ref.watch(purchaseMatchControllerProvider),
+                  onRetry: () => unawaited(_askForSuggestions()),
+                ),
                 for (var index = 0; index < _lines.length; index++)
                   Padding(
                     padding: const EdgeInsets.only(bottom: 12),
@@ -402,6 +488,9 @@ class _VerifyFormState extends ConsumerState<_VerifyForm> {
                       split: _split,
                       showBatchFields: true,
                       canRemove: _lines.length > 1,
+                      suggestions:
+                          _suggestions[_lines[index].id] ??
+                          const <MatchCandidate>[],
                       onChanged: (draft) =>
                           setState(() => _lines[index].draft = draft),
                       onRemove: () => setState(
@@ -498,6 +587,11 @@ class _VerifyFormState extends ConsumerState<_VerifyForm> {
             lines: _drafts,
           );
 
+      // After the write, and never able to fail it: what this records is what
+      // makes the *next* bill from this supplier cheap, and it can only be about a
+      // document that exists.
+      await _learnAliases(supplierId: supplierId);
+
       ref
         ..invalidate(purchasesListControllerProvider)
         ..invalidate(purchaseWithLinesProvider(saved.id));
@@ -514,6 +608,43 @@ class _VerifyFormState extends ConsumerState<_VerifyForm> {
         _isSaving = false;
         _saveError = describeError(error);
       });
+    }
+  }
+
+  /// Records the printed text of every line this human matched to a product.
+  ///
+  /// One call for the whole bill, and only the human's choice creates anything: a
+  /// suggestion that was not accepted teaches nothing, and a line the reader
+  /// printed but nobody matched teaches nothing either. The text is
+  /// [_LineSlot.invoiceText] rather than the draft's `productNameRaw`, because
+  /// picking a product overwrites that with the catalogue's own spelling — and a
+  /// catalogue name is not what the next bill will print.
+  ///
+  /// A supplier that the server does not recognise is the server's to read as
+  /// "no supplier" (it stores a pharmacy-wide alias instead); a bill whose
+  /// supplier is somehow absent sends none, and the same rule applies.
+  Future<void> _learnAliases({required String supplierId}) async {
+    final aliases = <ConfirmedAlias>[
+      for (final slot in _lines)
+        if (slot.invoiceText != null && slot.draft.productId != null)
+          ConfirmedAlias(
+            rawName: slot.invoiceText!,
+            productId: slot.draft.productId!,
+            supplierId: supplierId,
+          ),
+    ];
+    if (aliases.isEmpty) {
+      return;
+    }
+
+    try {
+      await ref.read(matchServiceProvider).learnAliases(aliases: aliases);
+    } on Object {
+      // Best effort, and silent on purpose. The purchase is saved, and a user told
+      // "the alias could not be recorded" would have no action to take and a
+      // document that is fine. What is actually lost is next time's head start:
+      // the same printed text is matched by name and by vector again, and the
+      // human chooses again - which is exactly what happened this time.
     }
   }
 }
@@ -582,13 +713,153 @@ class _ReadBack extends StatelessWidget {
   }
 }
 
+/// The one line the screen says about the matcher, and only when it has something
+/// worth saying.
+///
+/// A bill is saveable whether or not the matcher ever answers, so this never
+/// stands in for anything and never blocks anything: it explains an absence
+/// ("nothing has been asked yet", "the catalogue could not be searched"), it
+/// repeats the server's own sentence when a leg was unavailable, and it offers a
+/// **manual** retry rather than spending another embedding request on its own
+/// (D-036's rule for the reader's key, applied here — the choice to spend one is
+/// the user's).
+class _MatchNote extends StatelessWidget {
+  const _MatchNote({
+    required this.hasSupplier,
+    required this.state,
+    required this.onRetry,
+  });
+
+  /// Whether the bill's supplier has been chosen yet.
+  ///
+  /// Every leg but the alias leg answers without it, but the alias leg is the one
+  /// that makes a repeat bill cheap *and* it is scoped by the supplier — so the ask
+  /// waits for a human to name the supplier rather than running twice.
+  final bool hasSupplier;
+
+  /// What the matcher last said about itself.
+  final PurchaseMatchState state;
+
+  /// Asks again.
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final failure = state.error;
+
+    if (failure != null) {
+      return _note(
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            Text(
+              'The catalogue could not be searched this time, so pick each '
+              'product by hand. Nothing else about this bill is affected.',
+              style: theme.textTheme.bodySmall,
+            ),
+            const SizedBox(height: 2),
+            Text(
+              describeError(failure),
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.error,
+              ),
+            ),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton.icon(
+                onPressed: onRetry,
+                icon: const Icon(Icons.search),
+                label: const Text('Look again'),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    if (state.isMatching) {
+      return _note(
+        Row(
+          children: <Widget>[
+            const SizedBox(
+              width: 12,
+              height: 12,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                'Looking these lines up in your catalogue…',
+                style: theme.textTheme.bodySmall,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    // The server's own sentences, kept verbatim: they say which leg was skipped
+    // and why, which is the difference between "your catalogue does not have it"
+    // and "this answer is narrower than usual".
+    if (state.hasWarnings) {
+      return _note(
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            for (final warning in state.meta!.warnings)
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  Icon(
+                    Icons.info_outline,
+                    size: 16,
+                    color: theme.colorScheme.primary,
+                  ),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(warning, style: theme.textTheme.bodySmall),
+                  ),
+                ],
+              ),
+          ],
+        ),
+      );
+    }
+
+    if (!hasSupplier) {
+      return _note(
+        Text(
+          'Choose the supplier and these lines will be looked up in your '
+          'catalogue.',
+          style: theme.textTheme.bodySmall,
+        ),
+      );
+    }
+
+    return const SizedBox.shrink();
+  }
+
+  /// One note, spaced like the line cards below it.
+  Widget _note(Widget child) =>
+      Padding(padding: const EdgeInsets.only(bottom: 12), child: child);
+}
+
 /// One line's editor, kept across rebuilds by its id.
 class _LineSlot {
-  _LineSlot({required this.id, required this.draft});
+  _LineSlot({required this.id, required this.draft, this.invoiceText});
 
   /// Stable across rebuilds, so the editor is not rebuilt from scratch.
   final int id;
 
   /// The line as it currently stands.
   PurchaseLineDraft draft;
+
+  /// The text the reader printed on this line, when it read one.
+  ///
+  /// Kept here rather than read back from [draft] because picking a product
+  /// overwrites the draft's raw name with the catalogue's own spelling - that is
+  /// what the field then displays - and the *printed* text is the only thing an
+  /// alias can be learned from and the only thing worth matching against.
+  final String? invoiceText;
 }

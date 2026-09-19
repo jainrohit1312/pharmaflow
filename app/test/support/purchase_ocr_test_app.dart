@@ -16,12 +16,14 @@ import 'package:app/features/purchase_ocr/data/bill_picker.dart';
 import 'package:app/features/purchase_ocr/data/purchase_ocr_repository.dart';
 import 'package:app/features/purchase_ocr/presentation/purchase_ocr_screen.dart';
 import 'package:app/features/suppliers/application/supplier_options.dart';
+import 'package:app/services/match_service.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 
 import 'fake_bill_picker.dart';
+import 'fake_match_service.dart';
 import 'fake_products_repository.dart';
 import 'fake_purchase_ocr_repository.dart';
 import 'fake_purchases_repository.dart';
@@ -61,6 +63,7 @@ Future<GoRouter> pumpPurchaseOcrApp(
   FakePurchasesRepository? purchases,
   List<Supplier> suppliers = const <Supplier>[],
   FakeProductsRepository? products,
+  FakeMatchService? matcher,
   Duration retryDelay = Duration.zero,
   String initialLocation = Routes.purchaseOcr,
 }) async {
@@ -87,6 +90,10 @@ Future<GoRouter> pumpPurchaseOcrApp(
           purchasesRepositoryProvider.overrideWithValue(purchases),
         if (products != null)
           productsRepositoryProvider.overrideWithValue(products),
+        // A bill is saveable and readable whether or not the matcher is ever
+        // asked, so a test that is not about matching gets a matcher that answers
+        // nothing rather than no matcher at all.
+        matchServiceProvider.overrideWithValue(matcher ?? FakeMatchService()),
       ],
       child: MaterialApp.router(routerConfig: router),
     ),
