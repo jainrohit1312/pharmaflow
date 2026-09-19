@@ -98,7 +98,7 @@ is what chunk 3 used to syntax-check the Vercel build command.
 
 ## WHAT CHUNK 3 LEFT YOU (do not re-do, and do not re-open)
 
-- **664 Flutter tests, 181 Deno tests**, all green; `custom_lint` and `flutter analyze`
+- **665 Flutter tests, 181 Deno tests**, all green; `custom_lint` and `flutter analyze`
   clean; **30 migrations, 30/30 local and remote**; **five Edge Functions deployed**.
 - **The Vercel deploy is configured and has never been run**: `app/vercel.json` (build
   config) and `docs/DEPLOY_VERCEL.md` (runbook), both written from Vercel's own
@@ -116,8 +116,13 @@ is what chunk 3 used to syntax-check the Vercel build command.
 - **N-13 is new**: the three-read limit is enforced on the verify screen and **not** on
   `_ChooseBill`'s failure card, deliberately (that is the D-033 recovery for a first read
   that never succeeded). Closing it is one screen's work.
-- **The picker's `or=(…)` query has never been sent to a live PostgREST** (no local stack).
-  One `curl` with a signed-in token would settle it (D-064).
+- **The picker's filter parses live; its *matching* is unproven.** The `or=(…)` mix of
+  `ilike` branches and a `supplier_id.in.(…)` list answers **200** against the hosted
+  PostgREST (with a malformed `or=()` control answering 400, so the 200s mean something) —
+  but **this tenant holds no received invoices and no suppliers**, so no search has ever
+  returned a row. If the tenant gets data in this chunk, re-run the three SYN probes in
+  `context/chat3n-summary.md` §4 and mark I-3 fully verified; if it does not, say so and
+  leave the claim where it is.
 - **N-12 was reviewed and deliberately deferred** (the user's instruction, twice).
 - **The two permanent probe rows stay** (D-049). Do not delete them.
 

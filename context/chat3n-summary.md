@@ -5,7 +5,8 @@ it **wrote the web deploy** — a build config for Vercel and the runbook that g
 neither of which has been run — it **exposed the re-read** on the bill reader's verify
 screen, which is the tap the N-8 fix had been waiting for since chunk 2, and it
 **implemented I-3 in a commit of its own** after establishing that the previous chunk's
-message had claimed it against no diff at all. Two commits: chunk 3's, then I-3's.
+message had claimed it against no diff at all. **Three commits**: chunk 3's, I-3's, and a
+third for the defect the live filter probe turned up.
 `context/chat3o-opening-prompt.md` is the next chunk.
 **Date:** 2026-09-20
 **Decisions:** **D-062** (a bill gets three reads, and the first one counts),
@@ -135,12 +136,58 @@ call the list screen already pages with:
   (it becomes an `in.(…)` list inside the filter), and the displayed name bounded by
   `supplierOptionsLimit` (500). Each narrows the answer rather than failing it.
 
-**Honest limit.** With fakes there is no 200-row cliff, so "finds a purchase beyond the
-200th" is asserted as *the query the picker issues* (no 200-row cap, term applied, offset
-paging) and as paging past page one — not as a real 201st row. And the assembled `or=(…)`
-string has never been sent: no local stack exists, so its shape rests on the builders'
-unit tests and a documented reading of PostgREST's syntax. One live session would settle
-both.
+**The live filter probe (read-only, hosted PostgREST, a signed-in session).** A node client
+(`C:\Users\regal\.qwen\tmp\pf-orprobe2.mjs`, outside the repo; both secrets read from files
+and never printed) sent 13 GETs — no write, no RPC, no function invoked. The construct the
+whole exercise was about, verbatim:
+
+```
+GET /rest/v1/purchases?select=id%2Cinvoice_no%2Cstatus&status=eq.received
+    &or=(invoice_no.ilike.%25nope%25%2Cnotes.ilike.%25nope%25
+         %2Csupplier_id.in.(00000000-0000-0000-0000-000000000000))
+    &order=invoice_date.desc&limit=20
+-> 200 OK, 0 rows
+```
+
+| Request | Result |
+| --- | --- |
+| that one (text branches **OR** one `in.(…)` id) | **200** |
+| `or=(supplier_id.in.(<one id>))` — the branch alone | **200** |
+| `or=(invoice_no.ilike.%a%,notes.ilike.%a%,supplier_id.in.(<three ids>))` | **200** |
+| `or=()` — a deliberate **negative control** | **400 `PGRST100`** |
+| `term="arihant,650%"` → `arihant 650`, sent as `%25`/`%20` | **200** |
+| `term="%%,,()"` → sanitised empty → **no `or=` at all** | **200** |
+
+So the mix parses, the harness demonstrably reports failures (hence the control), the
+sanitising path cannot 400, and the encoding round-trips.
+
+**What it does NOT establish — and it is the half a user cares about.** The tenant holds
+**zero purchase rows of any status and zero suppliers** (`select=id,status&limit=1000` →
+0 rows; `suppliers` → 0 rows). No case could return a row, so **parsing is verified and
+matching is not**: nothing has ever been found by any search, and the three SYN cases would
+have answered 200 even if the filter matched nothing. "Finds the invoice by distributor
+name" is still resting on the builders' unit tests. It needs a tenant with received
+invoices and suppliers in it — **N-9's shape** exactly: a measurement the project cannot
+make because the data does not exist yet.
+
+**Two false starts, recorded because both nearly became findings.** The first run reported
+a **400 on the `.env`-style case** — that was the harness's own bug (it sent `or=()`, which
+the app never builds: both repositories guard with `if (search != null)`). And the first run
+never exercised `supplier_id.in.(…)` at all, because the empty suppliers table left the id
+list empty, so the filter collapsed to the two `ilike` branches every time; the SYN cases
+exist only because that was caught.
+
+**One genuine defect, found by reading the code path rather than by the probe** (the empty
+tenant cannot show it). `_withSupplierMatches` guarded on the *raw* term, so a term that
+sanitises to nothing (`%%`, `,`) still ran the supplier lookup — and a lookup with an empty
+search applies no filter, so it returns the first page. A term that means nothing would
+have answered with the first twenty-five distributors' invoices. The guard is now
+`sanitizeSearchTerm(query.search).isEmpty`, with a regression test asserting the lookup is
+not made at all; a meaningless term now behaves as it does in the products picker.
+
+**The other honest limit stands:** with fakes there is no 200-row cliff, so "finds a
+purchase beyond the 200th" is asserted as *the query the picker issues* (unbounded,
+term-scoped, offset-paged) and as paging past page one — not as a real 201st row.
 
 ---
 
@@ -192,7 +239,7 @@ app/lib/features/returns/presentation/purchase_return_form_screen.dart
 app/test/core/utils/postgrest_search_test.dart
     8 tests: the in-list, the dropped values, the joining, and the I-3 shape
 app/test/features/purchase/application/purchase_picker_controller_test.dart
-    10 tests (new)
+    11 tests (new), the eleventh being the sanitised-empty regression
 app/test/features/returns/presentation/purchase_return_form_screen_test.dart
     `_choosePurchase` drives the picker instead of a dropdown
 app/test/support/fake_purchases_repository.dart
@@ -231,8 +278,8 @@ dart run build_runner build --delete-conflicting-outputs
                                              language version 3.11.0" notice (T-1)
 dart run custom_lint                      -> No issues found!
 flutter analyze                           -> No issues found!
-flutter test                              -> +664: All tests passed!   (628 -> 664: 9 for the
-                                             re-read, 27 for I-3)
+flutter test                              -> +665: All tests passed!   (628 -> 665: 9 for the
+                                             re-read, 28 for I-3)
 deno test supabase/functions              -> ok | 181 passed | 0 failed (2s)
 deno check <each of the five entry points> -> exit 0 (no output)
 flutter build web --release               -> exit 0; built build\web in ~5 min, with index.html,
@@ -306,9 +353,13 @@ the test of all three; `docs/DEPLOY_VERCEL.md` §7 is the recovery map.
   (D-064), and `HANDOFF_PROTOCOL.md` rule 7 exists so the next message is checked against
   its diff before it is written. **The lesson is the load-bearing part**: the misreport was
   believed, and a whole chunk was planned around a defect that had never been fixed.
-- **The picker's query has never been sent.** The `or=(…)` string is assembled by unit-tested
-  builders, but no live request has carried it: there is no local stack, and the hosted
-  project needs a session. One `curl` with a signed-in token would settle it.
+- **The picker's filter has been sent, and it parses — the matching has not been seen to
+  work.** The `or=(…)` mix of `ilike` branches and a `supplier_id.in.(…)` list answers 200
+  against the hosted PostgREST, with a malformed control answering 400 so the 200s mean
+  something. But **this tenant has no received invoices and no suppliers at all**, so no
+  search has ever returned a row: "finds it by distributor name" still rests on unit tests.
+  Chunk 4 should re-run the same three SYN probes once there is data — that is the only
+  piece of I-3 left.
 - **N-13 is new** (above): the three-read limit is enforced where a bill has been *read*,
   not where it has only been *uploaded*.
 - **N-11's Vercel half is configured, not run** — see `docs/DEPLOY_VERCEL.md`.

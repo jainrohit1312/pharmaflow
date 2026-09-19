@@ -339,6 +339,17 @@ commit of its own that corrects the record (D-064). The full account is
     which `PurchasesRepository.list` ORs with the text branches. A filtered join would be
     one round trip, but its PostgREST support varies by version and there is no local stack
     here to try it against.
+  - **The filter was then sent live** (read-only, with a signed-in session): the mix of
+    `ilike` branches and a `supplier_id.in.(…)` uuid list inside one `or=()` is **accepted —
+    200**, with a deliberately malformed `or=()` as the negative control answering **400
+    `PGRST100`** so the 200s mean the server parsed the tree. **But the tenant holds zero
+    purchase rows and zero suppliers**, so *matching* is unproven: nothing has ever been
+    found by any search, and "finds the invoice by distributor name" rests on the builders'
+    tests, not on a live hit.
+  - **One defect found by reading the path** (the empty tenant cannot show it): a term that
+    sanitises to nothing (`%%`, `,`) still ran the supplier lookup, which with an empty
+    search returns the first page — so a meaningless term answered with the first 25
+    distributors' invoices. Guarded now, with a regression test.
 
 ### Files
 
@@ -379,8 +390,8 @@ dart run build_runner build --delete-conflicting-outputs
                                              "SDK language version 3.12.0 is newer than analyzer" notice (T-1)
 dart run custom_lint                      -> No issues found!
 flutter analyze                           -> No issues found!
-flutter test                              -> +664: All tests passed!   (628 -> 664, over this chunk's
-                                             two commits: 9 for the re-read, 27 for I-3)
+flutter test                              -> +665: All tests passed!   (628 -> 665, over this chunk's
+                                             three commits: 9 for the re-read, 28 for I-3)
 deno test supabase/functions              -> ok | 181 passed | 0 failed (2s)
 deno check <each of the five entry points> -> exit 0 (no output)
 flutter build web --release               -> exit 0; built build\web in ~5 min, with index.html,
@@ -388,6 +399,20 @@ flutter build web --release               -> exit 0; built build\web in ~5 min, 
                                              (that last path is what docs/DEPLOY_VERCEL.md §5
                                               reads — it was written as assets/assets/.env and
                                               the real build corrected it)
+read-only probe against the hosted REST (node client, both secrets read from
+files and never printed; 13 GETs, no write, no RPC, no function invoked)
+                                          -> the construct under test is accepted:
+                                             or=(invoice_no.ilike.%nope%,notes.ilike.%nope%,
+                                             supplier_id.in.(00000000-0000-0000-0000-000000000000))
+                                             -> 200; three ids in the list -> 200; the
+                                             supplier branch alone -> 200; a malformed
+                                             or=() control -> 400 PGRST100 (so the 200s
+                                             mean the tree parsed)
+                                             term="arihant,650%" -> sanitised "arihant 650",
+                                             sent as %25/%20, -> 200, no injection surface
+                                             the tenant holds 0 purchases (any status) and
+                                             0 suppliers, so no case returned a row:
+                                             parsing proven, matching NOT
 ```
 
 The Vercel side, checked as far as this machine can check it — **the deploy itself was

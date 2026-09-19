@@ -152,7 +152,7 @@ PharmaFlow/
 │   │   │                         ledger, reports, expenses, notifications, chatbot,
 │   │   │                         settings
 │   │   └── services/             OCR, matching, chatbot, notifications, printing
-│   ├── test/                     unit + widget tests (664)
+│   ├── test/                     unit + widget tests (665)
 │   ├── vercel.json               the web deploy's build config (Root Directory `app`, D-063)
 │   └── pubspec.yaml
 ├── supabase/

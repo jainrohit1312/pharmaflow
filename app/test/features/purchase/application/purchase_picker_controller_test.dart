@@ -226,6 +226,32 @@ void main() {
     expect(page.items.single.invoiceNo, 'INV-NEW');
   });
 
+  test('a term with nothing searchable in it asks the suppliers nothing', () async {
+    final purchases = FakePurchasesRepository(purchases: _received(3));
+    final suppliers = FakeSuppliersRepository(
+      suppliers: <Supplier>[buildSupplier()],
+    );
+    final container = _container(purchases: purchases, suppliers: suppliers);
+
+    // `sanitizeSearchTerm` strips the characters that structure a filter, so this
+    // survives `isNotEmpty` and then has nothing left to search for. The fake
+    // repository models the real one here: an empty term applies no filter and
+    // returns the first page, which would put 25 unrelated distributors behind a
+    // term that means nothing.
+    container
+        .read(purchasePickerFilterControllerProvider.notifier)
+        .search('%%');
+    await container.read(purchasePickerControllerProvider.future);
+
+    expect(
+      suppliers.requestedOffsets,
+      isEmpty,
+      reason:
+          'the lookup would otherwise run unfiltered and return a page of it',
+    );
+    expect(purchases.lastQuery?.supplierIds, isEmpty);
+  });
+
   test('clearing the term clears the supplier branch with it', () async {
     final purchases = FakePurchasesRepository(purchases: _received(3));
     final suppliers = FakeSuppliersRepository(

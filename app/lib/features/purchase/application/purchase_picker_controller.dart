@@ -1,6 +1,7 @@
 /// Search and paging for the purchase pickers (I-3).
 library;
 
+import 'package:app/core/utils/postgrest_search.dart';
 import 'package:app/data/models/purchase.dart';
 import 'package:app/features/auth/application/pharmacy_scope.dart';
 import 'package:app/features/purchase/data/purchases_repository.dart';
@@ -196,12 +197,21 @@ class PurchasePickerController extends _$PurchasePickerController {
   /// uses; the alternative - a filtered join inside the picker's own request - is
   /// a PostgREST feature whose availability depends on the deployed version,
   /// which is exactly the kind of thing that cannot be checked from here.
+  ///
+  /// The guard is on the **sanitised** term, not on the raw one, and it matters:
+  /// `sanitizeSearchTerm` strips the characters that structure a filter, so a
+  /// term like `%%` or `,` survives `isNotEmpty` and then searches for *nothing*.
+  /// `SuppliersRepository.list` treats "nothing to search for" as "no filter" - it
+  /// returns the first page - so without this the branch would resolve to the
+  /// first twenty-five distributors alphabetically, and a term that means nothing
+  /// would answer with *their* invoices. Nothing searchable means nothing to
+  /// match, which is also what the products picker does with the same input.
   Future<PurchasesQuery> _withSupplierMatches({
     required String pharmacyId,
     required SuppliersRepository suppliers,
     required PurchasesQuery query,
   }) async {
-    if (query.search.isEmpty) {
+    if (sanitizeSearchTerm(query.search).isEmpty) {
       return query.withSupplierIds(const <String>[]);
     }
 

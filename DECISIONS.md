@@ -2563,11 +2563,33 @@ than silent (D-014's reasoning, extended from `ilike` to `in.(…)`).
 - **A failed "Load more" keeps the rows on screen** and reports itself under the list,
   rather than blanking a list the user is reading (the same trade as the list screen's
   `loadMore`).
-- **Verified:** 10 controller tests (scope, paging, search by number, search by
-  distributor, one supplier resolution per result set, date window, failure, and a failed
-  page keeping its rows), 9 widget tests (the label, the four states, both searches, Load
-  more, the date control) and 8 tests over the filter builders; 664 Flutter tests in
-  total. **Not verified from here:** the assembled `or=(…)` string against a live
-  PostgREST — no local stack exists, so the shape rests on the builders' unit tests and on
-  a documented reading of PostgREST's `or` syntax. A live session would settle it in one
-  request.
+- **Verified:** 11 controller tests (scope, paging, search by number, search by
+  distributor, one supplier resolution per result set, a term with nothing searchable in
+  it, date window, failure, and a failed page keeping its rows), 9 widget tests (the label,
+  the four states, both searches, Load more, the date control) and 8 tests over the filter
+  builders; 665 Flutter tests in total.
+- **The filter was then sent, read-only, against the hosted PostgREST** with a signed-in
+  session, and the construct this was worried about is accepted: an `or=()` containing
+  `ilike` branches **and a `supplier_id.in.(…)` uuid list** parses and answers **200** — one
+  id, three ids, and the branch alone, all 200. A deliberate negative control (`or=()`,
+  malformed) answered **400 `PGRST100`**, so the 200s are the server accepting the tree and
+  not a harness that ignores errors. A term containing `,` and `%` sanitises to a clean
+  pattern (`arihant 650`) and the encoding round-trips (`%` → `%25`, space → `%20`); no 400,
+  no injection surface. Exact URLs and bodies are in `context/chat3n-summary.md`; the
+  harness had to be corrected first (it sent `or=()`, which the app never does — both
+  repositories guard with `if (search != null)`), and that 400 was the harness's own bug.
+- **What that probe does NOT establish, and it is the half that matters to a user:** the
+  tenant holds **zero purchase rows of any status and zero suppliers**, so no case could
+  return a row. *Parsing* is proven; *matching* is not — "finds the invoice by distributor
+  name" has never been seen to work against real data, and the three-read SYN cases could
+  equally have matched nothing. Needs a tenant with received invoices and suppliers in it.
+  This is N-9's shape: a measurement the project cannot make yet because the data it needs
+  does not exist.
+- **One defect was found by reading the code path, not by the probe** (the empty tenant
+  cannot show it): `_withSupplierMatches` guarded on the *raw* term, so a term that
+  sanitises to nothing (`%%`, `,`) still ran the supplier lookup — which, with an empty
+  search, applies no filter and returns the first page. A term that means nothing would
+  have answered with the first twenty-five distributors' invoices. The guard is now on
+  `sanitizeSearchTerm(query.search).isEmpty`, with a regression test asserting the lookup is
+  not made at all; a meaningless term now behaves as it does in the products picker — like
+  no term.
