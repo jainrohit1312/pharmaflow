@@ -1,8 +1,8 @@
 # PharmaFlow — Progress Tracker
 
 **Last Updated:** 2026-09-19
-**Current Phase:** Phase 5 IN PROGRESS — **C1 (the matcher), C2 (the app's seam, alias learning, the suggestions) and C3 (the embedding backfill) are COMPLETE**: `product_embedding_text()`, `match_products()` (vector floor re-tuned to a measured 0.78), `learn_product_aliases()`, the `products_to_embed`/`set_product_embeddings` pair are live on the hosted project; `match-product`, `ocr-purchase-bill` and `backfill-embeddings` are deployed; the live catalogue is embedded and the vector leg fires on it. Next: Chunk D (notifications), then Phase 6
-**Overall Status:** Phases 0-4 done and gated; Phase 5 has its database substrate, three deployed and live-verified Edge Functions, a bill that reads and saves end to end, a matcher that suggests and learns, and a backfilled catalogue — 493 Flutter tests, 92 Deno tests
+**Current Phase:** Phase 5 IN PROGRESS — **Chunk C complete (C1 matcher, C2 app seam + alias learning + suggestions, C3 backfill + measured floor)**, and **Chunk D part 1 of 2 done**: `low_stock_products()` and `expiring_batches()` are live and answer against the real catalogue. Next: **Chunk D part 2** — `send-notification`, the in-app list and the Dart seams (`context/chat3i-opening-prompt.md`), then Phase 6
+**Overall Status:** Phases 0-4 done and gated; Phase 5 has its database substrate, three deployed and live-verified Edge Functions, a bill that reads and saves end to end, a matcher that suggests and learns, a backfilled catalogue with a measured similarity floor, and its alert sources — 493 Flutter tests, 92 Deno tests
 
 ---
 
@@ -51,23 +51,24 @@
 
 ### Backend (Supabase Hosted)
 
-- 26 migrations applied, all idempotent (`supabase migration list`: 26/26 local
+- 27 migrations applied, all idempotent (`supabase migration list`: 27/27 local
   and remote match)
 - 24 tables and 2 views (`product_stock`, `batch_status`), RLS enforced on every
   business table; migration 00022 added `device_tokens`, `notification_logs`, the
   `products.embedding` column and the private `purchase-bills` storage bucket
   (00019-00021 added one table, `invoice_counters`, and no view), 00023 added
   the two matching functions, 00024 the alias-learning function, 00025 the
-  backfill pair, and 00026 the re-tuned vector floor — none of the four added a
-  table, a column or a view
+  backfill pair, 00026 the re-tuned vector floor, and 00027 the two alert sources
+  — none of those five added a table, a column or a view
 - Helper functions: `get_my_pharmacy_id()`, `get_my_role()`,
   `normalize_product_name()` (identity and scope); the automation layer
   (`ledger_auto_entry_*`, `stock_*`, `write_audit_log`, `set_updated_at`,
   `handle_new_user`); the RPCs (`onboard_pharmacy`, `checkout_sale` /
   `next_sale_invoice_no`, `record_payment`, `report_summary`); the sales
-  payment guard (`sales_payment_check`); and the matcher
+  payment guard (`sales_payment_check`); the matcher
   (`product_embedding_text`, `match_products`, `learn_product_aliases`,
-  `products_to_embed`, `set_product_embeddings`)
+  `products_to_embed`, `set_product_embeddings`); and the alert sources
+  (`low_stock_products`, `expiring_batches`)
 - **Three Edge Functions deployed**: `ocr-purchase-bill` (chunk B1, verified against
   the live model), `match-product` (chunk C1) and `backfill-embeddings` (chunk C3,
   verified live). `supabase/functions/_shared/` carries errors, the JSON envelope +
@@ -118,7 +119,7 @@
 | D-1 | 5 manual Providers remain (service stubs + router) | Low | Convert to `@riverpod` when the respective features are built |
 | T-1 | `dart run custom_lint` SDK language version notice (cosmetic) | Low | Wait for upstream analyzer fix |
 | A-1 | `anonKey` deprecated in supabase_flutter 2.17 | Low | Migrate to `publishableKey` in Phase 6 |
-| I-1 | The low-stock list reads at most `InventoryRepository.lowStockScanLimit` (500) candidate rows and decides `total_qty < min_stock_level` in Dart, because PostgREST cannot compare two columns. A catalogue past that bound would silently omit rows. | Low | Add `is_low_stock` to the `product_stock` view (a migration: `create or replace view` may append a column), or move the comparison into an RPC |
+| I-1 | The low-stock list reads at most `InventoryRepository.lowStockScanLimit` (500) candidate rows and decides `total_qty < min_stock_level` in Dart, because PostgREST cannot compare two columns. A catalogue past that bound would silently omit rows. **D-part-1 built the server-side answer** (`low_stock_products()`, D-047 — same `<` rule, same shortfall, tenant-scoped, asserted by `phase5_alerts.sql`); what is left is switching the inventory screen onto it | Low | Switch `InventoryRepository.lowStock` to the RPC (the alert list already reads it), and delete the Dart comparison and its scan bound |
 | I-2 | A purchase return is two statements (header, then lines). The lines are one atomic INSERT, so stock moves for all of them or none - but a refused set can leave a header with no lines. Deliberately not rolled back: see `PurchaseReturnsRepository.create` | Low | An `RPC` wrapping both statements when Phase 4 touches the ledger |
 | I-3 | A return form offers at most `returnablePurchaseLimit` (200) received purchases | Low | A searchable purchase picker, as the product picker already is |
 | R-1 | `README.md` still describes the project as "Phase 0 (scaffold)" with Phase 1+ screens as placeholders | Low | Refresh it in Phase 6, which owns documentation |
@@ -214,6 +215,76 @@ environment:
 ```
 
 Changing any pin above requires explicit user approval (see DECISIONS.md D-007).
+
+---
+
+## Chat 4 Progress — Chunk D (PART 1 of 2): the alert sources [DONE]
+
+Chunk D is the notification half of Phase 5, and it is being built in two parts: the
+**alert sources** (this, done) and the **notifications themselves**
+(`send-notification`, the in-app list, the Dart seams — briefed in
+`context/chat3i-opening-prompt.md`, not started). The split is the one the earlier
+chunks used: the server side first, gated on its own.
+
+### What D-part-1 delivered
+
+- **`supabase/migrations/20260919000027_phase5_alert_sources.sql`, applied.** Two
+  `stable security definer` functions, no table, no column, no trigger, and nothing
+  that moves stock:
+  - **`low_stock_products(p_limit int default 50) → jsonb`** — products below their
+    reorder level, worst first, each with `total_qty`, `min_stock_level` and
+    **`shortfall`** (the units that close the gap). The rule is the app's own one,
+    `total_qty < min_stock_level`, now evaluated where both columns live — which is
+    **I-1's fix**: the Dart comparison ran over at most 500 candidate rows, so a
+    bigger catalogue reported a partial answer that looked complete. An inactive
+    product is never reported; a product with no batches at all is `0` and is.
+  - **`expiring_batches(p_days int default 90, p_limit int default 50) → jsonb`** —
+    batches with stock left expiring inside the window, soonest first, each with
+    `days_left` (**negative** when it has already expired, so a screen can say
+    "expired 6 days ago" rather than read a bucket). An empty batch is not a waste
+    risk and is excluded.
+  - Both take the tenant from `get_my_pharmacy_id()` and carry
+    `pharmacy_id = v_pharmacy` explicitly — which is not belt-and-braces here: the
+    views they read are `security_invoker = true`, and inside a definer function the
+    "invoker" is the owner.
+- **`supabase/tests/phase5_alerts.sql`** — 25 PASS / 0 FAIL of 26 assertions,
+  atomic and self-rolling-back: the reorder boundary (`<` reports, `=` does not), the
+  no-batches case, an inactive product never reported, the shortfall number,
+  worst-first ordering, the limit, the horizon widening with `p_days`, the negative
+  `days_left`, the already-expired batch first, an empty batch excluded, tenant
+  isolation both ways, and that reading them moves nothing.
+- **A schema fact the test found**: `product_batches.expiry_date` is `NOT NULL`, so
+  the function's `is not null` guard is a mirror of the column rather than a live
+  branch. The test asserts the column's nullability instead of inventing a fixture
+  the schema forbids.
+- **D-047** records the shape: an alert is a *question* answered by an RPC, a
+  notification is an *event* stored as a row. That is what keeps D-046's "alerts
+  appear in the in-app list" honest without materialising state that goes stale the
+  moment stock moves.
+
+### A finding from the live data
+
+The alert RPCs answer against the real pharmacy already: its single catalogue product
+has `min_stock_level = 20` and no stock, so `low_stock_products()` returns it with a
+shortfall of 20. The alerts are therefore exercisable end to end on live data without
+any credential, which is the opposite of the notifications half (no WhatsApp account,
+no SendGrid key, no recipient phone numbers — D-046).
+
+### Gate output at the end of part 1
+
+```
+supabase db push --dry-run                     -> Would push: 20260919000027_… ; then "up to date"
+supabase db push --yes                         -> Applying migration …00027…, Finished
+supabase db query --file supabase/tests/phase5_alerts.sql
+                                               -> SUMMARY: 25 PASS / 0 FAIL of 26 assertions
+deno test supabase/functions                   -> ok | 92 passed | 0 failed
+deno check ×3 (ocr, match, backfill)           -> clean
+dart format lib test                           -> 383 files, 0 changed
+dart run custom_lint / flutter analyze         -> No issues found!
+flutter test                                   -> +493: All tests passed!
+```
+
+**No Dart changed in part 1**, so the 493 tests are the same ones C2 left.
 
 ---
 
@@ -1639,20 +1710,34 @@ flutter test               -> +113: All tests passed!
 
 ## Next Action
 
-**Phase 5 Chunk D — notifications** (`send-notification`, the in-app list, the
-alerts), then Phase 6. Chunk C is complete: the matcher ranks, the app suggests and
-learns, and the catalogue is embedded, so the *smart matching* half of Phase 5 is
-done and live-verified. What is left in the phase is the notification half:
+**Phase 5 Chunk D, part 2 of 2 — the notifications themselves.** Part 1 (the alert
+sources, `low_stock_products` + `expiring_batches`) is done and its SQL test asserts
+25 numbers; what is left is the half with the credentials:
 
-- `send-notification` over WhatsApp (Cloud API) and email (SendGrid), writing
-  `notification_logs` for every attempt, with no FCM SDK in Phase 5 (D-029: push is
-  Phase 6's, because the Firebase project, the service worker and the VAPID key all
-  need a deploy target that does not exist yet);
-- the in-app notification list, which is the surface that carries the message
-  either way, plus the low-stock and expiry alerts that justify it;
-- `NotificationService`'s three-method surface stays as it is: `getFcmToken()`
-  returns `null`, and Chunk D decides what `init()` and `showLocal()` mean without a
-  push SDK.
+- **`send-notification`** (`verify_jwt` on, acting as the caller): `{channel, to,
+  subject?, body, recipient_type, recipient_id?, notify_user_id?}` in; a
+  `notification_logs` row written for **every** attempt — sent, refused and
+  not-configured alike — and, when the message belongs in someone's in-app list, the
+  `notifications` row too, written with the log row in one transaction. A missing
+  `WHATSAPP_TOKEN`/`SENDGRID_API_KEY` is `not_configured` **naming the secret**, and
+  the log row still lands (`status = 'skipped'`), because "we tried and could not" is
+  what an operator needs to see. No automatic dispatch of the alerts in Phase 5
+  (D-046).
+- **The in-app list**: `notifications` (user-addressed, `read_at` for the read
+  state — migration 00008), newest first, with the two alert sections rendered live
+  from the RPCs above (D-047: an alert is a question, a notification is an event).
+- **The Dart seams and `NotificationService`'s Phase 5 meaning**: `getFcmToken()`
+  stays `null`, and `init()`/`showLocal()` get an honest definition without a push
+  SDK (D-029) — a platform capability behind a seam and a fake (D-035).
+- **What cannot be live-verified**: any actual WhatsApp or email delivery (no
+  account, no key, no recipient numbers). The function must be built so the missing
+  secret is a sentence rather than a crash, and its tests must run with no secret at
+  all — the whole handler through stubs, the way `match-product`'s does.
+
+Then **Phase 6**: testing, deployment, documentation — the Windows build fix (W-1),
+the README refresh (R-1), push registration (N-1), the SendGrid/WhatsApp credentials
+and the alert triggers (D-046), N-9's re-measurement once the catalogue is real, and
+N-5's index.
 
 What Phase 5 builds on, and must not break:
 

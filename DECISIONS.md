@@ -1684,3 +1684,61 @@ ignore it.
 - Alerts are computed **in SQL** (`low_stock_products`, `expiring_batches`) rather
   than compared in Dart, which is also I-1's fix and the RPCs D-026 already reserved
   for the chatbot: one implementation, three callers.
+
+---
+
+## D-047 — An Alert Is a Question, a Notification Is an Event
+
+**Date:** 2026-09-19
+
+**Status:** Active
+
+**Decision:** The two alerts D-046 put in the in-app list — low stock and expiring
+batches — are answered by **two `stable` RPCs** (`low_stock_products(p_limit)`,
+`expiring_batches(p_days, p_limit)`, migration 20260919000027) and are **not written
+as rows**. The in-app list shows them as a live section; `notifications` stays what it
+is — events a recipient was told about. The reorder rule is `total_qty <
+min_stock_level`, exactly the comparison the app already made in Dart, with the
+manager's own reasoning: at the level is where the pharmacy meant to act, below it is
+where they did not.
+
+**Rationale:** Three parts.
+
+- **A low-stock alert is a fact about stock now, not an event.** Materialising it
+  means a row that is wrong by the time it is read (the goods arrived five minutes
+  later) and, with nothing running on a schedule in Phase 5 (D-046), a row nobody
+  would write at all. A derived answer cannot go stale.
+- **I-1 is fixed by moving the comparison, not by moving the bound.** The inventory
+  screen decided `total_qty < min_stock_level` in Dart over at most 500 candidate
+  rows, because PostgREST cannot compare two columns — so a catalogue past that bound
+  would silently report a partial answer. A stock alert that stops seeing products is
+  worse than a slow one, and the fix is to compare where both columns are.
+- **D-026 already reserved these two names** for the chatbot's aggregates and said
+  they are "the aggregates the reports screens want too, so they are not chatbot-only
+  work". This is that work arriving from the alert side: one implementation, three
+  callers (the list, the inventory screen when it is next touched, the chatbot).
+
+**Consequences:**
+
+- `shortfall` (the units that close the gap) is returned rather than left to a screen,
+  so an alert can say how much to order; `days_left` is negative for a batch that has
+  already expired, so a screen can say "expired 6 days ago" rather than read a bucket.
+- A discontinued product is never reported (nothing should be reordered into a product
+  the pharmacy has stopped stocking), and a batch with nothing left in it is never a
+  waste risk (nothing left to waste).
+- **A note from the test, kept because it is a schema fact rather than a case**:
+  `product_batches.expiry_date` is `NOT NULL`, so the function's `is not null` guard
+  is a mirror of the column, not a live branch; the SQL test asserts the column's
+  nullability instead of inventing a fixture the schema forbids.
+- Both functions are `stable`, so neither can move stock (D-011/D-013), and both are
+  tenant-scoped by hand inside a `security definer` function — which is not
+  belt-and-braces here: the views they read are `security_invoker = true`, and inside
+  a definer function "the invoker" is the owner.
+- Verified by `supabase/tests/phase5_alerts.sql` — 25 PASS / 0 FAIL: the reorder
+  boundary (`<` reports, `=` does not), the zero-and-no-batch case, an inactive
+  product never reported, the shortfall number, worst-first ordering, the limit, the
+  expiry horizon widening with `p_days`, the negative `days_left` and the
+  already-expired batch coming first, an empty batch excluded, tenant isolation both
+  ways, and that reading them moves nothing.
+- **The notifications half of Chunk D is not built yet**: `send-notification`, the
+  in-app list screen and the Dart seams are briefed in `context/chat3i-opening-prompt.md`.
