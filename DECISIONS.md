@@ -1107,3 +1107,135 @@ result and an unhandled error.
   then write): their tests pass because a screen watches them throughout. They
   were not changed here — recording it so the next person to touch a controller
   does not have to rediscover it.
+
+---
+
+## D-036 — The Match Is One RPC, Ranked by Score, With the Leg as Attribution
+
+**Date:** 2026-09-19
+
+**Status:** Active
+
+**Decision:** Matching invoice text to the catalogue is `match_products(p_queries
+jsonb, p_limit int)` (migration 20260919000023): one `stable security definer` RPC
+that takes a whole bill's lines in one call and returns ranked candidates per line,
+each carrying `reason` and the evidence behind it. Three legs — alias (1.0, a human
+confirmed it), trigram, and vector cosine over `products.embedding` — are merged
+per product, and **the ranking is by score, with the leg only an ordered tiebreak**
+(0 supplier-scoped alias, 1 pharmacy-wide alias, 2 trigram, 3 vector). Two
+thresholds are constants in the function and both were measured, not inherited:
+**trigram ≥ 0.35** and **vector cosine ≥ 0.7**.
+
+**Rationale:** Three parts, each from a measurement on the live project rather than
+from intuition:
+
+- **Trigram cannot be a priority over the vector leg.** `Dolo 650` scores **0.4545**
+  against the invoice text `Dolo650Tab15s` and the wrong sibling `Dolo 500` scores
+  **0.4444** — a 0.01 margin, which is a coin toss rather than a ranking. The vector
+  leg is the thing that tells those two apart, and under a leg-priority ordering a
+  0.45 trigram hit would have outranked every vector hit — the exact case the leg
+  exists for. So the score decides and the leg explains.
+- **The trigram threshold cannot be pg_trgm's own 0.3 default, and the obvious
+  comparison is the wrong one.** `similarity('Dolo650Tab15s', 'Dolo 650')` is
+  **0.278** — *below* the default — while `word_similarity('Dolo 650',
+  'Dolo650Tab15s')` is **0.455** and `similarity('AMOXYCLAV 625 10S','Amoxyclav
+  625')` is **0.778**. The score is therefore the best of the name, the generic name
+  and the reversed `word_similarity`, at 0.35, which keeps `Dolo 650` and refuses
+  junk (0.000).
+- **Ranking and matching belong in SQL, and the pharmacy is not an argument**
+  (D-004/D-026). A `security definer` function is not subject to RLS, so every query
+  in it carries `pharmacy_id = get_my_pharmacy_id()` explicitly — the SQL test puts
+  a second tenant's identically named, identically embedded product in reach and
+  asserts it never appears.
+
+**Consequences:**
+
+- **An alias learned for one supplier does not answer the same printed text on
+  another supplier's bill.** The alias leg accepts a supplier-scoped row for *this*
+  supplier or a pharmacy-wide row (`supplier_id is null`). Two distributors
+  abbreviate differently, and a mapping learned from one is not evidence about the
+  other; what crosses suppliers is an alias recorded with no supplier. When the same
+  text arrives for a different supplier, the pharmacy-wide alias answers if there is
+  one and the text is otherwise read by trigram and vector.
+- **An embedding failure never fails a bill.** `match-product` degrades to alias and
+  trigram, says so in `meta.warnings`, and answers 200: the vector leg adds
+  candidates, and a matcher that returns an error page because the free-tier key is
+  busy (N-2) would be worse than one that suggests less for a moment.
+- **The vector leg only answers what the backfill has embedded**, and a candidate
+  below the floor is not a suggestion at all. Both are asserted with synthetic
+  768-dimension vectors (cosine 0.9987, 0.7071 and 0.5774 against a unit query) so
+  the test does not depend on the backfill having run.
+- **The 0.7 floor is provisional.** With no catalogue embedded yet there was nothing
+  to measure it against — text embeddings put unrelated short strings around 0.6–0.75
+  — so the backfill chunk re-tunes it against real vectors and records what it found.
+  The trigram threshold, by contrast, was measured before it was written.
+- **Candidates are built from named columns**, never `select *`: `products` carries
+  the 768-float embedding, and the SQL test asserts no payload contains it (D-027).
+  A deactivated product is never a candidate on any leg, including an exact name
+  match, because a receipt must not create stock for a discontinued product. The SQL
+  test's decoy is a deactivated product named *exactly* what the query says.
+- **Cost, stated:** the trigram leg evaluates `similarity()` per row of the caller's
+  catalogue, so its filter is not the `%` operator and the GIN trigram indexes do not
+  serve it. The vector leg is written as `order by distance limit n` with the floor
+  behind the limit, which is what lets the HNSW index from migration 00022 serve it;
+  the two are equivalent because the floor is monotone in distance.
+- Verified by `supabase/tests/phase5_match_products.sql` — 43 assertions, atomic and
+  self-rolling-back, covering the three legs, the supplier precedence, tenant
+  isolation, the payload's field list, the untrusted-input rules (a blank line keeps
+  its place, a malformed supplier id is "no supplier", a malformed embedding is "no
+  vector leg") and the function's own contract (`prosecdef`, `provolatile = 's'`,
+  a pinned `search_path`, no pharmacy in the signature, EXECUTE for `authenticated`
+  and not for `anon`).
+
+---
+
+## D-037 — The Embedding Convention Is a Database Function, and the Query Keeps Its Words
+
+**Date:** 2026-09-19
+
+**Status:** Active
+
+**Decision:** The catalogue text embedded into `products.embedding` is built by
+`product_embedding_text(name, generic_name, pack_size)` in the database — name, then
+generic name, then pack size, whitespace collapsed, empty parts omitted, `null` for
+a row with nothing to embed. The Edge Function asks for **`outputDimensionality:
+768`** explicitly and uses `RETRIEVAL_DOCUMENT` for catalogue text and
+`RETRIEVAL_QUERY` for an invoice line. The **query** text is the invoice text as
+printed, whitespace-collapsed, and deliberately **not** `normalize_product_name()`.
+
+**Rationale:** D-027 left the embedding's input text to this chunk and named the trap
+precisely: two conventions produce vectors that are not comparable, and the symptom is
+a matcher that ranks at random. The convention therefore lives where both users of it
+can reach it — the backfill embeds what the function returns, and any later re-embed
+of a catalogue row produces the same string by construction rather than by agreement.
+Building it in Deno instead would be two codebases agreeing by convention, which is
+what drifts.
+
+The query side is the opposite decision for a reason: `normalize_product_name()`
+exists to make two spellings *identical* for an exact alias comparison, and it does it
+by deleting everything that is not a letter or a digit — `Dolo650Tab15s` becomes one
+unbroken token, with the word boundaries the model reads gone. The vector leg's whole
+purpose is to cope with a supplier's own abbreviation, so the query keeps the words and
+only collapses whitespace.
+
+**Consequences:**
+
+- The dimension is a hard schema constant and is asked for per request: the model
+  emits 3072 unless told otherwise, and a 3072-element reply is refused by the parser
+  with a sentence naming both numbers rather than being silently dropped — a wrong
+  width means the request was ignored and every vector in the batch is incomparable.
+- A whole bill is embedded in **one** `batchEmbedContents` request, not one per line:
+  the free tier allows five requests a minute on the key the reader also uses (N-2),
+  and a twenty-line bill would otherwise spend twenty of them.
+- `_shared/gemini.ts` holds the one way a function posts to the model, so two
+  functions cannot describe the same provider failure in two dialects. It takes the
+  API key as an argument rather than reading it, which keeps it free of the Supabase
+  client and therefore testable with a stub `fetch` and no secret.
+  `ocr-purchase-bill` was deliberately **not** refactored onto it: it is deployed and
+  live-verified, and rewriting working wiring for tidiness risks a regression for no
+  behaviour. It should adopt it when it is next touched for another reason.
+- **The catalogue is still entirely unembedded** (`products.embedding is null` on
+  every real row), so the vector leg answers nothing in production until the backfill
+  runs. That is the next chunk, and `NULL` is its work list (D-027) — there is no
+  separate marker column.
+- Code under `supabase/functions/` stays language-core JavaScript (D-031).

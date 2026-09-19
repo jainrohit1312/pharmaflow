@@ -40,14 +40,16 @@ chat starts by reading the handoff files and ends by writing them.
    flutter test
    deno test supabase/functions
    deno check supabase/functions/ocr-purchase-bill/index.ts
+   deno check supabase/functions/match-product/index.ts
    ```
    (plus `supabase db push --dry-run` if migrations were added)
 
-   The two Deno lines are the Edge Functions' gates (added with N-3): `deno test`
-   type-checks and runs every function test it finds, and the `deno check` covers
-   what no test imports — the entry point and its wiring, which is exactly the
-   layer that cannot be exercised locally without a container. Verified from the
-   repository root; both need no Docker and no secrets.
+   The three Deno lines are the Edge Functions' gates (added with N-3): `deno test`
+   type-checks and runs every function test it finds, and there is one `deno check`
+   per entry point — those cover what no test imports, the entry point and its
+   wiring, which is exactly the layer that cannot be exercised locally without a
+   container. A new function adds a `deno check` line here and in the Makefile.
+   Verified from the repository root; all three need no Docker and no secrets.
 6. Output a numbered list of all files created/modified
 
 ---

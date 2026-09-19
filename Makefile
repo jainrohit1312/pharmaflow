@@ -54,11 +54,12 @@ test:
 	cd app && flutter test
 
 # The Edge Functions' gates (N-3). No Docker and no secrets: `deno test`
-# type-checks and runs every function test, and `deno check` covers the entry
-# point and its wiring, which no test imports.
+# type-checks and runs every function test, and one `deno check` per entry point
+# covers the wiring, which no test imports. A new function adds a line here.
 test-functions:
 	deno test supabase/functions
 	deno check supabase/functions/ocr-purchase-bill/index.ts
+	deno check supabase/functions/match-product/index.ts
 
 run:
 	cd app && flutter run -d windows
