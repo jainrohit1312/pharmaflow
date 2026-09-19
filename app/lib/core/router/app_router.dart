@@ -23,6 +23,7 @@ import 'package:app/features/expenses/presentation/expenses_screen.dart';
 import 'package:app/features/inventory/presentation/expiry_calendar_screen.dart';
 import 'package:app/features/inventory/presentation/inventory_screen.dart';
 import 'package:app/features/ledger/presentation/ledger_screen.dart';
+import 'package:app/features/notifications/presentation/notifications_screen.dart';
 import 'package:app/features/onboarding/presentation/onboarding_pharmacy_screen.dart';
 import 'package:app/features/products/presentation/products_detail_screen.dart';
 import 'package:app/features/products/presentation/products_form_screen.dart';
@@ -315,6 +316,15 @@ final appRouterProvider = Provider<GoRouter>((ref) {
             path: Routes.expenses,
             name: 'expenses',
             builder: (context, state) => const ExpensesScreen(),
+          ),
+          // A top-level utility, not a child of any module: notifications come
+          // from every domain (D-048). Declared after the parameterised purchase
+          // and returns routes for the same reason as `expenses` - nothing here
+          // can match a prefix of another destination.
+          GoRoute(
+            path: Routes.notifications,
+            name: 'notifications',
+            builder: (context, state) => const NotificationsScreen(),
           ),
           GoRoute(
             path: Routes.settings,

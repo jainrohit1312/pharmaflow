@@ -1,8 +1,8 @@
 # PharmaFlow — Progress Tracker
 
 **Last Updated:** 2026-09-19
-**Current Phase:** Phase 5 IN PROGRESS — **Chunk C complete (C1 matcher, C2 app seam + alias learning + suggestions, C3 backfill + measured floor)**, and **Chunk D part 1 of 2 done**: `low_stock_products()` and `expiring_batches()` are live and answer against the real catalogue. Next: **Chunk D part 2** — `send-notification`, the in-app list and the Dart seams (`context/chat3i-opening-prompt.md`), then Phase 6
-**Overall Status:** Phases 0-4 done and gated; Phase 5 has its database substrate, three deployed and live-verified Edge Functions, a bill that reads and saves end to end, a matcher that suggests and learns, a backfilled catalogue with a measured similarity floor, and its alert sources — 493 Flutter tests, 92 Deno tests
+**Current Phase:** Phase 5 IN PROGRESS — **Chunk D complete**: `send-notification` is deployed and live-probed, the in-app `/notifications` list and the dashboard unread widget are built (D-048), the two alert sources are rendered live, and `NotificationService` has its Phase 5 meaning. Next: **Chunk E — the chatbot** (`chat-sql-agent`, the last Phase 5 function), then Phase 6
+**Overall Status:** Phases 0-4 done and gated; Phase 5 has its database substrate, four deployed Edge Functions (three live-verified against their provider, one live-probed below the credential), a bill that reads and saves end to end, a matcher that suggests and learns, a backfilled catalogue with a measured similarity floor, its alert sources, and the notification function and inbox — 544 Flutter tests, 129 Deno tests
 
 ---
 
@@ -15,7 +15,7 @@
 | 2 | Purchase + Inventory + Batch Tracking | COMPLETE | 2026-09-18 | 2026-09-18 |
 | 3 | Sales/POS + Returns + GST Billing | COMPLETE | 2026-09-18 | 2026-09-18 |
 | 4 | Ledger + Payments + Reports | COMPLETE | 2026-09-18 | 2026-09-19 |
-| 5 | AI OCR + Smart Matching + Notifications | IN PROGRESS (C1, C2, C3 complete; Chunk D next) | 2026-09-19 | - |
+| 5 | AI OCR + Smart Matching + Notifications | IN PROGRESS (A–D complete; Chunk E — the chatbot — next) | 2026-09-19 | - |
 | 6 | Testing + Deployment + Documentation | PENDING | - | - |
 
 ---
@@ -51,15 +51,16 @@
 
 ### Backend (Supabase Hosted)
 
-- 27 migrations applied, all idempotent (`supabase migration list`: 27/27 local
+- 28 migrations applied, all idempotent (`supabase migration list`: 28/28 local
   and remote match)
 - 24 tables and 2 views (`product_stock`, `batch_status`), RLS enforced on every
   business table; migration 00022 added `device_tokens`, `notification_logs`, the
   `products.embedding` column and the private `purchase-bills` storage bucket
   (00019-00021 added one table, `invoice_counters`, and no view), 00023 added
   the two matching functions, 00024 the alias-learning function, 00025 the
-  backfill pair, 00026 the re-tuned vector floor, and 00027 the two alert sources
-  — none of those five added a table, a column or a view
+  backfill pair, 00026 the re-tuned vector floor, 00027 the two alert sources,
+  and 00028 `queue_notification` — none of those six added a table, a column or
+  a view
 - Helper functions: `get_my_pharmacy_id()`, `get_my_role()`,
   `normalize_product_name()` (identity and scope); the automation layer
   (`ledger_auto_entry_*`, `stock_*`, `write_audit_log`, `set_updated_at`,
@@ -69,12 +70,14 @@
   (`product_embedding_text`, `match_products`, `learn_product_aliases`,
   `products_to_embed`, `set_product_embeddings`); and the alert sources
   (`low_stock_products`, `expiring_batches`)
-- **Three Edge Functions deployed**: `ocr-purchase-bill` (chunk B1, verified against
-  the live model), `match-product` (chunk C1) and `backfill-embeddings` (chunk C3,
-  verified live). `supabase/functions/_shared/` carries errors, the JSON envelope +
-  CORS, the caller-scoped client, base64, the shared Gemini poster (`gemini.ts`) and
-  the embedding convention (`embedding.ts`). **92 Deno tests** are gates (**N-3
-  resolved**), and `make test-functions` runs them plus a `deno check` per entry point
+- **Four Edge Functions deployed**: `ocr-purchase-bill` (chunk B1, verified against
+  the live model), `match-product` (chunk C1), `backfill-embeddings` (chunk C3,
+  verified live) and `send-notification` (chunk D part 2, live-probed: it answers
+  `skipped` naming the missing `WHATSAPP_TOKEN` and writes both rows). `supabase/functions/_shared/`
+  carries errors, the JSON envelope + CORS, the caller-scoped client, base64, the
+  shared Gemini poster (`gemini.ts`) and the embedding convention (`embedding.ts`).
+  **129 Deno tests** are gates (**N-3 resolved**), and `make test-functions` runs them
+  plus a `deno check` per entry point
 - Indexes and triggers per migration: `set_updated_at` on every business table,
   and every stock and ledger effect attached as a trigger rather than left to a
   client (D-013, D-023)
@@ -94,13 +97,17 @@
 - GoRouter with auth redirects
 - Theme (light/dark, teal seed)
 - Widgets: AppButton, AppTextField, AppScaffold, LoadingView, ErrorView
-- 6 Freezed models: Pharmacy, Profile, Supplier, Customer, Product, ProductBatch
+- 7 Freezed models: Pharmacy, Profile, Supplier, Customer, Product, ProductBatch,
+  AppNotification (plus `NotificationLog`/`DeviceToken`, and the plain classes the
+  RPC envelopes are read into)
 - Auth flow: splash -> login -> register -> dashboard -> signout
 - Dashboard shell responsive (NavigationBar mobile / NavigationRail desktop)
 - The Phase 5 surfaces: the bill reader (`features/purchase_ocr/`, which now also
   suggests catalogue products per line, records what the human confirmed, and
-  survives a re-read), the verify-and-save flow, and the notifications seam
-  (`features/notifications/`, Chunk D's)
+  survives a re-read), the verify-and-save flow, and the notifications feature
+  (`features/notifications/`, Chunk D) — the `/notifications` list screen with its
+  two live alert sections, the dashboard unread card, and `AppNotification` /
+  `LowStockProduct` / `ExpiringBatch` models over one repository
 
 ### Platform Support
 
@@ -116,7 +123,7 @@
 | ID | Issue | Severity | Plan |
 |---|---|---|---|
 | W-1 | Windows build fails (STL1011 — `<experimental/coroutine>` deprecated in VS 2026) | Medium | Fix in Phase 6 via `windows/CMakeLists.txt` |
-| D-1 | 5 manual Providers remain (service stubs + router) | Low | Convert to `@riverpod` when the respective features are built |
+| D-1 | 4 manual Providers remain (router + the other service stubs) | Low | Convert to `@riverpod` when the respective features are built. **Chunk D closed one**: `notificationServiceProvider` is codegen now (D-050) |
 | T-1 | `dart run custom_lint` SDK language version notice (cosmetic) | Low | Wait for upstream analyzer fix |
 | A-1 | `anonKey` deprecated in supabase_flutter 2.17 | Low | Migrate to `publishableKey` in Phase 6 |
 | I-1 | The low-stock list reads at most `InventoryRepository.lowStockScanLimit` (500) candidate rows and decides `total_qty < min_stock_level` in Dart, because PostgREST cannot compare two columns. A catalogue past that bound would silently omit rows. **D-part-1 built the server-side answer** (`low_stock_products()`, D-047 — same `<` rule, same shortfall, tenant-scoped, asserted by `phase5_alerts.sql`); what is left is switching the inventory screen onto it | Low | Switch `InventoryRepository.lowStock` to the RPC (the alert list already reads it), and delete the Dart comparison and its scan bound |
@@ -126,7 +133,7 @@
 | T-3 | The ledger screen's entries failure path is only reachable on a **first** read: while no party is selected the entries provider holds an empty page, so a failure after a party is chosen keeps that empty page and reports itself through a SnackBar rather than replacing the body. A user who cannot load a party's ledger therefore has no retry control until they navigate away and back | Low | Either treat "no party selected" as no value rather than an empty page, or give the SnackBar a retry action |
 | T-4 | `sale_return_form_screen.dart` has two paths that cannot run: the bill picker's `'Choose a bill'` validator, and `if (saleId == null) _report('Choose the bill the goods were sold on.')`. The submit button is disabled while no bill is chosen (`onPressed: isSaving \|\| saleId == null ? null : _save`) and the picker offers no clear affordance, so `_save` never sees a null bill | Low | Either drop the dead branches or make the button live and let the validator speak, so the two do not have to be kept in step |
 | T-5 | `sale_return_form_screen.dart`'s bill picker renders `sales.value ?? const <Sale>[]`, so "the sales list is still loading" and "this pharmacy has no sales" look identical — an empty, disabled dropdown with no spinner and no explanation | Low | Distinguish the two the way the ledger's party picker does, or read the sales provider's `AsyncValue` states explicitly |
-| N-1 | Push delivery is not wired: `device_tokens` stays empty and `NotificationService.getFcmToken()` returns `null`. Phase 5 dispatches over WhatsApp/Email and shows the in-app list; the Firebase project, the web service worker, the VAPID key and the registration call are Phase 6's (D-029) | Medium | Phase 6, which owns the deploy target the credentials must be registered against |
+| N-1 | Push delivery is not wired: `device_tokens` stays empty and `NotificationService.getFcmToken()` returns `null`. Phase 5 dispatches over WhatsApp/Email and shows the in-app list; the Firebase project, the web service worker, the VAPID key and the registration call are Phase 6's (D-029). **Chunk D settled the app-side meaning**: `init()`/`showLocal()` complete and `getFcmToken()` answers `null` behind a seam (D-050), and `send-notification` is deployed and live-probed as far as a missing credential allows (D-049) | Medium | Phase 6, which owns the deploy target the credentials must be registered against |
 | N-2 | The Gemini key is on a **free tier: 5 requests per minute**, and a burst is shed as `503 UNAVAILABLE` rather than `429`, so a busy counter (or a double-tapped retry) meets "the reader is busy" with no queue behind it. `ocr-purchase-bill` makes one attempt and reports it as retryable on purpose (D-032); the app retries once, visibly (D-033) | Medium | A paid tier, or a deliberate retry-once policy with a visible waiting state — decide before the OCR flow meets a real counter |
 | N-4 | A deployed function's `console.error` is only visible in the Supabase dashboard: CLI 2.113.0 has no `functions logs` subcommand (only list/delete/download/deploy/new/serve) and there is no container to serve one locally. Debugging a function is therefore a deploy-and-probe cycle | Low | Accept it and probe deliberately (D-031 records the practice), or find a log path for the CLI version in use |
 | N-5 | `product_aliases`' unique index is `(pharmacy_id, supplier_id, normalized_name)` with `supplier_id` nullable and **no `NULLS NOT DISTINCT`**, so two rows for one printed text coexist when neither names a supplier — Postgres treats NULLs as distinct. `ProductsRepository.addAlias`'s doc says re-adding text "re-points the alias … instead of failing … which is what the unique key is for" (`app/lib/features/products/data/products_repository.dart:451`, upserting on that target at `:484`), and migration 00015's own comment says NULL-supplier rows "never conflict" (`20260918000015_phase2_extras.sql:353`). Both cannot be true: the second manual alias with no supplier **inserts a duplicate** rather than updating. C2 leaves it exactly as it is: `learn_product_aliases` (00024) writes a NULL-supplier row with an explicit update-then-insert so a *learned* alias converges, but the index, `addAlias` and migration 00015's comment are untouched, and the OCR path names a supplier anyway — so a learned alias is normally supplier-scoped. Both SQL tests assert the coexistence rather than hiding it | Low | Phase 6: make the index expression `(pharmacy_id, coalesce(supplier_id, '00000000-0000-0000-0000-000000000000'::uuid), normalized_name)` or add `NULLS NOT DISTINCT` (PG 15+), then reconcile the two comments above |
@@ -218,13 +225,149 @@ Changing any pin above requires explicit user approval (see DECISIONS.md D-007).
 
 ---
 
+## Chat 4 Progress — Chunk D (PART 2 of 2): the notifications themselves [DONE, live-probed]
+
+The half of Chunk D that part 1 deliberately left: `send-notification` and the app
+side of the in-app inbox. It ends with the function deployed and probed live, the
+list screen and the dashboard widget built, and the gates green.
+
+### What part 2 delivered
+
+**`supabase/migrations/20260919000028_phase5_queue_notification.sql`, applied.** One
+function and its grant — no table, no column, no view, no trigger. The brief guessed
+00028 would most likely be unused; it is one RPC instead of two PostgREST inserts:
+
+- **`queue_notification(p_payload jsonb) → {log_id, notification_id}`** — `volatile
+  security definer`, opening **one attempt in one transaction**: the
+  `notification_logs` row (`status='queued'`, `provider` null, `created_by` = the
+  caller) and, when `notify_user_id` is present, the `notifications` row it points at.
+  That is D-024's rule applied to the pair that points at each other. Because definer
+  skips RLS, the `notifications` insert policy's own rule is **restated by hand** —
+  `user_id = auth.uid() or pharmacy_id = get_my_pharmacy_id()` — and the SQL test
+  asserts a colleague from another pharmacy is refused. The tenant comes from
+  `get_my_pharmacy_id()`, and a `pharmacy_id` in the payload is ignored (the test
+  sends one and asserts it does not land). Refusals are `check_violation` (23514)
+  with a sentence, which the handler maps to `invalid_request` and the app shows
+  verbatim.
+- **The settle is deliberately not in it.** The provider call cannot be inside a
+  transaction, so the sequence is **queue → call → settle** and `queued` means "we
+  started"; the settle is one tenant-scoped `update` with the caller's own token. A
+  settle that fails leaves the row `queued` and answers 500 — the one non-200 that
+  follows a queued attempt.
+
+**`supabase/tests/phase5_notifications.sql`** — **32 PASS / 0 FAIL of 33
+assertions**, atomic and self-rolling-back: the pair and the link between them, the
+`queued` state with no provider, the in-app row's payload (`type` defaulting to
+`message`, `title` falling back to the subject, `data` carrying the dispatch context
+with no null keys), the option to write no in-app row, the caller-scoped tenant, a
+cross-tenant recipient refused, four guard sentences each writing nothing, the body
+stored verbatim (edge newline and all), the settle path under RLS both ways, and the
+function's own contract. Two assertions had to move to `postgres` to be worth
+anything: RLS answers 0 for another user's `notifications` rows even when they exist,
+so "nothing was written elsewhere" is only an assertion without it in the way.
+
+**`supabase/functions/send-notification/`** (`index`, `deps`, `handler`, `providers`,
+`handler_test`, `providers_test`) — deployed, `verify_jwt` on, acting as the caller.
+**37 of the 129 Deno tests are its own.** No provider call is inside a transaction and
+nothing throws from it: a refusal, an unreachable provider and a missing secret are
+results, each settled into the log row. The two provider posters are separate
+functions because the two APIs disagree about where the id lives (WhatsApp: the URL
+names the sender and the body carries the id; SendGrid: the body names the sender and
+a **header** carries the id), and the token travels in an `Authorization` header in
+both — never in a URL, which is where a provider's own request log would keep it.
+
+**The app side** (new `features/notifications/`, `data` + `application` +
+`presentation`):
+
+- `NotificationsRepository` — the inbox (newest first), marking one read, and the two
+  alert RPCs. Nothing filters by tenant and one thing filters by nothing at all:
+  `notifications` is *user-addressed* (`user_id = auth.uid()`), so the policy is the
+  scope and a client-side tenant filter would be a weaker second copy of it.
+- `NotificationsController` (mark-read optimistic and reversible, `ref.mounted` after
+  the await) and `unreadNotificationCount`; `lowStockAlerts` / `expiringAlerts` as two
+  providers, so one failing section does not blank the other.
+- `AppNotification` (Freezed) and `LowStockProduct` / `ExpiringBatch` (plain classes —
+  an RPC envelope, the `ReportSummary` precedent). The row model is **not** called
+  `Notification`: that is Flutter's own abstract widget class.
+- `NotificationsScreen` — three sections, each with its own three sentences
+  (loading / empty / failed+retry), and the alerts rendered live from the RPCs, never
+  re-derived in Dart (D-047). At zero the inbox says *No notifications yet* rather
+  than looking like the failure state (T-5's lesson).
+- `NotificationSummaryCard` — the dashboard widget, tappable, always visible, with
+  **four** readings rather than two: checking, could not check, nothing new, and N.
+- The twelfth shell destination after Reports and before Settings, `inBottomBar:
+  false`, plus the `Routes.shellPaths` path (D-048) — `dashboard_shell_test.dart`,
+  `widget_test.dart` and the shell's own agreement test all moved with it.
+- `NotificationService`: `UnavailableNotificationService` completes all three methods,
+  `getFcmToken()` answers `null`, and `showLocal()` prints one debug line rather than
+  dropping a message silently (D-050).
+
+### The probe, and what it could not prove
+
+One invocation, with a session from the app (N-7), as the owner:
+
+```
+POST send-notification  {channel: whatsapp, to: +910000000000, recipient_type: user,
+                         notify_user_id: <the owner>, type: probe, title: …}
+  -> 200 {"log_id":"60ee8b0c-34a8-4c27-b4ca-aa7250a5785e",
+          "notification_id":"7a909348-01f1-49fa-8e63-2681bd165a72",
+          "status":"skipped","provider":null,
+          "error":"This function is missing its WHATSAPP_TOKEN secret."}
+```
+
+Both rows landed and the link holds: the log row `status='skipped'` with `provider`
+and `provider_message_id` null, `channel='whatsapp'`, `recipient_type='user'`,
+`destination='+910000000000'`, `body` verbatim, `created_by` = the caller, and
+`notification_id` pointing at an **unread** `notifications` row in the caller's own
+inbox, same pharmacy, `data = {dispatch_channel: whatsapp, recipient_type: user}` —
+with no `recipient_id` key, which is `jsonb_strip_nulls` doing what the SQL test
+asserted. The two tables held one row each before the probe and one after it.
+
+**What it cannot prove, and does not claim to:** that any WhatsApp message was
+delivered. There is no Meta account, no SendGrid key and no recipient number in this
+phase (D-046), so what is proven is the wiring *below* the credential. The two rows
+are permanent on purpose — `notification_logs` has no delete policy — and they are
+marked as probes in both the body and, for the in-app one, the title.
+
+### A finding worth keeping
+
+**Riverpod 3's build-retry is a loading state that carries the error.** A read that
+threw and is being retried is exposed as `AsyncLoading(error: …, retrying)`, and
+`AsyncValue.whenData`'s loading branch returns a plain `AsyncLoading` — dropping the
+error. The dashboard card would have said *Checking…* for ever instead of *Could not
+check*, which is the one lie D-048 forbids. It is mapped by hand now (value → error →
+loading) and D-051 records it. The same retry also makes a *read count* useless as
+evidence: three assertions of the form `expect(reads, 2)` after tapping a retry were
+written, failed, and were removed in favour of asserting the state the retry produced.
+
+### Gate output at the end of part 2
+
+```
+supabase db push --dry-run                     -> Would push: 20260919000028_… ; then "Remote database is up to date"
+supabase db push --yes                         -> Applying migration …00028…, Finished
+supabase db query --file supabase/tests/phase5_notifications.sql
+                                               -> SUMMARY: 32 PASS / 0 FAIL of 33 assertions
+deno test supabase/functions                   -> ok | 129 passed | 0 failed
+deno check ×4 (ocr, match, backfill, send-notification) -> clean
+dart format lib test                           -> 404 files, 0 changed
+dart run build_runner build --delete-conflicting-outputs -> wrote outputs, no errors
+dart run custom_lint / flutter analyze         -> No issues found!
+flutter test                                   -> +544: All tests passed!
+```
+
+**Flutter tests: 493 → 544** (51 new: the models, the repository's parsers, the
+controller, the screen, the dashboard card, the service). **Deno tests: 92 → 129.**
+Migration count: **28/28 local and remote.**
+
+---
+
 ## Chat 4 Progress — Chunk D (PART 1 of 2): the alert sources [DONE]
 
-Chunk D is the notification half of Phase 5, and it is being built in two parts: the
-**alert sources** (this, done) and the **notifications themselves**
-(`send-notification`, the in-app list, the Dart seams — briefed in
-`context/chat3i-opening-prompt.md`, not started). The split is the one the earlier
-chunks used: the server side first, gated on its own.
+Chunk D is the notification half of Phase 5, and it was built in two parts: the
+**alert sources** (part 1, done — below) and the **notifications themselves**
+(`send-notification`, the in-app list, the Dart seams — part 2, done above). The split
+is the one the earlier chunks used: the server side first, gated on its own.
+
 
 ### What D-part-1 delivered
 
@@ -1710,34 +1853,36 @@ flutter test               -> +113: All tests passed!
 
 ## Next Action
 
-**Phase 5 Chunk D, part 2 of 2 — the notifications themselves.** Part 1 (the alert
-sources, `low_stock_products` + `expiring_batches`) is done and its SQL test asserts
-25 numbers; what is left is the half with the credentials:
+**Phase 5 Chunk E — the chatbot** (`chat-sql-agent`, the last Phase 5 function), then
+Phase 6. Chunk D is done, deployed and probed (above); what remains in Phase 5 is the
+one function the master plan has always listed and no chunk has built. Its brief is
+`context/chat3j-opening-prompt.md`, and **D-026 is the constraint that shapes it**:
+the chatbot answers through **RPCs, never free-form SQL** — a model that writes SQL
+against a live tenant is a model that can be talked into writing it somewhere else,
+and the parameterised RPC is the boundary that makes the question safe. Concretely:
 
-- **`send-notification`** (`verify_jwt` on, acting as the caller): `{channel, to,
-  subject?, body, recipient_type, recipient_id?, notify_user_id?}` in; a
-  `notification_logs` row written for **every** attempt — sent, refused and
-  not-configured alike — and, when the message belongs in someone's in-app list, the
-  `notifications` row too, written with the log row in one transaction. A missing
-  `WHATSAPP_TOKEN`/`SENDGRID_API_KEY` is `not_configured` **naming the secret**, and
-  the log row still lands (`status = 'skipped'`), because "we tried and could not" is
-  what an operator needs to see. No automatic dispatch of the alerts in Phase 5
-  (D-046).
-- **The in-app list**: `notifications` (user-addressed, `read_at` for the read
-  state — migration 00008), newest first, with the two alert sections rendered live
-  from the RPCs above (D-047: an alert is a question, a notification is an event).
-  **Placement is decided (D-048)**: a top-level `/notifications` shell destination —
-  a twelfth rail entry after Reports and before Settings, `inBottomBar: false` so the
-  bottom bar stays at four, a drawer entry, and a dashboard widget showing the unread
-  count that stays visible at zero ("No new notifications"). The `AppScaffold` bell
-  is Phase 6's.
-- **The Dart seams and `NotificationService`'s Phase 5 meaning**: `getFcmToken()`
-  stays `null`, and `init()`/`showLocal()` get an honest definition without a push
-  SDK (D-029) — a platform capability behind a seam and a fake (D-035).
-- **What cannot be live-verified**: any actual WhatsApp or email delivery (no
-  account, no key, no recipient numbers). The function must be built so the missing
-  secret is a sentence rather than a crash, and its tests must run with no secret at
-  all — the whole handler through stubs, the way `match-product`'s does.
+- `_shared/gemini.ts` already carries the poster (`postGemini`) and the error
+  vocabulary, and D-030 named the vision model in code; the chatbot's **text** model
+  should be named the same way and its answer verified live, because a model name is
+  the thing that rots.
+- **D-047 already reserved the two aggregates for it** — "one implementation, three
+  callers (the list, the inventory screen when it is next touched, the chatbot)" —
+  and `report_summary()` is the other aggregate it should reach for. Any question
+  that needs a *new* aggregate is a migration, not a SQL string.
+- The tenant is never an argument (D-004): the RPCs take it from
+  `get_my_pharmacy_id()`, so the function presents the caller's JWT and nothing else.
+- Phase 5's own discipline applies unchanged: 200-vs-error is decided by whether
+  anything was recorded, a refusal is a sentence rather than a crash, and the tests
+  run with **no secret at all** — the whole handler through stubs.
+- Its Dart surface (a chat screen, probably under `/reports` or its own top-level
+  destination) has not been decided, and chunk E should decide it rather than inherit
+  it: D-048 chose a top-level destination for notifications on the grounds that
+  notifications span every domain, and a chatbot that answers questions about stock,
+  sales and ledgers spans them just as widely.
+
+**What chunk D deliberately did not do**, so chunk E does not assume it: nothing
+dispatches the alerts (D-046 — Phase 6 owns the credentials and the triggers), no push
+is registered (N-1), and the two rows the probe wrote stay in production on purpose.
 
 Then **Phase 6**: testing, deployment, documentation — the Windows build fix (W-1),
 the README refresh (R-1), push registration (N-1), the SendGrid/WhatsApp credentials

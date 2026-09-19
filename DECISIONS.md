@@ -1791,3 +1791,161 @@ convenience the rail entry already provides.
 - The route is declared in `app_router.dart` as a shell child, and the health of the
   arrangement is asserted by the shell's existing destination test rather than by a
   new one.
+
+---
+
+## D-049 — Once the Queue Row Lands, a Dispatch Answers 200
+
+**Date:** 2026-09-19
+
+**Status:** Active
+
+**Decision:** `send-notification` records **every** attempt, and a well-formed
+request is answered with **200** carrying the attempt's settled outcome:
+`{log_id, notification_id, status: 'sent'|'failed'|'skipped', provider, error}`. The
+`{error: {code, message}}` envelope is reserved for a request that recorded
+**nothing** — a bad method or body, an unauthenticated caller, an account with no
+pharmacy, a database failure — and for the one case where the attempt was recorded
+but its outcome could not be, which is a 500 that leaves the row `queued`. A missing
+secret is therefore **not** a 503: it is `status: 'skipped'`, `provider: null`, and a
+sentence naming the secret.
+
+**Rationale:** Three parts, and the first one is the whole shape of the function.
+
+- The sequence is **queue → call → settle**, and `queued` is the state that means
+  "we started". The provider call cannot be inside a transaction — a transaction held
+  open across a round trip to Meta or SendGrid is a lock held for as long as their
+  latency — so the log row is written first, and it is written **always**, including
+  when a secret is missing. A refusal that leaves no trace is the one outcome this
+  function must not have: the row is what makes "we told them" answerable (D-046), and
+  "we tried and could not" deserves a row as much as "we sent it" does.
+- Once that row exists the request *did* happen and is on the record. A 5xx would say
+  "nothing happened" about an attempt that is filed, and it would invite exactly the
+  retry loop that cannot succeed — a retry cannot conjure a secret.
+- So the caller reads one field (`status`) instead of inferring "outcome" versus
+  "failure" from the HTTP class, and the app's one envelope reader keeps its meaning
+  (D-042).
+
+**Consequences:**
+
+- **The contract gained two fields the table requires.** `notifications.type` is
+  `NOT NULL` and the proposed contract had no field for it, so the request takes an
+  optional `type` (default `'message'`), and an optional `title` that falls back to
+  the subject — the only headline-ish thing an email has, and `null` for a WhatsApp
+  message. `data` carries `dispatch_channel`, `recipient_type` and `recipient_id`,
+  which is the column's documented purpose (deep-linking / channel rendering).
+- **A `notify_user_id` outside the caller's pharmacy is refused**, in SQL, by the
+  `queue_notification` RPC — because a `SECURITY DEFINER` function skips RLS, so the
+  `notifications` insert policy's own rule (`user_id = auth.uid() or pharmacy_id =
+  get_my_pharmacy_id()`) is restated by hand. An id that is present but not a uuid is
+  **refused rather than dropped**, which is where this differs from the matcher's
+  supplier id: it decides *whether a row is written at all*.
+- A provider that refuses, or that cannot be reached, is `failed` with the provider's
+  own words — WhatsApp nests them at `error.message`, SendGrid at `errors[0].message`,
+  and both are read. A provider that is not configured is `skipped` with
+  `provider: null`, because nobody was reached and recording a vendor would be
+  claiming one was.
+- **Four secrets, and the first one missing is the one named**: `WHATSAPP_TOKEN`,
+  `WHATSAPP_PHONE_NUMBER_ID`, `SENDGRID_API_KEY`, `SENDGRID_FROM_EMAIL`. The Graph
+  API version is a named constant (`WHATSAPP_API_VERSION` overrides it without a
+  redeploy) for D-030's reason: Meta retires versions on a schedule, and a version
+  change should be one line rather than a search.
+- The body is capped at Meta's 4096-character text ceiling and refused as `too_large`
+  rather than sent to fail at the provider.
+- **`queue_notification` is one transaction; the settle is not.** The RPC writes the
+  log row and, when `notify_user_id` is present, the `notifications` row it points at
+  — which is D-024's rule (a payment and its ledger row) applied to the pair that
+  points at each other. The settle is an ordinary tenant-scoped `update` made with the
+  caller's own token, and it needs no definer help. A settle that fails leaves the row
+  `queued`, which is what `queued` is for, and answers 500 — the one non-200 that
+  follows a queued attempt, and the honest answer for a caller who does not know
+  whether the message went.
+- **One live invocation, with a session from the app (N-7):**
+
+  ```
+  POST send-notification  {channel: whatsapp, to: +910000000000, recipient_type: user,
+                           notify_user_id: <the caller>, type: probe, title: …}
+    -> 200 {"log_id":"60ee8b0c-…","notification_id":"7a909348-…","status":"skipped",
+            "provider":null,"error":"This function is missing its WHATSAPP_TOKEN secret."}
+  ```
+
+  Both rows landed: the log row `status='skipped'` with `provider` and
+  `provider_message_id` null, `channel='whatsapp'`, `recipient_type='user'`,
+  `destination='+910000000000'`, `created_by` = the caller, pointing at an **unread**
+  `notifications` row in the caller's own inbox, same pharmacy. The two rows are
+  permanent on purpose — `notification_logs` has no delete policy — and the tables held
+  nothing else before the probe or after it.
+- **What the probe cannot prove, and does not claim to:** that any WhatsApp message
+  was delivered. There is no Meta account, no SendGrid key and no recipient number in
+  this phase (D-046), so what is proved is the wiring *below* the credential: the
+  request contract, the queue → call → settle order, the `skipped` settling, and the
+  two rows.
+
+---
+
+## D-050 — `showLocal` Is a No-Op That Says So in Debug
+
+**Date:** 2026-09-19
+
+**Status:** Active
+
+**Decision:** `NotificationService` keeps its three methods, and Phase 5's
+implementation — `UnavailableNotificationService`, still behind
+`notificationServiceProvider`, which is codegen now — **completes all three**.
+`init()` is a no-op (the hook Phase 6's push registration fills), `getFcmToken()`
+answers `null`, and `showLocal()` completes **without showing anything**, printing one
+line in a debug build naming the title and the reason.
+`UnimplementedNotificationService` is deleted.
+
+**Rationale:** D-029 leaves the app with no push SDK and no local-notification plugin
+for this whole phase, so the seam's only honest job is to say what a caller can rely
+on. A method that throws `UnimplementedError` forces every call site to special-case
+this phase and then to be edited again in Phase 6, for a state the app is *designed*
+to run in. A method that silently does nothing is worse in a different way: nothing in
+the app calls `showLocal` yet, so its first caller will be Phase 6's push handler —
+and a handler that believed a notification had appeared when it had not is a bug that
+would look like the platform's fault. The debug line is one `kDebugMode` branch (a
+`const`, so it compiles out of a release build), and a test asserts it.
+
+**Consequences:**
+
+- `getFcmToken()`'s `null` is documented as an **answer rather than a failure**, so
+  N-1's arrival changes the implementation behind the provider and not one call site.
+- The hand-written provider is gone, which closes one of D-1's five manual providers:
+  `notificationServiceProvider` is codegen now, like every other provider here.
+- The service is still not injected anywhere — nothing in Phase 5 needs it — so the
+  seam exists and the fake waits. Phase 6's push handler is its first caller.
+
+---
+
+## D-051 — A Derived `AsyncValue` Is Mapped by Hand, Because a Retry Is a Loading State That Carries the Error
+
+**Date:** 2026-09-19
+
+**Status:** Active
+
+**Decision:** `unreadNotificationCount` — the dashboard card's count — does **not**
+use `AsyncValue.whenData`. It maps the inbox's state explicitly, in the order
+**value → error → loading**.
+
+**Rationale:** Riverpod 3 re-runs a provider whose build threw, on its own backoff,
+and **during that retry the state is an `AsyncLoading` that still carries the error**
+(`AsyncLoading(error: …, retrying)`). `whenData`'s loading branch returns a plain
+`AsyncLoading`, which drops it — so the dashboard card would have said *Checking…* for
+ever instead of *Could not check*. That is precisely the lie D-048 forbids: the card
+must never report something it does not know, and "we could not count" is not "there is
+nothing". Found by the card's own test, not by review.
+
+**Consequences:**
+
+- The order is deliberate and load-bearing: a count that exists is the last good
+  answer and is *used*; a failure with no count is reported; only then is it genuinely
+  "not counted yet".
+- **A test in this project asserts a state, not a read count.** Riverpod 3's retry
+  makes a read count blind to *why* a provider was re-read, so `expect(reads, 2)` after
+  tapping a retry button is not evidence of anything — three assertions were written
+  that way in this chunk and removed. What the retry button did is proven by the state
+  it produced.
+- Any future provider that derives an `AsyncValue` from another should do the same,
+  and a widget test that expects an error state should expect the error's *sentence*
+  rather than pump a fixed number of frames.

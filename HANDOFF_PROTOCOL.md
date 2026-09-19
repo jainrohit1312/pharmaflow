@@ -42,6 +42,7 @@ chat starts by reading the handoff files and ends by writing them.
    deno check supabase/functions/ocr-purchase-bill/index.ts
    deno check supabase/functions/match-product/index.ts
    deno check supabase/functions/backfill-embeddings/index.ts
+   deno check supabase/functions/send-notification/index.ts
    ```
    (plus `supabase db push --dry-run` if migrations were added)
 

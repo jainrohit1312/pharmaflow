@@ -110,6 +110,12 @@ const List<_NavDestination> _navDestinations = <_NavDestination>[
     inBottomBar: true,
   ),
   _NavDestination(
+    path: Routes.notifications,
+    label: 'Notifications',
+    icon: Icons.notifications_none,
+    selectedIcon: Icons.notifications,
+  ),
+  _NavDestination(
     path: Routes.settings,
     label: 'Settings',
     icon: Icons.settings_outlined,
@@ -246,7 +252,7 @@ class _DashboardShellState extends State<DashboardShell> {
             // the rail's default, which is "no labels" - what extended mode
             // wants.
             labelType: isExpanded ? null : NavigationRailLabelType.all,
-            // Eleven destinations do not fit a short window: without this the
+            // Twelve destinations do not fit a short window: without this the
             // rail overflows rather than scrolling.
             scrollable: true,
             // `leading` is pinned above the scroll area by default, so the

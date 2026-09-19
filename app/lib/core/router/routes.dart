@@ -198,6 +198,20 @@ abstract final class Routes {
   /// is not what this needs either.
   static const String expenses = '/reports/expenses';
 
+  /// The in-app notification list, and the alerts beside it.
+  ///
+  /// A **top-level destination** rather than a child of any one module (D-048):
+  /// notifications span every domain - a low-stock alert is inventory, an expiry
+  /// alert is stock, a payable reminder is a purchase, a payment receipt is sales -
+  /// so nesting the list under whichever module was chosen first would make the
+  /// others look like second-class answers. It sits with `/settings` as a
+  /// cross-cutting utility instead.
+  ///
+  /// Phase 6 and later nest *under* it: dispatch settings and notification
+  /// preferences go at `/notifications/…`, the way `/reports/expenses` does, so the
+  /// rail keeps highlighting this destination.
+  static const String notifications = '/notifications';
+
   /// Application and pharmacy settings (Phase 1 placeholder).
   static const String settings = '/settings';
 
@@ -226,6 +240,7 @@ abstract final class Routes {
     returns,
     ledger,
     reports,
+    notifications,
     settings,
   ];
 }

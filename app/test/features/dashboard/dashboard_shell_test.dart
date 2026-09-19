@@ -24,6 +24,10 @@ const List<String> _labels = <String>[
   'Returns',
   'Ledger',
   'Reports',
+  // The twelfth destination, and the only one that is a cross-cutting utility
+  // rather than a domain: it sits after Reports and before Settings (D-048), and
+  // is not one of the four the bottom bar carries.
+  'Notifications',
   'Settings',
 ];
 
@@ -114,6 +118,19 @@ void main() {
       DashboardShell.destinationPaths,
       Routes.shellPaths,
       reason: 'the rail and the router must agree on what exists',
+    );
+  });
+
+  testWidgets('the twelfth destination stays out of the mobile bottom bar', (
+    tester,
+  ) async {
+    await _pumpShell(tester, size: const Size(500, 900));
+
+    expect(DashboardShell.bottomBarPaths, hasLength(4));
+    expect(
+      DashboardShell.bottomBarPaths.contains(Routes.notifications),
+      isFalse,
+      reason: 'the bar carries the four trading surfaces and no more (D-048)',
     );
   });
 

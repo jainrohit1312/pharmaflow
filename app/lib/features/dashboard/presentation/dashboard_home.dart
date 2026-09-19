@@ -8,6 +8,7 @@ import 'package:app/core/widgets/error_view.dart';
 import 'package:app/core/widgets/loading_view.dart';
 import 'package:app/data/models/profile.dart';
 import 'package:app/features/auth/application/auth_controller.dart';
+import 'package:app/features/notifications/presentation/notification_summary_card.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -92,6 +93,10 @@ class _DashboardContent extends ConsumerWidget {
             ),
           ),
         ),
+        const SizedBox(height: 16),
+        // Always present, and at zero it says so (D-048): a notification surface
+        // that hides when it has nothing to say is one the user forgets exists.
+        const NotificationSummaryCard(),
         const SizedBox(height: 16),
         Text('Overview', style: theme.textTheme.titleMedium),
         const SizedBox(height: 8),
