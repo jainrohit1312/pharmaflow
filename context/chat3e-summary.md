@@ -104,9 +104,9 @@ context/chat3e-summary.md · context/chat3f-opening-prompt.md      (this handoff
 ```
 
 **Modified:** `Makefile` and `HANDOFF_PROTOCOL.md` (the gate block now has one
-`deno check` per entry point), `PROGRESS.md` and `DECISIONS.md` (D-036, D-037, and
-open items **N-5**, **N-6**, **N-7**). **No Dart file changed**, and
-`dart format lib test` still reports 0 changed.
+`deno check` per entry point), `PROGRESS.md` and `DECISIONS.md` (D-036, D-037,
+D-038 and open items **N-5**, **N-7** — **N-6 was withdrawn** as a false positive).
+**No Dart file changed**, and `dart format lib test` still reports 0 changed.
 
 ## Verification evidence
 
@@ -143,12 +143,16 @@ and that is C3's first task (D-030: a live call is the verification).
   otherwise (a local-stack-only setting, D-003), and confirming by hand is an
   auth-weakening write to production that the guard rightly refuses. Probe with a
   session from the app, or approve one `update auth.users … email_confirmed_at`.
-- **N-6 (Medium)** — a live function response carries **no
-  `access-control-allow-origin`**, for `match-product` and for the already-deployed
-  `ocr-purchase-bill` alike (measured with and without an `Origin` header; the
-  other three CORS headers do come through). Not a C1 regression, but the browser
-  is the first platform (D-005) and no function response has ever been read by a
-  real browser — C2's first Chrome run is where it gets settled.
+- **N-6 (WITHDRAWN — it was my measurement error, not a defect).** It claimed a live
+  function response carries **no `access-control-allow-origin`**. It does: the
+  deployed gateway answers with `Access-Control-Allow-Origin: *` (capitalised) on the
+  error paths of both functions and on the preflight, while passing the other three
+  CORS headers through lowercased. The original check used a **case-sensitive
+  `findstr`**, which hid exactly the one header being looked for. Re-measured with
+  full header dumps on the 401, the 400 and the OPTIONS preflight; **no code changed
+  and neither function was redeployed**. D-038 records the contract and the recipe
+  (`findstr /I`). A browser run when C2 first calls the matcher from Chrome is still
+  the pleasant confirmation, not a pending risk.
 - **N-5 (Low, pre-existing, untouched)** — `product_aliases`' unique index treats
   NULL suppliers as distinct, so `addAlias` with no supplier inserts a duplicate
   rather than updating, contrary to its own doc comment. The OCR path always names

@@ -122,7 +122,6 @@
 | N-2 | The Gemini key is on a **free tier: 5 requests per minute**, and a burst is shed as `503 UNAVAILABLE` rather than `429`, so a busy counter (or a double-tapped retry) meets "the reader is busy" with no queue behind it. `ocr-purchase-bill` makes one attempt and reports it as retryable on purpose (D-032); the app retries once, visibly (D-033) | Medium | A paid tier, or a deliberate retry-once policy with a visible waiting state — decide before the OCR flow meets a real counter |
 | N-4 | A deployed function's `console.error` is only visible in the Supabase dashboard: CLI 2.113.0 has no `functions logs` subcommand (only list/delete/download/deploy/new/serve) and there is no container to serve one locally. Debugging a function is therefore a deploy-and-probe cycle | Low | Accept it and probe deliberately (D-031 records the practice), or find a log path for the CLI version in use |
 | N-5 | `product_aliases`' unique index is `(pharmacy_id, supplier_id, normalized_name)` with `supplier_id` nullable and **no `NULLS NOT DISTINCT`**, so two rows for one printed text coexist when neither names a supplier — Postgres treats NULLs as distinct. `ProductsRepository.addAlias`'s doc says re-adding text "re-points the alias … instead of failing … which is what the unique key is for" (`app/lib/features/products/data/products_repository.dart:451`, upserting on that target at `:484`), and migration 00015's own comment says NULL-supplier rows "never conflict" (`20260918000015_phase2_extras.sql:353`). Both cannot be true: the second manual alias with no supplier **inserts a duplicate** rather than updating. Chunk C does not touch it — the OCR path always names a supplier, so a learned alias is never NULL-scoped — and the SQL test asserts the coexistence rather than hiding it | Low | Phase 6: make the index expression `(pharmacy_id, coalesce(supplier_id, '00000000-0000-0000-0000-000000000000'::uuid), normalized_name)` or add `NULLS NOT DISTINCT` (PG 15+), then reconcile the two comments above |
-| N-6 | A live function's response does **not** carry `access-control-allow-origin`, even though `_shared/response.ts` sets it to `*`: measured on 2026-09-19 against both `match-product` and the already-deployed `ocr-purchase-bill` (a 400 and a 204 both return the other three CORS headers and not that one, with and without an `Origin` request header), so the platform is either stripping it or replacing it from its own allow-list. It is **not** a chunk C regression — both functions behave identically — but the browser is the first platform (D-005) and B2b was never exercised on a device, so the browser-side read of a function response has never actually been proven | Medium | Settle it the moment C2's screen calls the matcher from Chrome: if the browser blocks the read, the fix is the platform's CORS/origin configuration (Dashboard → Functions → allowed origins), not `response.ts` |
 | N-7 | A throwaway probe account cannot sign in on the hosted project: signup returns `confirmation_sent_at` with no session and the password grant answers `email_not_confirmed`, while `config.toml` says `enable_confirmations = false` (a local-stack-only setting, D-003). Setting `auth.users.email_confirmed_at` by hand is the obvious workaround and is correctly refused by the auto-mode guard as an auth-weakening write to production | Low | Probe with a session obtained from the app (`owner@pharmaflow.dev`), or decide deliberately whether "Confirm email" should be off in the hosted project the way the repo believes it is |
 
 **Resolved in chat 4 (continued): N-3.** The Edge Functions' tests are gates now:
@@ -131,6 +130,25 @@ type-checks and runs all 81) and a `deno check` per entry point
 (`ocr-purchase-bill/index.ts`, `match-product/index.ts` — the entry points and
 their wiring, which no test imports), and `make test-functions` runs all three.
 None of them needs Docker or a secret.
+
+**Resolved in chat 4 (C1 follow-up): N-6 — it was a false positive.** It claimed a
+live function response carried no `access-control-allow-origin`. It does: the
+deployed gateway answers with `Access-Control-Allow-Origin: *` (capitalised) on the
+error paths of **both** functions and on the preflight, and passes the other three
+CORS headers through lowercased. The finding was a **case-sensitive `findstr`** on
+my side — `findstr /C:` matches case, and only that one header comes back
+capitalised, so the filter hid exactly it. Re-measured with the full header dump:
+
+```
+POST match-product      {"lines":["Dolo 650"]}   -> 401  Access-Control-Allow-Origin: *
+OPTIONS match-product   (preflight)              -> 204  Access-Control-Allow-Origin: *
+POST ocr-purchase-bill  {"path":42}              -> 400  Access-Control-Allow-Origin: *
+```
+
+No code changed and neither function was redeployed: `_shared/response.ts` already
+sets the four headers on every path (`json`/`okJson`/`failJson`/`preflight`), and the
+gateway replaces the origin one with its own. See **D-038** for the contract and the
+verification recipe (`findstr /I`, or `Select-String`).
 
 **Resolved this chat:** P-1 / chat2b O-1 (editing an `ordered` purchase silently
 returned it to `draft` — now reverts only when the lines change, and says so:
@@ -267,15 +285,18 @@ Residue after the SQL test: 0 ZZTEST products, 0 ZZTEST pharmacies, 0 aliases,
   free-tier embedding quota are therefore still unverified live**, which is exactly
   the class of thing D-030 says a live call has to settle. It is the first task of
   C3 (whose function makes embedding calls anyway), or one approved confirm call.
-- **N-6 was found here and is recorded**: a live function response carries no
-  `access-control-allow-origin`, for `match-product` and for the already-deployed
-  `ocr-purchase-bill` alike.
+- **A CORS scare that was a misreading, recorded so nobody chases it**: N-6 claimed
+  a live response carried no `access-control-allow-origin`. It does — the gateway
+  emits it capitalised and my case-sensitive filter hid it. Re-measured with full
+  header dumps on the 401, the 400 and the preflight; **no code changed and nothing
+  was redeployed**. D-038 carries the contract and the recipe.
 
 ### Decisions added
 
 D-036 (the match is one RPC, ranked by score with the leg as attribution, both
-thresholds measured) and D-037 (the catalogue-text convention is a database
-function, and the query text keeps its word boundaries).
+thresholds measured), D-037 (the catalogue-text convention is a database
+function, and the query text keeps its word boundaries) and D-038 (CORS is emitted
+by the platform on every path; the verification must not be case-sensitive).
 
 ## Chat 4 Progress — Chunk B2b: the verify screen and the save [DONE]
 

@@ -1239,3 +1239,68 @@ only collapses whitespace.
   runs. That is the next chunk, and `NULL` is its work list (D-027) — there is no
   separate marker column.
 - Code under `supabase/functions/` stays language-core JavaScript (D-031).
+
+---
+
+## D-038 — CORS Is Emitted by the Platform on Every Path, and the Check Must Not Be Case-Sensitive
+
+**Date:** 2026-09-19
+
+**Status:** Active
+
+**Decision:** The CORS headers stay exactly as `supabase/functions/_shared/response.ts`
+already sets them — `access-control-allow-origin: *`, an allow-headers list of
+`authorization, apikey, content-type, x-client-info, x-supabase-api-version`, `POST,
+OPTIONS` and a day of max-age — emitted from the one `json()` helper that
+`okJson`, `failJson` and `preflight` all build their responses with, so a success, a
+refusal and a preflight cannot disagree. **No code was changed and neither function
+was redeployed for this**: the reported defect (open item N-6, "a live function
+response carries no `access-control-allow-origin`") does not exist. A CORS
+verification on this platform must be **case-insensitive**, and the canonical check is
+
+```
+curl -s -D - -o nul -X POST "<functions url>/<name>" -H "Origin: http://localhost:3000" ... | findstr /I "access-control"
+```
+
+**Rationale:** The finding was a **measurement artifact of my own**, and the shape of
+it is worth recording because it is a trap anyone would fall into: the deployed
+gateway answers with `Access-Control-Allow-Origin` **capitalised** while passing the
+other three headers through lowercased (they are the ones written in the function).
+`findstr /C:` is case-sensitive, so a filter for the lowercase spelling printed the
+three lowercase headers and silently hid the one header being looked for — which
+reads exactly like "the platform strips it". Two full header dumps settle it, on both
+functions and on every response path:
+
+```
+POST    match-product     {"lines":["Dolo 650"]}  -> 401  Access-Control-Allow-Origin: *
+OPTIONS match-product     (preflight)             -> 204  Access-Control-Allow-Origin: *
+POST    ocr-purchase-bill {"path":42}             -> 400  Access-Control-Allow-Origin: *
+```
+
+Each of those carries the header **exactly once** — the gateway replaces the
+function's own copy rather than adding a second, which is the outcome that matters,
+because a duplicated `Access-Control-Allow-Origin` is rejected by a browser while
+looking perfectly healthy in a raw dump.
+
+**Consequences:**
+
+- **A reported CORS failure is not to be "fixed" by re-adding headers that are already
+  there** — and it was not. Redeploying two working functions to change nothing would
+  have put a false cause in the log and cost two deploy cycles; the honest repair for
+  a false positive is the record.
+- The 200 path could not be exercised live while C1 shipped, because a 200 needs a
+  pharmacy-scoped session and a throwaway account cannot sign in on this project
+  (N-7). It is covered structurally rather than empirically: `okJson` and `failJson`
+  both call the same `json()` with the same header map, and `failJson` is measured
+  live on both functions.
+- The allow-headers list is deliberately **not** narrowed to the four names a minimal
+  spec would suggest. `supabase-js` sends `x-client-info` and `x-supabase-api-version`
+  on an `functions.invoke`, and a browser preflight that does not echo them refuses
+  the request before it is sent — so the list is a client-compatibility surface, not a
+  decoration.
+- The last word is still a browser: when C2's screen first calls the matcher from
+  Chrome, that run confirms it end to end. Until then the evidence is the three header
+  dumps above.
+- Generalise it: on this host, a negative result produced by a **filtered** command is
+  not evidence until the filter has been re-run case-insensitively. Verified — the
+  same class of error as reading a truncated output as a missing line.

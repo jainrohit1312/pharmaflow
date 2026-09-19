@@ -209,7 +209,7 @@ The backfill needs to:
 
 | ID | Issue | Why it matters here |
 |---|---|---|
-| N-6 | A live function response carries **no `access-control-allow-origin`** (measured on both deployed functions) | C2 is the first code that will read a function response from a browser. If Chrome blocks it, that is a platform CORS setting, not `response.ts` — and it affects the OCR screen too |
+| N-6 | **Withdrawn as a false positive** (D-038): the claim that a live response carried no `access-control-allow-origin` was a case-sensitive `findstr` on my side. The header is emitted on every path, on both functions — verify with `findstr /I` | Nothing to fix. C2's first Chrome run is the pleasant confirmation |
 | N-7 | Hosted auth requires email confirmation, so a throwaway probe cannot sign in; confirming by hand is refused | A live matcher probe needs a session from the app |
 | N-2 | The Gemini key is free-tier (5 requests a minute), shared with the reader | One embedding call per bill is deliberate (D-036/D-037). Do not add a second |
 | N-5 | `product_aliases`' unique index treats NULL suppliers as distinct | Leave it; the OCR path always names a supplier. Recorded for Phase 6 |
