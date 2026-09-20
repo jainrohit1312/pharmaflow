@@ -2699,6 +2699,46 @@ retail idea, a markup is a package-service one, and a transfer has neither.
   pharmacy rather than trusted from the payload, as `checkout_sale` already does for
   `pharmacy_id` (`20260918000019_phase3_sale_automation.sql`).
 
+**Built 2026-09-20 (Phase 7a — the durable layer).** The owner's patient-first billing brief
+superseded three details above and settled two things this entry had left open. Recorded here
+rather than in a new number, because it is the same decision:
+
+- **A package sale's patient fields are REQUIRED, not optional.** The table above says `package`
+  carries patient fields *optional* ("the hospital already holds the patient"); the brief says
+  **patient name and mobile/contact are required "under this updated request"**, for traceability,
+  while the hospital stays the debtor. The brief wins: the RPC refuses a package bill without both.
+- **The column list, against the twelve recorded above.** What is built on `sales`: `sale_type`,
+  `hospital_id`, `admission_id` (**new** — the episode an IPD bill posts its credit to, D-074),
+  `patient_name`, `patient_mobile`, `patient_address`, `doctor_id`, `doctor_name`,
+  `hospital_reference`, `from_location`, `to_location`, `transfer_reason` (**named** — the brief
+  calls it `reason`, which on a table that also carries a cancelled sale does not say what it is a
+  reason for), `transfer_note_no`, and `idempotency_key` (**new**, so a retried submit cannot ring
+  up a second bill). `patient_id` is still not a column; `hospital_reference` is still the
+  hospital's own OPD/IPD number.
+- **`discount_above_limit_request_id` is DEFERRED, not built.** It is a real foreign key to
+  `approval_requests` (D-071), which does not exist, so the twelve-column list above is eleven
+  columns plus one that cannot be created yet. The above-10% discount is accordingly **refused by
+  the server**, naming Phase 6.5c in the message, rather than recorded against a soft id. This is
+  the deliberate choice the brief sanctions: "If required approval infrastructure is absent,
+  complete independent work and explicitly identify the prerequisite."
+- **`hospitals` and `pharmacies.hospital_id` are built (D-068), pulled forward from 7b**, because an
+  IPD bill has to name a hospital and prefill the pharmacy's own — and **`doctors` is built**
+  (D-072), because a Schedule H/H1/X bill has to name a prescriber. No share is computed; that half
+  of D-068 stays 7b.
+- **A sale's identity and pricing rules apply to a payload that NAMES its type.** `checkout_sale`
+  keeps its signature and treats an untyped payload as the legacy counter sale it has always been —
+  same money, same optional customer — so the app in the field and the committed Phase 3/4/5 tests
+  are untouched. One seam, documented in the migration; when the new flow is the only caller, the
+  legacy branch is dead code and deleting it is one migration.
+- **Patient identity is answered (D-074); the rate basis is answered (D-075).** The two open
+  questions this entry recorded — whether a counter patient is a customer row, and what "purchase
+  rate" means — were settled by the same brief and are recorded there.
+
+**Files:** `supabase/migrations/20260920000033_phase7a_hospitals_and_doctors.sql`,
+`…000034_phase7a_patients_and_admissions.sql`, `…000035_phase7a_sale_types_and_allocations.sql`,
+`…000036_phase7a_sale_write_paths.sql`, and `supabase/tests/phase7a_sale_types.sql` (53
+assertions). **Nothing was pushed to the hosted project** — the brief forbids it in this task.
+
 ---
 
 ## D-068 — Hospital Profit Sharing, and the Doctor Is Not a Partner
@@ -2837,6 +2877,20 @@ sells through.
   answerable: *"0% share — nothing owed"* is a different answer from *"no rule"*, and the two
   must not render the same way.
 
+**Built 2026-09-20 (Phase 7a), partially.** `hospitals` and `pharmacies.hospital_id` now exist
+(migration `20260920000033`) — **pulled forward from 7b** because an IPD bill has to name a hospital
+and prefill the pharmacy's own (D-067). One deviation from the column list above is recorded rather
+than silent: `hospitals` carries **`pharmacy_id`**, because a table with no tenant column cannot use
+the project's per-tenant policy template (D-004), and `hospital_profit_sharing` is
+`(pharmacy_id, hospital_id)` anyway — so a hospital is a row of the pharmacy that sits in it.
+
+**Still not built, and this is the whole of 7b:** `hospital_profit_sharing` itself, every
+percentage, `sale_items.cost_basis_per_unit` / `cost_total` / `gross_profit`, and each settlement
+RPC. **No share is computed anywhere in the tree.** The GST basis question this entry flagged as
+needing to be settled alongside N-14 was settled by the owner on 2026-09-20 for pharmacy sales
+(D-075); the profit-sharing formula itself is unchanged by it, since the share is on GST-inclusive
+gross profit.
+
 ---
 
 ## D-069 — Expense Categories Become One Fixed List, and the Monthly P&L Is One RPC
@@ -2929,6 +2983,28 @@ owner is charging the hospital. The risk-bearing is what the markup is *for*.
   model `chori`/breakage on a package sale as a *hospital* liability, and so the `breakage`
   expense category (D-069) is understood to be the pharmacy's own cost.
 
+**Revised 2026-09-20, and built (Phase 7a).** The column this entry recorded as `numeric(5,2)
+default 20` is now **nullable with no default**, and a package sale is **refused** while it is NULL
+— the refusal names the setting. This resolves the open item the entry raised against itself ("A
+not-null default of 20 makes 'unconfigured' indistinguishable from 'intentionally 20%'"): the
+owner's Phase 7a brief says *"Package cost basis, markup and tax treatment must be explicitly
+configured/resolved; do not silently guess unresolved settings,"* which is the same rule the
+catalogue already applies to a GST slab (migration 00031) and D-068 applies to a 0% share.
+**The four real values are still the owner's to supply** (open item 1 above is unchanged): until
+then the package flow exists, validates, and refuses.
+
+Two further facts from the build, both flagged rather than settled:
+
+- **The rate is resolved server-side as landed cost where recorded, else the batch's purchase
+  rate.** `product_batches.landed_cost_per_unit` was added in migration 00016 and opening-stock
+  batches (Phase 6.5a) have none, so a fallback is required for the catalogue that exists. **Which
+  of the two is the intended basis stays an open item** — it multiplies every package rate, and the
+  entry above already names the two candidates as different numbers.
+- **A package line needs its product's GST slab recorded, and is refused without one.** The entry
+  above records the tax treatment as unstated; the owner settled it for pharmacy sales only
+  (D-075). Rather than apply a B2C counter default to a B2B hospital supply, the RPC refuses the
+  line and names what is missing.
+
 ---
 
 ## D-071 — A Discount Above 10% Needs the Owner's Approval, and the Sale Carries the Approval's Id
@@ -2990,6 +3066,23 @@ month's discounts be reconciled against the approvals that authorised them.
   holding a live customer, so the refusal's wording and what the POS does with the half-built
   bill matter as much as the rule. A Phase 7 UI decision, noted here so it is not discovered at
   the counter.
+
+**Built 2026-09-20 (Phase 7a) — everything except the approval itself.** `sales.discount_above_limit_request_id`
+is **not created**: this entry makes it a real foreign key to `approval_requests`, that table does
+not exist, and a foreign key to a missing target cannot be written (the same conclusion the Phase 7
+record reached). What *is* built is the half that protects the control:
+
+- **`checkout_sale` refuses any line above 10%** on a counter or IPD sale, with a message naming
+  Phase 6.5c. The cap is therefore enforced **server-side, on the single write path** (D-023), not
+  suggested by a screen — and there is no client-side cap, no fake approval modal and no soft id.
+- **The cap is per line**, which is the reading this entry recorded as its own open question
+  ("what the 10% is a percentage of"): `sale_items.discount_percent` is a percentage of the line's
+  own rate, and the check applies to each line's own percent.
+- **The protected branch is not production-ready, stated plainly:** an above-limit discount cannot
+  be recorded at all yet, so a cashier who needs one is blocked until Phase 6.5c exists. That is the
+  blocking behaviour the owner confirmed, applied before the approval it depends on — the safe
+  direction, since the alternative is recording unapproved discounts.
+- **Package and transfer sales have no discount concept and are refused any non-zero discount.**
 
 ---
 
@@ -3237,4 +3330,155 @@ mapped that null to "back to the offer", which is why nothing was on screen to s
 - **A picker that never answers now shows a spinner rather than looking untouched.** The offer's
   button is busy while the dialog is open and while the chosen file is being read, and every step
   that can fail lands on the failure card with the step named.
+
+---
+
+## D-074 — A Patient Is a Customer With a Generated Code, and an Admission Is the Episode Its Credit Lives In
+
+**Date:** 2026-09-20
+
+**Status:** Active (built — Phase 7a; migrations `20260920000033`/`…000034`)
+
+**Decision:** Patient identity lives on the existing **`customers`** table, not in a second master,
+and IPD credit lives on a new **`admissions`** table. Specifically:
+
+- **`customers` gains the patient fields**, all nullable: `patient_code`, `date_of_birth`,
+  `age_years`, `age_months`, `sex` (male/female/other), `guardian_name`, `guardian_phone`, `notes`.
+  `phone` stays the contact. **No unique constraint on the phone** — families share numbers — and
+  the unique key is on the **code**, per pharmacy.
+- **`patient_code` is generated server-side**, `PT-00001`, from a per-pharmacy `patient_counters`
+  row bumped inside the inserting transaction — the same shape as `invoice_counters` /
+  `next_sale_invoice_no()` (00019). The table has RLS enabled and **no policy**, so no client can
+  mint or reuse a code; `next_patient_code()` is revoked from every role.
+- **A mobile number is normalised to one canonical form** (`normalize_indian_mobile()`: strip
+  +91/spaces/dashes/leading zero, require 10 digits starting 6-9, else NULL) and stored
+  canonicalised on write. A landline is not accepted as a mobile. A **guardian's** number satisfies
+  the contact requirement for a child or dependant, and is stored in `phone` when the patient has
+  none of their own, so the family is findable by the number they gave.
+- **`save_patient()` is the only patient write path** and it never edits an existing master: given a
+  `patient_id` it verifies tenancy and returns the row **unchanged** (assigning only a missing
+  code); given no match it registers one. **It does not deduplicate by name or mobile** — the brief
+  forbids it — with one bounded exception: an identical name+mobile registered by this pharmacy
+  **within ten minutes** returns the same row, because that is a double-submit retry rather than a
+  second person. Candidates are shown to the operator (`search_patients`) instead.
+- **`search_patients()`** matches the canonical mobile (and normalises the *stored* value too, so a
+  pre-7a "+91 98…" row is still found), a patient-code prefix, and a case-insensitive name;
+  tenant-scoped, paginated, maximum 50 rows, and it returns each patient's **active admission
+  count** so the details step knows whether it must ask which episode.
+- **`admissions`** is one row per episode: `customer_id`, `hospital_id`, `admission_no` (the
+  hospital's own IPD/OPD number — D-067's `hospital_reference`; **unique per pharmacy**),
+  `admitted_on`, `discharged_on`, `ward`, `bed`, `treating_doctor_id` + `treating_doctor_name`
+  (snapshot), `status` (`active`/`discharged`), `notes`. `save_admission()` finds-or-creates by
+  (patient, number), filling descriptive fields only where the stored row has none. **One patient
+  has many admissions and their balances never mix.**
+- **`save_admission` and a named prescriber converge the `doctors` master** (D-072) case-
+  insensitively, so a name typed three ways is one row and three spellings on three bills.
+
+**Rationale:** the brief's rule — *"Use the existing customers identity where compatible; do not
+create a competing patient master without demonstrating why it is necessary"* — and nothing
+demonstrated a reason for a second identity table, so there is none. This also answers the question
+**D-067 left open in its own text** (whether a counter sale finds-or-creates a customer or stays
+denormalised): it finds one. The two identities the brief insists on keeping apart stay apart —
+`customers.id` / `patient_code` name the **patient**, `admissions.admission_no` names the **episode
+at the hospital** — and `hospital_reference` remains the external number, never a patient UUID.
+
+**Consequences:**
+
+- **Every pharmacy sale now carries a patient, which changes what the ledger posts.** A counter or
+  IPD sale is attached to a customer, so `ledger_auto_entry_sale()` (00019) posts the receivable and,
+  when money was taken at the counter, its payment — where a walk-in with no customer posted
+  nothing. A walk-in is therefore no longer representable on a typed sale: the brief requires a name
+  and a mobile, and forbids anonymous walk-ins. The **legacy** payload keeps the old behaviour
+  (D-075's seam), so the app in the field is unaffected until the new flow ships.
+- **A package sale's debtor is a customer too** — the hospital's own account row — which is why a
+  package bill does not move the patient's personal balance: they are different `customer_id`s.
+- **`customers.patient_code` is NULL for every pre-7a row until it is used**, which is what
+  "registered before Phase 7a" looks like. It is never "patient zero", and nothing backfills it in
+  bulk: the phase is not allowed to rewrite existing rows.
+- **Updating a patient master stays whatever `customers`' own RLS allows.** The brief wants
+  master edits permission-controlled; today `customers` has the standard tenant-wide
+  four-policy template, so a cashier can edit a master row. Narrowing that is a **recorded
+  follow-up**, deliberately not done here: it would change an existing policy for an existing
+  screen, which is not this slice's scope.
+- **A discharged admission refuses new charges**; a returned patient with two open episodes must
+  choose, and `patient_admissions()` returns them active-first.
+- Tests: `supabase/tests/phase7a_sale_types.sql` proves the code generation, the canonical mobile,
+  the guardian rule, the retry window, the shared-number case, the untouched master, lookup by all
+  three keys, admission find-or-create, and the discharged refusal.
+
+---
+
+## D-075 — A Pharmacy Sale's Rate Is Tax-Inclusive, and a Balance Is Charges Less Allocated Money
+
+**Date:** 2026-09-20
+
+**Status:** Active (built — Phase 7a; migrations `20260920000035`/`…000036`)
+
+**Decision:** For a pharmacy sale the rate on a line **is the price the customer pays**, and GST is
+**extracted** from it rather than added to it. The owner settled the basis this way on 2026-09-20
+(*"MRP is GST-inclusive: ₹105 at 5% means ₹100 taxable + ₹5 GST, not ₹110.25"*), and it decides six
+things:
+
+- **The slab is the product's own** (`products.gst_percent`, read for the first time), **including a
+  recorded zero**, which always wins over any default. When no slab is recorded the line falls back
+  to **one named 5% POS default** (`pos_default_gst_percent()`), replacing the old blanket 12% for
+  pharmacy sales. **MRP is a ceiling**: a retail rate above it is refused.
+- **The money is `qty × rate − discount`, with the tax taken out of that**, so a bill's total is the
+  price on the shelf; `sub_total` (taxable) is `grand_total − tax_total`, which is the identity
+  `checkout_sale` has always used for the header — the header and the lines now agree by
+  construction. The two tax heads take the rounded half first and the remainder (D-057), so they
+  always add back to the tax charged.
+- **The client's tax figures are no longer trusted.** `gst_percent`, the four tax columns and the
+  totals are recomputed server-side from the product's slab and the pharmacy's own state; the
+  client's `rate` and `discount_percent` are validated inputs, not authority. The place of supply is
+  **derived**, defaulting to the pharmacy's own state, and a patient's address is never read as a tax
+  jurisdiction.
+- **The cap is enforced by refusal** (D-071): a discount above 10% on a counter or IPD line is
+  refused, naming Phase 6.5c.
+- **A balance is a server-side aggregate** (D-025): `outstanding = net charges − allocated
+  collections`, where net charges are posted charges less valid returns, and an **allocation** is
+  one row in the new `payment_allocations` (`sale_id` xor `admission_id`). `collect_payment()` takes
+  the receipt through `record_payment()` (D-024, so the ledger posting is unchanged) and writes its
+  allocations **in the same transaction**; allocations may total **less** than the receipt — the rest
+  stays an explicitly visible **unallocated deposit** — but never more. **Applying a deposit is not
+  a second receipt.**
+- **`ledger_auto_entry_sale()` was replaced to also allocate a counter settlement.** Without it, the
+  payment this trigger writes for a sale paid at the counter would settle nothing, and every paid
+  bill would read as unpaid once balances are computed from allocations.
+
+**Rationale:** the owner's instruction is explicit and the arithmetic follows from it. The reason
+the basis change is safe to make now rather than later: `product_batches.mrp` and `selling_rate`
+carry **no documented storage basis** in the tree (migration 00004's own comment covers only the
+table), so nothing was reinterpreted — a basis was chosen, the one the owner named, and written down
+here. Treating the rate as the price the customer pays also removes a contradiction the old code
+had: it defaulted the rate to MRP and then added tax on top, billing more than the printed MRP.
+
+**Consequences:**
+
+- **A payload that names no `sale_type` keeps the OLD behaviour entirely — money and identity both.**
+  This is the compatibility seam the brief's *"preserving legacy compatibility"* requires: the
+  shipped app and the committed Phase 3/4/5 SQL tests are untouched (all of them pass, re-run
+  against a database built from these migrations), and the new rules apply to the typed payloads the
+  new flow sends. **When the new flow is the only caller, the legacy branch is dead code and
+  deleting it is one migration.**
+- **Historical documents are untouched.** This is the write path only: no existing `sales`,
+  `sale_items`, invoice or ledger row is rewritten, and the purchase/GRN path keeps its own 12%
+  default.
+- **The app in the field and the new rules would disagree if it sent typed payloads** (it computes
+  12%-on-top). It does not, so there is no divergence today; the Flutter flow slice must send typed
+  payloads and compute on the same inclusive basis.
+- **N-14 is answered for pharmacy sales only.** A **package** line's tax treatment is *not* settled
+  by this: such a line needs its product's slab recorded and is **refused** without one, rather than
+  inheriting the counter's 5% default (D-070). A **transfer** carries **no GST** and no debtor at
+  all — its document is valued at cost, its `balance_due` is zero, and it needs a source, a
+  destination and a reason, with source ≠ destination (D-067).
+- **Idempotency is real, not aspirational:** `sales.idempotency_key` and `payments.idempotency_key`
+  are unique per pharmacy (partial indexes), so a retried submit or a retried collection returns the
+  original document instead of creating a second one.
+- **Nothing was pushed.** The migrations are written and verified locally; the hosted project is
+  untouched, as the brief requires.
+- Tests: `supabase/tests/phase7a_sale_types.sql` — the ₹105/@5% example, a zero slab, a missing
+  slab, the 10% boundary, the MRP ceiling, the prescription rule, the package markup refusal and
+  pricing, the transfer shape, idempotency, and the owner's worked example (800 charged − 100
+  returned − 400 allocated = **300 outstanding**, with a second admission keeping its own).
 

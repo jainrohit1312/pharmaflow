@@ -223,6 +223,20 @@ Phase 7b         →  hospital profit sharing
 Phase 7c         →  the reports
 ```
 
+**Built so far (2026-09-20) — Phase 7a's durable layer, and only that.** Four additive migrations
+(`20260920000033`…`…000036`) and `supabase/tests/phase7a_sale_types.sql` (53 assertions, 0 FAIL)
+carry: the `sale_type` enum and the `sales` columns (**eleven** of the twelve below — see D-067 on
+the deferred approval FK); `admissions` and the patient fields on `customers` with a server-generated
+patient code (**D-074**); the GST basis for a pharmacy sale, tax-inclusive with the product's own
+slab winning and one named 5% default (**D-075**); `payment_allocations` plus `collect_payment()`
+and the two balance readers; `hospitals` + `pharmacies.hospital_id` + `doctors` (pulled forward from
+§2 and §D-072); and `checkout_sale()` rewritten to price and validate per type — with a documented
+compatibility seam so a payload that names no `sale_type` behaves exactly as it did before.
+**Nothing is pushed to the hosted project, and no Flutter file changed**: the POS flow, the widgets
+and the keyboard contract are **not started**. **Not built, unchanged from the text below:**
+`hospital_profit_sharing`, every share and settlement RPC (§2 — 7b), the reports (§5 — 7c),
+`approval_requests` (6.5c), and the four markup percentages (§7 item 1).
+
 **HARD DEPENDENCY: Phase 7a depends on Phase 6.5c's approval infrastructure.** No soft
 reference and no client-invented id — `sales.discount_above_limit_request_id` is a **real
 foreign key** to `approval_requests(id)`, so it cannot be created until 6.5c's table exists
@@ -248,8 +262,8 @@ both subject to the 10% discount cap (D-071), both carrying a hospital share (D-
 |---|---|---|---|
 | `counter` — walk-in, hospital or outside patient | MRP − discount | **yes** | `patient_name` (**mandatory**), `patient_mobile` (**mandatory**), `patient_address` (optional), `doctor_name` (**mandatory for Schedule H/H1/X**) |
 | `ipd_admission` — an admitted patient | MRP − discount | **yes** | the counter fields **+** `hospital_reference` (OPD/IPD number, **mandatory**) |
-| `package` — the hospital buying for its package patients | purchase rate + `pharmacies.package_markup_percent` | **no** — the hospital is the *buyer* (D-070) | patient fields **optional** (the hospital has them); `hospital_reference` |
-| `transfer` — stock moving between locations | purchase rate, **no markup** | **no** | `from_location`, `to_location`, `reason`, `transfer_note_no` |
+| `package` — the hospital buying for its package patients | purchase rate + `pharmacies.package_markup_percent` | **no** — the hospital is the *buyer* (D-070) | patient name + mobile **required** (revised 2026-09-20, D-067 — traceability, while the hospital stays the debtor); `hospital_reference` |
+| `transfer` — stock moving between locations | purchase rate, **no markup** | **no** | `from_location`, `to_location`, `transfer_reason` (the brief's `reason`), `transfer_note_no` |
 
 An **IPD sale is not a package sale**: it is a retail-priced sale to an admitted patient. A
 transfer never leaves the owner's hands, so **no GST** is charged on it.
@@ -318,7 +332,16 @@ sale statement** (what the hospital owes) · doctor referral report (optional �
 settlement) · expense breakdown by category · counter sale bill (patient + doctor details) ·
 IPD sale bill (hospital reference) · package sale invoice (hospital format) · transfer note.
 
-### 6. GST — PENDING (compliance only; open item **N-14**)
+### 6. GST — ANSWERED for a pharmacy sale (D-075); the compliance question and the package treatment are still open (N-14)
+
+**Answered 2026-09-20 for a pharmacy sale (D-075), and this supersedes the instruction below for
+that case.** The owner's patient-first billing brief settles the basis: the rate on a line **is the
+price the customer pays** and GST is **extracted** from it (₹105 at 5% = ₹100 taxable + ₹5 tax), the
+**product's own slab wins including a recorded zero**, a missing slab falls back to **one named 5%
+POS default** (not the old blanket 12%), **MRP is a ceiling** on a retail rate, and
+`products.gst_percent` is read for the first time. What follows stays true only for the
+**compliance** reading and for a **package** line's treatment, which is still unstated (open item 5
+below).
 
 The owner said *"B2C sale hai to GST ka koi matlab nahi hai."* GST applies to retail pharmacy
 sales in India regardless of B2B/B2C; B2C only means no buyer GSTIN is needed. Three possible
@@ -328,7 +351,7 @@ meanings, and the answer decides the work:
 2. the pharmacy sits in a **hospital-exempt category** (needs a CA to confirm — rare);
 3. it is a **display choice only** (safe).
 
-**DO NOT change any GST logic until the owner answers.** The question to put to them:
+**DO NOT change any GST logic BEYOND what D-075 settles until the owner answers.** The question to put to them:
 
 > Kya aapka matlab hai:
 > (a) GST charge karni hai but bill par separate line item nahi dikhani?
@@ -358,8 +381,16 @@ it comes back "no GST on B2C", the tax columns carry zeros and the formula is un
    obvious later move, and choosing text now is what makes it a migration later.
 3. ~~**The above-10% discount flow: blocking or retroactive?**~~ **RESOLVED (owner, 2026-09-20):
    blocking** — the sale cannot be recorded until the approval exists (D-071).
-4. **Does an unconfigured pharmacy refuse a package sale?** `package_markup_percent` defaults
-   to 20, so "nobody set it" and "deliberately 20%" look identical (D-070).
+4. ~~**Does an unconfigured pharmacy refuse a package sale?**~~ **RESOLVED (2026-09-20, built):** it
+   **refuses**, and the column is now nullable with **no default** — the brief says *"do not silently
+   guess unresolved settings"*, which is the same rule the GST slab and a 0% share already follow
+   (D-070). The four real values are still the owner's to supply, and item 1 stands unchanged.
+5. **What a package sale multiplies, and what it charges tax on** — both still unstated, and both
+   multiply or apply to every package line. The rate is resolved as the batch's **landed cost**
+   where one is recorded and its **purchase rate** otherwise (the opening-stock catalogue has no
+   landed cost, so a fallback is required to keep the flow working); D-070 records the two
+   candidates as different numbers. A package line with **no recorded slab is refused** rather than
+   taxed at the counter's 5% default — a refusal, not an answer (N-15).
 
 **Estimated Context:** not yet estimated — Phase 7 has no chunk breakdown yet.
 
