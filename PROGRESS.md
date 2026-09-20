@@ -20,6 +20,87 @@
 
 ---
 
+## Recorded for Later Phases (not built)
+
+### Phase 7 — the business model
+
+**Revised three times on 2026-09-20. Nothing below is built.** The full requirement record is
+`MASTER_PLAN.md` → **Phase 7** (with **Phase 6.5** for the receiver, the approval RBAC and the
+Marg import). The decisions are **D-067** (four sale types), **D-068** (hospital profit
+sharing), **D-069** (expense categories), **D-070** (the package service markup), **D-071**
+(the discount cap and its approval) and **D-072** (the doctors master).
+
+#### The four sale types (D-067)
+
+| Type | Rate | Hospital share | Discount |
+|---|---|---|---|
+| `counter` — a walk-in, hospital or outside patient | MRP − discount | **yes** | capped at 10% (D-071) |
+| `ipd_admission` — an admitted patient | MRP − discount | **yes** | capped at 10% |
+| `package` — the hospital buying for its own package patients | purchase rate + `package_markup_percent` | **no** — the hospital is the *buyer* | n/a |
+| `transfer` — stock moving between locations | purchase rate, no markup | **no** | n/a |
+
+"**Pharmacy sale**" is the business's umbrella name for **counter + `ipd_admission`**. An IPD
+sale is **not** a package sale: it is a retail-priced sale to an admitted patient.
+
+#### The pharmacy ↔ hospital mapping, and the shares (D-068)
+
+| Pharmacy | Hospital | Share |
+|---|---|---|
+| Arihant Pharmacy | Rohit Kidney & Stone Hospital (Dr. Rohit Singhal) | **50%** |
+| Erika Prime Pharmacy | Govardhan Hospital | **60%** |
+| Medicotraders | Jain Hospital | **0%** |
+| Sudha Pharmacy | Pandey Hospital | **0%** |
+
+A pharmacy belongs to **exactly one** hospital — which is why `pharmacies.hospital_id` is a
+column and not a join table. Each share is a **dated** rule (`hospital_profit_sharing`), and
+these four values are what the Phase 7 seed writes.
+
+**0% is a value, not an absence.** Medicotraders and Sudha have a real 0% deal — no share
+transaction is written and the whole gross profit is the owner's. **Nothing may read a 0% rule
+as "no rule configured."**
+
+A hospital's share applies to **`counter` and `ipd_admission` sales only**; a package sale and
+a transfer carry none. The owner bears the expenses, and a hospital's share is **not** reduced
+by them. **The GST basis is settled (2026-09-20):** the share is calculated on **GST-inclusive**
+gross profit and the **owner bears the GST out of their own share** — an accepted business
+model, so the tax reduces the owner's net and never the hospital's share (D-068).
+
+#### The discount policy (D-071)
+
+On a counter or IPD sale the discount is **capped at 10%** without approval. Above 10% the
+staff **cannot apply it**: it must be requested and the **owner approves** it, through Phase
+6.5c's `approval_requests`. The sale carries `discount_above_limit_request_id`. Package and
+transfer sales have no discount concept. The flow is **blocking, confirmed 2026-09-20** — the
+sale cannot be recorded until the approval exists.
+
+**`approval_requests` does not exist yet, and Phase 7a cannot be built before Phase 6.5c
+lands:** `discount_above_limit_request_id` is a **real foreign key** to it, not a soft
+reference (D-071).
+
+**Doctors appear on sales for prescription compliance only and take no share** (D-072); a
+Schedule H/H1/X bill requires the prescriber's name.
+
+#### The sequence (owner, 2026-09-20)
+
+```
+Phase 6 chunk 4  →  the Vercel deploy            (where the project stands now)
+Phase 6.5a       →  the Marg import
+Phase 6.5b       →  the receiver app
+Phase 6.5c       →  the full approval RBAC, with the schema for every action type
+Phase 7a         →  the four sale types          (uses 6.5c's approval for the discount)
+Phase 7b         →  hospital profit sharing
+Phase 7c         →  the reports
+```
+
+**HARD DEPENDENCY: Phase 7a needs Phase 6.5c's approval infrastructure before it can be
+built.** 6.5c is one unified approval mechanism for every action that needs one — a sale edit,
+a purchase delete, a return, a stock adjustment, a discount above 10%, a customer or product
+edit. **Its shape so far:** action-type based — a table with an `action_type` enum and a
+`payload` jsonb. **The exact list of action types is still to come from the owner**, at 6.5c
+design time.
+
+---
+
 ## Environment (Current)
 
 | Item | Value |
@@ -163,6 +244,7 @@
 | N-11 | Phase 6's *deploy* work needs accounts, and the ones left do not exist yet: a Vercel project for the web app, and — for anything but sideloading — a Google Play developer account plus an upload keystore. The WhatsApp/SendGrid/Firebase credentials that dispatch (D-046), auto-send PO (D-052) and push (N-1) wait on are the same kind of thing: provider accounts nobody has registered. **Two of the three halves are no longer blocked**: the Android APK builds and ships for sideloading (D-061), and **the Vercel side is configured** — `app/vercel.json` plus `docs/DEPLOY_VERCEL.md` (D-063) — with the account in place and only the project import and the first deploy left. Nothing in the app blocks any of the rest | Medium | Import the repo into Vercel (Root Directory `app`, the two Supabase env vars) and run the first deploy, then do the credential work last |
 | N-12 | **A future Flutter upgrade will fail the Android build**, and say so only as advice: `flutter build apk --release` warns *"Your app uses the following plugins that apply Kotlin Gradle Plugin (KGP): mobile_scanner. **Future versions of Flutter will fail to build** if your app uses plugins that apply KGP."* `mobile_scanner` is pinned `^5.2.3`. Today it is a warning and the APK builds (verified 2026-09-19, D-061); the trap is that the failure arrives on a Flutter upgrade as an unrelated-looking Gradle error, in the same shape N-10 has for web debugging | Low | When the SDK is next upgraded: check `mobile_scanner`'s changelog for a Built-in Kotlin release and bump it, or make the scan path switchable if no such release exists. Nothing is blocked until then. **Chunk 3 reviewed it at the user's request and left it deferred** — it is a warning today and the trigger is an SDK upgrade, so there is nothing to do until one happens |
 | N-13 | **The three-read limit is enforced where a bill has been *read*, not where it has only been *uploaded*.** `_ChooseBill`'s failure card ("That bill could not be read" → "Read it again") calls `rescan()`, which does not refuse past `PurchaseOcrState.maxReads` — deliberately, because that card is the D-033 recovery for a first read that never succeeded: nothing on that screen can be saved, and refusing the last retry would strand the file. The consequence is that a bill whose reads keep failing can be sent to the reader more than three times, and the cap is a *cost* fence with a gate on one side of it. Found and recorded while building the re-read button (D-062) | Low | Show the same cap on that card — the button disabled with the same sentence the verify form's failure card uses — or decide that an unread bill's recovery is worth unlimited reads and say so where the cap is defined. One screen's worth of work |
+| N-14 | **GST on a retail sale: the compliance question is open, the profit-sharing formula is settled.** The owner said *"B2C sale hai to GST ka koi matlab nahi hai"*, which is a probable misunderstanding — GST applies to retail pharmacy sales in India regardless of B2B/B2C (B2C only means no buyer GSTIN is needed). Three readings: **(a)** GST is charged but not shown as its own line on the bill; **(b)** the pharmacy is in a hospital-exempt category (needs a CA to confirm — rare); **(c)** it is a display choice only (safe). **Settled 2026-09-20 and no longer waiting on this:** the hospital's share is computed on **GST-inclusive** gross profit and the **owner bears the GST from their own share** — an accepted business model, not an accounting error (D-068), so the GP basis is decided. Also unstated: whether a `package` sale charges GST (`transfer` is stated as no-GST) | Medium | Put the three-way question to the owner (`MASTER_PLAN.md` Phase 7 §6). **No GST logic changes until then** |
 
 **Resolved in chat 4 (Phase 6, chunk 3 — `context/chat3n-summary.md`):** **I-3**, in a
 commit of its own after chunk 3's (the chunk-2 message had claimed it shipped when it had

@@ -2593,3 +2593,441 @@ than silent (D-014's reasoning, extended from `ilike` to `in.(…)`).
   `sanitizeSearchTerm(query.search).isEmpty`, with a regression test asserting the lookup is
   not made at all; a meaningless term now behaves as it does in the products picker — like
   no term.
+
+---
+
+## D-067 — A Sale Has One of Four Types, and the Type Decides Its Rate, Its Bill and Whether a Hospital Shares
+
+**Date:** 2026-09-20
+
+**Status:** Active (recorded for Phase 7 — not started)
+
+**Revised 2026-09-20, for the second time.** The first version of this entry had **three**
+types and folded an admitted patient into the package flow. That was wrong in two
+directions: an **IPD sale is retail-priced to an admitted patient** and is not a package at
+all, and **a package sale is not a sale to a patient** — the hospital is the buyer. The
+three-type text is superseded.
+
+**Decision:** Phase 7 gives a sale one of four types, and the type decides its rate, what its
+bill carries, and whether a hospital shares in its profit (D-068):
+
+| `sale_type` | Rate | Hospital share | The bill carries |
+|---|---|---|---|
+| `counter` — a walk-in, hospital or outside patient | MRP − discount | **yes** | `patient_name` (**mandatory**), `patient_mobile` (**mandatory**), `patient_address` (optional), `doctor_name` (**mandatory for Schedule H/H1/X**) |
+| `ipd_admission` — an admitted patient | MRP − discount | **yes** | the counter fields **plus** `hospital_reference` (the OPD/IPD number, **mandatory**) |
+| `package` — the hospital buying for its own package patients | purchase rate + `pharmacies.package_markup_percent` | **no** — the hospital is the buyer, not a partner | patient fields **optional** (the hospital already holds the patient); `hospital_reference` |
+| `transfer` — stock moving between locations | purchase rate, **no markup** | **no** | `from_location`, `to_location`, `reason`, `transfer_note_no` |
+
+**"Pharmacy sale" is the business's umbrella name for the first two.** Counter and
+`ipd_admission` are what it calls a pharmacy sale: both are retail-priced, both are subject
+to the 10% discount limit (D-071), and both carry a hospital share (D-068). **Package and
+transfer are separate categories** — neither is a pharmacy sale, neither has a discount
+concept, and neither carries a share.
+
+A transfer never leaves the owner's hands, so **no GST** is charged on it.
+
+**Database (Phase 7):** a new `sale_type` enum (`counter`, `ipd_admission`, `package`,
+`transfer`) and **twelve** new columns on `sales`: `sale_type` (`not null default 'counter'`),
+`hospital_id` (**a snapshot** — set from the pharmacy's own hospital), `patient_name`,
+`patient_mobile`, `patient_address`, `doctor_name`, `doctor_id` (→ the new `doctors` master,
+D-072), `hospital_reference`, `from_location`, `to_location`, `transfer_note_no`, and
+`discount_above_limit_request_id` (D-071). `customer_id` already exists and stays what it is
+— the registered-patient link.
+
+**`doctor_name` and `doctor_id` are a prescription record, not a profit-sharing one.**
+Doctors take no share of anything (D-068); the names are on the bill because a pharmacy must
+be able to say who prescribed what, and on a Schedule H/H1/X line the prescriber's name is
+not decoration.
+
+**Rationale:** four flows with four different economics. A counter sale is priced off the
+label and has to be findable later. An `ipd_admission` sale is that same retail sale with an
+admitted patient — same price, same share, plus the hospital's own number so the bill can be
+tied to a bed. A package sale inverts who the customer is: the hospital buys for its
+patients, at cost plus a service markup, and taking a share of it would be taking a share of
+a fee the owner charges the hospital for the service (D-070). A transfer is not a commercial
+sale at all — it is stock moving. The rate rule belongs to the type because a discount is a
+retail idea, a markup is a package-service one, and a transfer has neither.
+
+**Consequences:**
+
+- **`sales` has none of this today** (`supabase/migrations/20260918000006_sales_tables.sql:3`)
+  — no `sale_type`, no hospital, no patient, no doctor, no transfer columns — and `sale_type`
+  is not among the types in `20260918000002_enums.sql`. Phase 7 is one **additive** migration,
+  the same shape as the alias-key migration Phase 6 added (D-056).
+- **The second version's `package_reference` and `transfer_to` are withdrawn before either
+  was built.** The corrected model names `hospital_reference` for the patient identity, and
+  `from_location` / `to_location` / `transfer_note_no` for a transfer. Nothing in the tree
+  references the old names.
+- **`patient_id` was resolved on 2026-09-20.** An earlier version carried a `patient_id` as
+  well as a `hospital_reference` and left the next chat to guess whether they were one column
+  or two. It is **one** column — `hospital_reference`, the OPD/IPD number — and `patient_id`
+  is not a column.
+- **The markup's source is settled** (it was the open gap in the previous version): it is a
+  per-pharmacy setting, `pharmacies.package_markup_percent`, fixed when the pharmacy is
+  configured — e.g. 20% for one hospital, 15% for another (D-070).
+- **`sale_items.discount_percent` already exists** (`20260918000006_sales_tables.sql:24`, with
+  `discount_amount` beside it), so "the final applied discount" needs no new column; the
+  approval side of the discount rule is D-071.
+- **`sales.hospital_id` is a snapshot, and the brief says so explicitly.** It duplicates what
+  `pharmacies.hospital_id` says, because one pharmacy sits in exactly one hospital — and it is
+  kept anyway so that a pharmacy changing premises cannot rewrite a month already settled.
+  That is the same reason D-068's share rule and these sale lines carry their own values.
+- **An unstated GST interaction is now visible, and it is the same question as N-14.** The
+  counter and `ipd_admission` flows charge GST (it is implemented today — `sale_items.gst_percent`
+  and its four tax columns, D-057), while the transfer flow does not. `package` is unstated.
+  The GST question (N-14) therefore has to be answered before these four bills can be printed
+  correctly, not after.
+- **The bill's mandatory fields are per type, and nothing in the schema enforces them yet.** A
+  counter bill must carry a mobile and an IPD bill must carry an OPD/IPD number, but all twelve
+  columns are nullable, because a single `sales` table holds four shapes. Whether Phase 7 adds
+  per-type `CHECK` constraints or leaves the rule to the RPC and the screens is a Phase 7
+  choice, and it is recorded here rather than discovered in the DDL.
+- **`sale_type` defaults to `counter`**, which is the right default for this business (it is
+  the commonest sale) and the wrong one for a caller that forgets to send it: an omitted
+  `ipd_admission` would post as a counter sale and still be retail-priced and shared, but lose
+  the OPD/IPD requirement. The default is recorded as the brief gives it.
+- **`sales.customer_id` already exists** and references `customers`
+  (`20260918000004_master_tables.sql:23`). A counter patient is not necessarily a customer
+  row, so Phase 7 decides whether a counter sale finds-or-creates a customer, or stays
+  denormalised on the sale the way the patient columns suggest it does.
+- **The rate and the markup are server-side rules.** D-023 puts a sale in one RPC with its
+  stock posting per line, and D-011/D-013/D-023 keep stock on triggers, so "purchase rate +
+  `package_markup_percent`" belongs in the sale RPC, resolved from the pharmacy's own setting —
+  never in a widget's arithmetic. The same RPC is where `hospital_id` must be filled from the
+  pharmacy rather than trusted from the payload, as `checkout_sale` already does for
+  `pharmacy_id` (`20260918000019_phase3_sale_automation.sql`).
+
+---
+
+## D-068 — Hospital Profit Sharing, and the Doctor Is Not a Partner
+
+**Date:** 2026-09-20
+
+**Status:** Active (recorded for Phase 7 — not started)
+
+**Revised 2026-09-20.** This entry was written earlier the same day as "Doctor Profit
+Sharing", with each doctor taking a percentage of the profit on what they referred. That
+was a misreading of the business and is superseded here: **the profit-sharing partner is
+the hospital a pharmacy sits in**, and a doctor takes nothing. Nothing had been built from
+the earlier text — no migration, no table, no screen — so nothing in the tree carries it.
+
+**Decision:** Phase 7 records on each sale line what the goods cost, and splits the gross
+profit between the owner and the **hospital** whose premises and patient flow the pharmacy
+sells through.
+
+- **`hospitals`** — `(id, name, address, city, state, contact_person, contact_phone,
+  contact_email, gstin, notes, is_active, created_at, updated_at)`. The table **does not
+  exist yet**; Phase 7 creates it.
+- **`pharmacies.hospital_id`** — references `hospitals`. A pharmacy sits in **exactly one**
+  hospital, so this is a column and not a join table.
+- **`hospital_profit_sharing`** — `(id, pharmacy_id, hospital_id,
+  gross_profit_share_percent, effective_from, effective_to, notes, created_at, updated_at)`.
+  A share is a **dated** rule, so a deal that changes does not rewrite a month that was
+  already settled. (`pharmacy_id` is the tenant scope every business table carries under
+  D-004/D-015; `hospital_id` names the partner.)
+- **`sale_items`** gains `cost_basis_per_unit` (`numeric(12,4)`), `cost_total`
+  (`numeric(14,2)`) and `gross_profit` (`numeric(14,2)`) — **snapshots taken at sale time**,
+  because cost changes over time.
+- **The share applies to two of the four sale types only: `counter` and `ipd_admission`** (the
+  "pharmacy sale" pair — D-067). A `package` sale and a `transfer` carry **no hospital share
+  at all**, because on neither is the hospital a profit-sharing partner: on a package sale it
+  is the *buyer* (D-070), and a transfer is stock moving between the owner's own locations.
+- **The shares as configured:** Arihant → Rohit Kidney & Stone **50%**; Erika Prime →
+  Govardhan **60%**; Medicotraders → Jain **0%**; Sudha → Pandey **0%**. The mapping is in
+  `PROGRESS.md`.
+- **0% is a value, not an absence.** Medicotraders and Sudha have a real 0% deal: no share
+  transaction is written and the whole gross profit is the owner's. **Nothing may read a 0%
+  rule as "no rule configured"** — not a query that falls back to a default, not a report
+  that skips the hospital, not a settlement that treats it as unconfigured.
+- **The arithmetic (confirmed):** `Sale Value = ₹X`; `Purchase Cost (COGS from the batch) =
+  ₹Y`; `GP = X − Y`; `Hospital Share = GP × share%`; `Owner Share = GP − Hospital Share`; and
+  monthly, `Owner Net = Σ Owner Share − Σ Expenses`.
+- **The owner bears the expenses.** A hospital's share is a share of gross profit and is not
+  reduced by them — which is why the two reports below give two different numbers. The
+  expense categories are D-069.
+- **RPCs:** `pharmacy_monthly_pnl(pharmacy_id, month)`, `hospital_monthly_settlement(hospital_id,
+  month)` — the latter for **hospitals whose share is above 0%** — plus D-070's
+  `package_sale_monthly(pharmacy_id, month)` and D-072's
+  `doctor_referral_report(doctor_id, from, to)`.
+
+**Rationale:**
+
+- **A doctor is not the party the pharmacy pays for its position.** The partner is whoever
+  supplies the space and the patient flow, and here that is the hospital, which takes a
+  percentage of gross profit in exchange for both. The deal is therefore a property of the
+  (pharmacy, hospital) pair and of a date range, in the same way a landed cost is a property
+  of a purchase rather than of a product (D-012).
+- **Doctors belong on a sale for a clinical reason, not a commercial one.** A prescription
+  must name who wrote it; that is what `doctor_name`/`doctor_id` are for (D-067). Paying a
+  share to a prescriber would be a different and far more sensitive arrangement than the one
+  the owner describes — recording it as this project's model was simply wrong.
+- **A dated rule, because a deal changes.** 50% at one hospital and 60% at another is the
+  normal case in this group, and a renegotiation must not move a month already settled.
+- **The owner's share is the residue**, `GP − Hospital Share`, so the split balances by
+  construction and rounding lands on the owner rather than on the hospital.
+- **A snapshot, because the alternative is a silent rewrite.** A sale's gross profit computed
+  later from live cost would move every time a purchase rate moved, and a settled month would
+  move with it.
+
+**Consequences:**
+
+- **Neither `hospitals` nor `hospital_profit_sharing` exists in this repository.** No
+  migration creates either, and "hospital" appears in the tree only as prose in `DECISIONS.md`
+  and `MASTER_PLAN.md`. `pharmacies.hospital_id` does not exist either: `pharmacies`
+  (`supabase/migrations/20260918000003_core_tables.sql:3`) carries `name`, `address`, `city`,
+  `state`, `pincode`, `phone`, `email`, `gstin`, `drug_license_no` and `logo_url`, and no
+  hospital link. All three are Phase 7 additions, and the first two need `pharmacy_id` scope
+  and RLS to match every other tenant table (D-004/D-015).
+- **`profit_sharing_rules` is withdrawn before it was ever built**, replaced by
+  `hospital_profit_sharing`. Nothing in the tree references the old name.
+- **`doctors` is no longer a profit-sharing table — and is still not a table at all.** The
+  earlier text had `doctors` gaining `default_profit_share_percent`; that column is **dropped**,
+  because a doctor takes no share. But `doctor_id` is still in the corrected sale field list
+  (D-067), so Phase 7 must decide whether it needs a `doctors` master (a name plus an active
+  flag, scoped to the pharmacy) or whether `doctor_name` alone is enough. The corrected brief
+  names the column and does not ask for the table.
+- **The cost snapshot is the input the report screen already says it is missing.**
+  `report_summary`'s `contributedMargin` is billed less refunds less expenses
+  (`app/lib/data/models/report_summary.dart:249`), and the screen prints its own admission
+  beside it: *"Gross margin needs the cost of each sale line."*
+  (`app/lib/features/reports/presentation/reports_screen.dart:310`). `sale_items.cost_total`
+  is that line — so Phase 7 is where that card can stop being a substitute for a margin.
+- **D-021/D-012 are why it must be a snapshot.** The inventory views carry **today's** landed
+  cost, not what the goods cost when they left the shelf, so a later join to a batch would
+  answer a different question than the one a settlement asks (`sale_items.cost_basis_per_unit`
+  is therefore the batch's landed cost at the moment of sale).
+- **D-025 applies to the split.** Gross profit, the hospital's share and each settlement are
+  server-side aggregates — the two RPCs above — never rows summed in Dart, and never a figure
+  a screen recomputes.
+- **`pharmacy_monthly_pnl` and `hospital_monthly_settlement` disagree by construction** — one
+  is net of the expenses and the other is not — and each should say so where a person reads
+  it, because two different numbers for "the month's profit" otherwise look like a defect.
+- **The four-to-four mapping is recorded** in `PROGRESS.md` (Arihant → Rohit Kidney & Stone,
+  Erika Prime → Govardhan, Medicotraders → Jain, Sudha → Pandey), so the Phase 7 seed has a
+  source of truth to write from rather than a memory.
+- **The RPC name is now confirmed rather than inferred.** The previous version recorded
+  `hospital_monthly_settlement(hospital_id, month)` as an inference from the report rename;
+  the corrected brief names it itself, alongside `package_sale_monthly` and
+  `doctor_referral_report`.
+- **The GST basis is settled by the owner, and it is a business decision rather than an
+  accounting correction.** `gross_profit = sale_value − cost_total`, **both GST-inclusive**;
+  `hospital_share = gross_profit × percent`; `owner_share = gross_profit − hospital_share` —
+  and **the owner pays the GST out of `owner_share`**. In the owner's own words:
+
+  > GST is borne by the owner from their share. Hospital share is calculated on GST-inclusive
+  > gross profit, per owner's business model. Owner accepts that GST liability reduces their net.
+
+  The arithmetic that made this worth asking about is real and unchanged: `sale_items.total_amount`
+  **is** tax-inclusive — `checkout_sale` derives the header's taxable value as `grand_total −
+  tax_total` (`supabase/migrations/20260918000019_phase3_sale_automation.sql`) — so a 50% share
+  of a tax-inclusive gross profit does pay the hospital half of the tax the pharmacy remits.
+  That is now the **accepted model, deliberately**: the hospital's deal is a share of the full
+  margin, and the tax is a cost the owner carries. The taxable-value alternative
+  (`GP = (total_amount − tax_amount) − cost_total`) is therefore **not** the formula, and it is
+  recorded here only so that the rejection is visible rather than rediscovered.
+- **N-14 stays open, but only for compliance — the formula no longer waits on it.** Whether GST
+  is charged on a retail sale at all, and whether this pharmacy sits in a hospital-exempt
+  category, is still an open question (`PROGRESS.md` N-14). **The profit-sharing formula is not
+  affected by that answer:** if N-14 comes back "no GST on B2C", the tax columns carry zeros and
+  the formula above computes exactly the same thing.
+- **A 0% hospital must still get an answer.** `hospital_monthly_settlement` is defined for
+  shares above 0%, and the "0% is a value" rule above means a 0% hospital must remain
+  answerable: *"0% share — nothing owed"* is a different answer from *"no rule"*, and the two
+  must not render the same way.
+
+---
+
+## D-069 — Expense Categories Become One Fixed List, and the Monthly P&L Is One RPC
+
+**Date:** 2026-09-20
+
+**Status:** Active (recorded for Phase 7 — not started)
+
+**Decision:** Phase 7 standardises `expenses.category` to one fixed set — `salary`,
+`staff_food`, `breakage`, `stationery`, `printer`, `utilities`, `rent`, `misc` — and adds
+`expense_summary(pharmacy_id, month, category)` plus the expense-breakdown report.
+
+**Rationale:** the point of recording an expense is to report on it, and "rent", "Rent" and
+"shop rent" are three categories that cannot be added up. A fixed list is also what makes
+`expense_summary`'s third argument meaningful rather than a `like` pattern over prose.
+
+**Consequences:**
+
+- **The app already keeps a fixed list, and it is a different list.** `expenseCategories`
+  (`app/lib/data/models/expense.dart:47`) offers *Rent, Salaries, Electricity, Freight,
+  Licences, Maintenance, Marketing, Other*, and that is what the form writes and the
+  repository saves (`app/lib/features/expenses/presentation/widgets/expense_sheet.dart:81`,
+  `app/lib/features/expenses/data/expenses_repository.dart:82`). Against the Phase 7 set it
+  is missing `staff_food`, `breakage`, `stationery` and `printer`, it carries four categories
+  the set does not (`Freight`, `Licences`, `Maintenance`, `Marketing`), and it is Title Case
+  where the set is lowercase tokens. **Reconciling the two is a decision, not a
+  translation**, and it has to be taken before the constraint: the report cannot group what
+  has two vocabularies.
+- **The column is unconstrained today.** `expenses.category` is `text not null` with no
+  `CHECK` and no enum type (`supabase/migrations/20260918000007_ledger_tables.sql:49`), and
+  there is no expense-category type in `20260918000002_enums.sql`. A `CHECK` (or an enum)
+  therefore arrives with a **backfill**: existing rows hold Title Case strings from the
+  client's list, and a constraint naming only the new tokens refuses every one of them until
+  they are mapped — and the mapping is the half that can fail the migration.
+- **One vocabulary, three readers.** The DB constraint, the client's list and the report's
+  grouping all have to agree. Today only the first two exist, and they already disagree with
+  the Phase 7 set.
+
+---
+
+## D-070 — A Package Sale Is a Service the Hospital Buys, Priced at Cost Plus a Per-Pharmacy Markup
+
+**Date:** 2026-09-20
+
+**Status:** Active (recorded for Phase 7 — not started)
+
+**Decision:** A `package` sale (D-067) is priced at **purchase rate + the pharmacy's own
+markup**, and that markup is a **per-pharmacy setting** fixed when the pharmacy is
+configured — not negotiated per sale:
+
+- `pharmacies.package_markup_percent numeric(5,2)`, **default 20** (e.g. 20% for one hospital,
+  15% for another).
+- The rate is `purchase rate × (1 + package_markup_percent/100)`, the same for every package
+  sale from that pharmacy, and the hospital takes it as-is.
+- **No discount** concept on a package sale, and **no hospital share** (D-068).
+- The **pharmacy** holds and maintains the stock and **absorbs chori / breakage / wastage**;
+  the hospital pays purchase cost + markup.
+- RPC: `package_sale_monthly(pharmacy_id, month)` → total cost, total markup, and the total
+  the hospital owes.
+
+**Rationale:** on a package sale the hospital is not sharing this pharmacy's profit — it is
+buying a service (stock held, stock maintained, losses carried) at a fixed fee on cost. That
+is why the markup is a configuration value rather than a per-sale negotiation, and why the
+share is zero: taking a share of the markup would be taking a percentage of the fee the
+owner is charging the hospital. The risk-bearing is what the markup is *for*.
+
+**Consequences:**
+
+- **`pharmacies` has no such column today.** `pharmacies`
+  (`supabase/migrations/20260918000003_core_tables.sql:3`) carries `name`, `address`, `city`,
+  `state`, `pincode`, `phone`, `email`, `gstin`, `drug_license_no` and `logo_url`.
+  `package_markup_percent` is a Phase 7 addition, and the four per-pharmacy values are an open
+  item (the owner supplies them; the default is 20).
+- **A not-null default of 20 makes "unconfigured" indistinguishable from "intentionally
+  20%".** The brief asks for the default *and* for per-pharmacy values to be supplied later;
+  with a default, a pharmacy nobody configured silently prices package sales at 20%. This is
+  the mirror of D-068's 0%-is-a-value rule — there a value must not be read as absence, here
+  absence produces a value — and whether an unconfigured pharmacy should instead *refuse* a
+  package sale is recorded as an open item rather than decided here (MASTER_PLAN.md Phase 7
+  §7).
+- **The rate is computed server-side** (D-023): it is `purchase rate × (1 + …)` inside the
+  sale RPC, never in a widget's arithmetic.
+- **Which "purchase rate" is unstated, and the two candidates differ.** D-012's **landed cost**
+  (what the batch actually cost, inclusive of freight and scheme effects) and the **rate
+  printed on the purchase invoice** are not the same number, and `package_markup_percent`
+  multiplies whichever is chosen. It is recorded as "purchase rate" as the brief gives it, and
+  flagged as needing a decision before the RPC is written.
+- **Risk-bearing is a commercial term, not a schema term.** Nothing in the schema enforces
+  that the pharmacy absorbs breakage; it is recorded here so that a later reader does not
+  model `chori`/breakage on a package sale as a *hospital* liability, and so the `breakage`
+  expense category (D-069) is understood to be the pharmacy's own cost.
+
+---
+
+## D-071 — A Discount Above 10% Needs the Owner's Approval, and the Sale Carries the Approval's Id
+
+**Date:** 2026-09-20
+
+**Status:** Active (recorded for Phase 7 — not started)
+
+**Decision:** On a `counter` or `ipd_admission` sale (D-067) a discount is capped at **10%**
+without approval. Above 10% the staff **cannot apply it**: it must be requested, the owner
+approves, and only then is it applied. Package and transfer sales have no discount concept.
+
+- The approval uses the **`approval_requests` infrastructure of Phase 6.5c** — the approval
+  RBAC — rather than a second approval mechanism invented for billing.
+- `sale_items.discount_percent` is the **final applied discount** (it already exists), and a
+  sale above the limit carries `sales.discount_above_limit_request_id` →
+  `approval_requests(id)`.
+- **The behaviour is blocking, and it is confirmed rather than proposed** (owner, 2026-09-20):
+  an above-limit discount cannot be recorded until it is approved — the decision is taken while
+  the sale is in progress, not written first and approved retroactively.
+
+**Rationale:** the 10% cap is a control the owner already enforces by hand, and a control that
+can be bypassed by writing the sale first and approving it later is not a control — it is a
+reporting artefact, and by then the customer has walked away with the goods. Blocking is what
+makes "staff cannot apply it" true rather than aspirational. The id on the sale is what lets a
+month's discounts be reconciled against the approvals that authorised them.
+
+**Consequences:**
+
+- **The dependency on Phase 6.5c is hard, and it fixes the sequencing (owner, 2026-09-20).**
+  The **full approval system is built as Phase 6.5c, before Phase 7**, because one unified
+  mechanism serves many actions — a sale edit, a purchase delete, a return, a stock adjustment,
+  **a discount above 10%**, a customer or product edit — rather than two parallel systems for
+  one idea. So `sales.discount_above_limit_request_id` is a **real foreign key to
+  `approval_requests(id)` once 6.5c lands** — **not a soft reference**, and not an id the client
+  is trusted to invent. **Phase 7a (the sale types) cannot be built before 6.5c completes**,
+  which is now the plan's stated order (`MASTER_PLAN.md`, Phase 7 → Sequencing).
+- **`approval_requests` does not exist yet.** No migration creates it and no table, function or
+  Dart file references the name; Phase 6.5 is still a stub. Its shape is **action-type based —
+  a table with an `action_type` enum and a `payload` jsonb** — and **the exact list of action
+  types is still to be provided by the owner**, at 6.5c design time. Until then this foreign key
+  has no target, which is precisely why the order matters rather than being a preference.
+- **The brief puts the reference in two different places.** The prose says *"if > 10%,
+  sale_item requires an approval_request_id reference"*; the schema block puts
+  `discount_above_limit_request_id` on **`sales`**. It is recorded on `sales` per the schema,
+  and flagged: a **per-line** approval is a different design from a **per-bill** one, and they
+  diverge the moment one bill mixes a 5% line with a 15% line.
+- **`sale_items.discount_percent` and `sales.discount_total` already exist**
+  (`20260918000006_sales_tables.sql:24` and `:3`), and `checkout_sale` already writes both from
+  the payload, so "the final applied discount" needs no new column.
+- **What the 10% is a percentage *of* is unstated.** `sale_items.discount_percent` is a
+  percentage of the line's own rate, so the cap is recorded as **per line**; a per-bill cap on
+  the total discount would need a different check and a different column.
+- **The limit belongs in one place, server-side.** A cap enforced only in the POS screen is a
+  suggestion: `checkout_sale` is the single write path for a sale (D-023), so the rule has to
+  hold there, with the client's copy of it existing to explain a refusal rather than to
+  enforce it.
+- **A blocked sale is not a failed sale.** Somebody mid-bill whose discount needs approval is
+  holding a live customer, so the refusal's wording and what the POS does with the half-built
+  bill matter as much as the rule. A Phase 7 UI decision, noted here so it is not discovered at
+  the counter.
+
+---
+
+## D-072 — Doctors Are a Master Table, Because Referrals Are Tracked and Never Paid
+
+**Date:** 2026-09-20
+
+**Status:** Active (recorded for Phase 7 — not started)
+
+**Decision:** Phase 7 adds a **`doctors`** master — `(id, pharmacy_id, name, specialization,
+contact, is_active, created_at, updated_at)` — and `sales.doctor_id` references it, while
+`sales.doctor_name` keeps the spelling the prescriber actually used on that bill.
+
+- **No commercial column.** The `default_profit_share_percent` that the first version of D-068
+  put on this table is **gone**: a doctor takes no share of anything (D-068).
+- `doctor_referral_report(doctor_id, from, to)` is an **optional trend** — how many
+  prescriptions, of what — and is **not** a settlement.
+
+**Rationale:** a prescriber's name is repeated on every bill and then grouped across them,
+which is a master-data problem — the same reason suppliers and customers are tables rather
+than columns on a document. It is not a commercial relationship, and the table is deliberately
+stripped of anything that could be mistaken for one. The name stays on the sale as well as
+being linked, because a bill is a document: re-pointing a doctor master later must not rewrite
+what a printed bill said.
+
+**Consequences:**
+
+- **The table does not exist.** No migration creates `doctors`; `grep` for "doctor" over the
+  tree matches nothing but `flutter doctor` in `README.md` and the prose in these decisions.
+  This closes the question the previous version of D-068 left open — a `doctors` master *is*
+  wanted — and drops that version's `default_profit_share_percent` with it.
+- **Scoped by `pharmacy_id` per the brief, and that has a consequence:** a doctor who
+  prescribes at two of the four pharmacies is **two rows**. That is consistent with every
+  other tenant table (D-004/D-015) and with how one pharmacy's records work, but it means a
+  cross-pharmacy "this doctor's referrals" figure is a group-by-name question rather than a
+  `doctor_id` one. Worth knowing before anyone builds a group-level referral report.
+- **The name is not the identity.** `doctor_name` on the sale is what the bill printed; a
+  doctor whose name is typed three ways is one master row and three spellings. Which is why
+  the referral report reads the master and the bill reads the sale.
+- **A Schedule H/H1/X bill requires the prescriber (D-067)**, so this is not decoration:
+  `sale_items.schedule_type` exists precisely to drive statutory register reporting
+  (`20260918000006_sales_tables.sql`), and a register that cannot name the prescriber is not
+  a register.
