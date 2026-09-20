@@ -40,16 +40,22 @@ class SaleCheckoutLine {
   });
 
   /// Builds the payload line for [line], with the money [totals] computed.
+  ///
+  /// [saleType] decides one thing here: a package or transfer line carries **no
+  /// discount**, and the server refuses one that does. The cart may still hold a
+  /// percentage from an earlier type - it is left out rather than sent, because a
+  /// refusal at the till is not a way to discover a field nobody meant to send.
   factory SaleCheckoutLine.from({
     required SaleCartLine line,
     required SaleLineTotals totals,
+    required SaleType saleType,
   }) => SaleCheckoutLine(
     productId: line.productId,
     batchId: line.batchId,
     qty: line.qty,
     rate: line.rate,
     scheduleType: line.scheduleType,
-    discountPercent: line.discountPercent,
+    discountPercent: saleType.hasDiscount ? line.discountPercent : 0,
     discountAmount: totals.discount,
     gstPercent: line.gstPercent,
     cgstAmount: totals.cgst,
@@ -95,7 +101,7 @@ class SaleCheckoutLine {
   /// Total tax on the line.
   final double taxAmount;
 
-  /// What the line is charged at: taxable value plus tax.
+  /// What the line is charged at: the price the customer pays for it.
   final double totalAmount;
 
   /// The JSON object the RPC reads.
@@ -121,17 +127,50 @@ class SaleCheckout {
   /// Creates a checkout.
   const SaleCheckout({
     required this.lines,
+    this.saleType = SaleType.counter,
     this.customerId,
+    this.patientName,
+    this.patientMobile,
+    this.admissionId,
+    this.doctorId,
+    this.doctorName,
+    this.hospitalReference,
     this.paymentMode = PaymentMode.cash,
     this.amountPaid = 0,
     this.placeOfSupply,
+    this.fromLocation,
+    this.toLocation,
+    this.transferReason,
+    this.idempotencyKey,
   });
 
   /// Its lines, in cart order.
   final List<SaleCheckoutLine> lines;
 
-  /// Who bought it, or `null` for a walk-in.
+  /// Which of the four kinds of sale this is.
+  final SaleType saleType;
+
+  /// The party the bill belongs to: the patient, or a package sale's account.
   final String? customerId;
+
+  /// The patient as the bill prints them.
+  final String? patientName;
+
+  /// The patient's contact number as the bill records it.
+  final String? patientMobile;
+
+  /// The episode an IPD bill posts its credit to.
+  final String? admissionId;
+
+  /// The prescriber's master row, when one was chosen.
+  final String? doctorId;
+
+  /// The prescriber's name as the bill prints it.
+  final String? doctorName;
+
+  /// The hospital's own number: the admission number on an IPD bill, the case
+  /// reference on a package one.
+  final String? hospitalReference;
 
   /// How it was settled.
   final PaymentMode paymentMode;
@@ -140,19 +179,67 @@ class SaleCheckout {
   /// clamped figure from [SaleTotals.recordablePaid], not the raw tender.
   final double amountPaid;
 
-  /// The customer's state, for the intra/inter-state tax split.
+  /// Where the goods are going, for the intra/inter-state tax split.
   final String? placeOfSupply;
+
+  /// Where a transfer moves stock from.
+  final String? fromLocation;
+
+  /// Where a transfer moves stock to.
+  final String? toLocation;
+
+  /// Why a transfer moves it.
+  final String? transferReason;
+
+  /// The key that makes a retried submit the same sale rather than a second one.
+  final String? idempotencyKey;
 
   /// The JSON object the RPC reads.
   ///
   /// Document totals are deliberately absent: `checkout_sale()` sums the lines
   /// itself rather than trusting a figure the client worked out, so a stored
   /// grand total cannot disagree with the lines it describes.
+  ///
+  /// The type's own fields are sent **per type** rather than as one flat object of
+  /// nulls. That is not cosmetic: the RPC copies several of them straight into the
+  /// row (`hospital_reference`, `patient_address`, the two locations), so a
+  /// leftover value from another type would be *stored* - and a `customer_id` on a
+  /// transfer is refused outright. Only what this document is made of travels.
   Map<String, dynamic> toPayload() => <String, dynamic>{
-    'customer_id': customerId,
+    'sale_type': saleType.dbValue,
     'payment_mode': paymentMode.dbValue,
-    'amount_paid': amountPaid,
+    // A stock movement takes no payment, and the RPC refuses one that does.
+    'amount_paid': saleType == SaleType.transfer ? 0 : amountPaid,
     'place_of_supply': placeOfSupply,
+    if (idempotencyKey != null) 'idempotency_key': idempotencyKey,
+    ..._typeFields(),
     'items': lines.map((line) => line.toPayload()).toList(growable: false),
+  };
+
+  /// The fields this sale type is made of.
+  Map<String, dynamic> _typeFields() => switch (saleType) {
+    SaleType.counter => <String, dynamic>{
+      'customer_id': customerId,
+      'doctor_id': doctorId,
+      'doctor_name': doctorName,
+    },
+    SaleType.ipdAdmission => <String, dynamic>{
+      'customer_id': customerId,
+      'admission_id': admissionId,
+      'hospital_reference': hospitalReference,
+      'doctor_id': doctorId,
+      'doctor_name': doctorName,
+    },
+    SaleType.package => <String, dynamic>{
+      'customer_id': customerId,
+      'patient_name': patientName,
+      'patient_mobile': patientMobile,
+      'hospital_reference': hospitalReference,
+    },
+    SaleType.transfer => <String, dynamic>{
+      'from_location': fromLocation,
+      'to_location': toLocation,
+      'transfer_reason': transferReason,
+    },
   };
 }

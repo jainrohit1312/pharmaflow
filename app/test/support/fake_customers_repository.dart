@@ -7,23 +7,38 @@ import 'package:app/data/models/customer.dart';
 import 'package:app/features/customers/data/customers_repository.dart';
 
 /// Builds a customer with only the fields a test cares about.
+///
+/// [patientCode] is the patient identity a `save_patient()` registration carries
+/// (D-074); a customer with none is a row registered before Phase 7a and not yet
+/// used as a patient, which is a legitimate state rather than a missing value.
 Customer buildCustomer(
   String name, {
+  String? id,
   String? phone,
   String? email,
   String? address,
   String? gstin,
+  String? patientCode,
+  DateTime? dateOfBirth,
+  int? ageYears,
+  int? ageMonths,
+  String? sex,
   double openingBalance = 0,
   int loyaltyPoints = 0,
   bool isActive = true,
 }) => Customer(
-  id: 'id-$name',
+  id: id ?? 'id-$name',
   pharmacyId: 'ph-1',
   name: name,
   phone: phone,
   email: email,
   address: address,
   gstin: gstin,
+  patientCode: patientCode,
+  dateOfBirth: dateOfBirth,
+  ageYears: ageYears,
+  ageMonths: ageMonths,
+  sex: sex,
   openingBalance: openingBalance,
   loyaltyPoints: loyaltyPoints,
   isActive: isActive,

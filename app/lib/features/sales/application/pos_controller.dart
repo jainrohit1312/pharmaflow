@@ -1,7 +1,10 @@
 /// The counter's basket: what is being sold, and how it is being paid.
 library;
 
+import 'package:app/core/errors/app_exception.dart';
+import 'package:app/data/models/admission.dart';
 import 'package:app/data/models/batch_status.dart';
+import 'package:app/data/models/customer.dart';
 import 'package:app/data/models/product.dart';
 import 'package:app/data/models/sale.dart';
 import 'package:app/data/models/sale_cart_line.dart';
@@ -31,17 +34,41 @@ class PosCart {
   const PosCart({
     this.lines = const <SaleCartLine>[],
     this.customerId,
+    this.patientName,
+    this.patientMobile,
     this.paymentMode = PaymentMode.cash,
     this.tendered = 0,
     this.placeOfSupply,
     this.saleType = SaleType.counter,
+    this.admissionId,
+    this.admissionNo,
+    this.doctorId,
+    this.doctorName,
+    this.hospitalReference,
+    this.fromLocation,
+    this.toLocation,
+    this.transferReason,
+    this.idempotencyKey,
   });
 
   /// Its lines, in the order they were added.
   final List<SaleCartLine> lines;
 
-  /// Who is buying, or `null` for a walk-in.
+  /// The account this bill belongs to: the patient for a counter or IPD sale, and
+  /// the hospital's own account row for a package sale, where the hospital is the
+  /// debtor (D-067). `null` only for a transfer, which has no party at all.
   final String? customerId;
+
+  /// The patient's name as the bill prints it.
+  ///
+  /// Taken from the patient row when one is pinned, and typed for a package sale -
+  /// where the debtor is the account rather than the patient, and the server
+  /// requires the patient's own name and mobile for traceability. It is a
+  /// **snapshot**: editing the patient master later never rewrites an old bill.
+  final String? patientName;
+
+  /// The patient's contact number, on the same terms as [patientName].
+  final String? patientMobile;
 
   /// How it is being settled.
   final PaymentMode paymentMode;
@@ -56,9 +83,45 @@ class PosCart {
   ///
   /// One type per document: the server takes a single `sale_type` for the whole
   /// bill. The counter starts on [SaleType.counter], the commonest sale, and the
-  /// type is what [SaleTotals] reads - so a change of type re-prices the basket
+  /// type is what `SaleTotals` reads - so a change of type re-prices the basket
   /// rather than leaving figures behind from the previous basis.
   final SaleType saleType;
+
+  /// The episode an IPD bill posts its credit to.
+  final String? admissionId;
+
+  /// The hospital's own number for that episode - D-067's `hospital_reference`,
+  /// which is also what an IPD sale may be identified by instead of an id.
+  final String? admissionNo;
+
+  /// The prescriber, when one was chosen from the master.
+  final String? doctorId;
+
+  /// The prescriber's name as this bill prints it.
+  ///
+  /// A snapshot beside [doctorId] for the same reason as [patientName]: the master
+  /// converges spellings, and the bill keeps the one it was given (D-072).
+  final String? doctorName;
+
+  /// The hospital's own OPD/IPD reference for the sale, when the type carries one.
+  final String? hospitalReference;
+
+  /// Where a transfer moves stock from.
+  final String? fromLocation;
+
+  /// Where a transfer moves stock to.
+  final String? toLocation;
+
+  /// Why a transfer moves it.
+  final String? transferReason;
+
+  /// The key that makes a retried submit the same sale rather than a second one.
+  ///
+  /// Minted when a submission starts and **cleared by every edit to the basket**,
+  /// because the server answers a repeated key with the *original sale* rather
+  /// than comparing payloads: reusing a key after an edit would hand the counter
+  /// back the bill it already wrote instead of the one it just rang up.
+  final String? idempotencyKey;
 
   /// Whether nothing has been rung up yet.
   bool get isEmpty => lines.isEmpty;
@@ -68,14 +131,18 @@ class PosCart {
 
   /// Whether the sale will post a customer receivable.
   ///
-  /// True when credit was chosen, or when what was tendered does not cover the
-  /// bill - which `checkout_sale()` refuses without a customer to owe it.
-  bool get needsCustomer => paymentMode.isOnAccount;
+  /// True when credit was chosen on a sale that has a party at all: a transfer is
+  /// stock moving between locations, so it has no debtor and no such thing as an
+  /// unpaid balance.
+  bool get needsCustomer =>
+      saleType != SaleType.transfer && paymentMode.isOnAccount;
 
   /// What the sale will record as paid, for a bill of [grandTotal].
   ///
-  /// Three cases, in the order the counter meets them:
+  /// Four cases, in the order the counter meets them:
   ///
+  ///  * a **transfer** - nothing, whatever was typed: a stock movement takes no
+  ///    payment and `checkout_sale()` refuses one that does;
   ///  * a tender was typed - record it, clamped to the bill, because the change
   ///    handed back is not revenue;
   ///  * no tender and a mode that settles at the counter (cash, card, UPI, bank,
@@ -86,6 +153,9 @@ class PosCart {
   /// The screen and the write both read this, so what the cashier sees beside
   /// "Change" is what gets stored.
   double paidFor(double grandTotal) {
+    if (saleType == SaleType.transfer) {
+      return 0;
+    }
     if (tendered > 0) {
       return SaleTotals.recordablePaid(tendered: tendered, total: grandTotal);
     }
@@ -94,68 +164,313 @@ class PosCart {
         : SaleTotals.recordablePaid(tendered: grandTotal, total: grandTotal);
   }
 
+  // Every `with…` rebuilds the whole value, because that is what makes a change a
+  // new cart rather than an edit Riverpod could miss - and it is also why each one
+  // has to name every field it is not changing: a field left out of one of these
+  // copies is a value silently reset by an unrelated action.
+  // `pos_controller_test.dart` asserts that for every setter rather than trusting
+  // the eye.
+  //
+  // None of them carries [idempotencyKey] forward. The key identifies a payload,
+  // and the server answers a repeated key with the *original* sale rather than
+  // comparing payloads - so an edited basket has to submit under a new one, or the
+  // counter would be handed back the bill it already wrote.
+
   /// A copy with the lines replaced.
   PosCart withLines(List<SaleCartLine> value) => PosCart(
     lines: value,
     customerId: customerId,
+    patientName: patientName,
+    patientMobile: patientMobile,
     paymentMode: paymentMode,
     tendered: tendered,
     placeOfSupply: placeOfSupply,
     saleType: saleType,
+    admissionId: admissionId,
+    admissionNo: admissionNo,
+    doctorId: doctorId,
+    doctorName: doctorName,
+    hospitalReference: hospitalReference,
+    fromLocation: fromLocation,
+    toLocation: toLocation,
+    transferReason: transferReason,
   );
 
-  /// A copy with the customer replaced, or cleared by passing `null`.
+  /// A copy with the patient pinned, or cleared by passing `null`.
+  ///
+  /// Sets the party, the printed name and the contact number together: for a
+  /// counter or an IPD sale the bill's party *is* the patient, and its name and
+  /// mobile are snapshots of that row. A package sale, whose debtor is the
+  /// hospital's account, sets the party with [withCustomer] and those two by hand
+  /// with [withPatientDetails].
+  PosCart withPatient(Customer? value) => PosCart(
+    lines: lines,
+    customerId: value?.id,
+    patientName: value?.name,
+    patientMobile: value?.phone,
+    paymentMode: paymentMode,
+    tendered: tendered,
+    placeOfSupply: placeOfSupply,
+    saleType: saleType,
+    admissionId: admissionId,
+    admissionNo: admissionNo,
+    doctorId: doctorId,
+    doctorName: doctorName,
+    hospitalReference: hospitalReference,
+    fromLocation: fromLocation,
+    toLocation: toLocation,
+    transferReason: transferReason,
+  );
+
+  /// A copy with the party replaced, or cleared by passing `null`.
+  ///
+  /// The party is the payload's `customer_id`: the patient on a counter or IPD
+  /// sale, and the hospital's own account row on a package sale. Naming it by id
+  /// alone **clears the printed name and mobile**, because a different party's
+  /// identity is a different thing to print - the patient step sets all three
+  /// together through [withPatient].
   PosCart withCustomer(String? value) => PosCart(
     lines: lines,
     customerId: value,
+    // Stated rather than left to the constructor's defaults: clearing them is what
+    // this copy *does*, and an implicit null here would read as an omission.
+    // ignore: avoid_redundant_argument_values
+    patientName: null,
+    // ignore: avoid_redundant_argument_values
+    patientMobile: null,
     paymentMode: paymentMode,
     tendered: tendered,
     placeOfSupply: placeOfSupply,
     saleType: saleType,
+    admissionId: admissionId,
+    admissionNo: admissionNo,
+    doctorId: doctorId,
+    doctorName: doctorName,
+    hospitalReference: hospitalReference,
+    fromLocation: fromLocation,
+    toLocation: toLocation,
+    transferReason: transferReason,
+  );
+
+  /// A copy with the patient's printed name and mobile replaced, or cleared.
+  PosCart withPatientDetails({String? name, String? mobile}) => PosCart(
+    lines: lines,
+    customerId: customerId,
+    patientName: name,
+    patientMobile: mobile,
+    paymentMode: paymentMode,
+    tendered: tendered,
+    placeOfSupply: placeOfSupply,
+    saleType: saleType,
+    admissionId: admissionId,
+    admissionNo: admissionNo,
+    doctorId: doctorId,
+    doctorName: doctorName,
+    hospitalReference: hospitalReference,
+    fromLocation: fromLocation,
+    toLocation: toLocation,
+    transferReason: transferReason,
+  );
+
+  /// A copy with the episode replaced, or cleared by passing `null`.
+  ///
+  /// An IPD bill needs either this or the hospital's own number, and it takes the
+  /// number from the episode it finds, so the reference travels with the id.
+  PosCart withAdmission(Admission? value) => PosCart(
+    lines: lines,
+    customerId: customerId,
+    patientName: patientName,
+    patientMobile: patientMobile,
+    paymentMode: paymentMode,
+    tendered: tendered,
+    placeOfSupply: placeOfSupply,
+    saleType: saleType,
+    admissionId: value?.id,
+    admissionNo: value?.admissionNo,
+    doctorId: doctorId,
+    doctorName: doctorName,
+    hospitalReference: value?.admissionNo ?? hospitalReference,
+    fromLocation: fromLocation,
+    toLocation: toLocation,
+    transferReason: transferReason,
+  );
+
+  /// A copy with the hospital's OPD/IPD case reference replaced, or cleared.
+  PosCart withHospitalReference(String? value) => PosCart(
+    lines: lines,
+    customerId: customerId,
+    patientName: patientName,
+    patientMobile: patientMobile,
+    paymentMode: paymentMode,
+    tendered: tendered,
+    placeOfSupply: placeOfSupply,
+    saleType: saleType,
+    admissionId: admissionId,
+    admissionNo: admissionNo,
+    doctorId: doctorId,
+    doctorName: doctorName,
+    hospitalReference: value,
+    fromLocation: fromLocation,
+    toLocation: toLocation,
+    transferReason: transferReason,
+  );
+
+  /// A copy with the prescriber replaced, or cleared by passing `null` for both.
+  ///
+  /// The id is the master row this spelling points at, and the name is what the
+  /// bill prints; a name with no id is a prescriber the master has never heard of,
+  /// which the server accepts and records (D-072).
+  PosCart withDoctor({String? id, String? name}) => PosCart(
+    lines: lines,
+    customerId: customerId,
+    patientName: patientName,
+    patientMobile: patientMobile,
+    paymentMode: paymentMode,
+    tendered: tendered,
+    placeOfSupply: placeOfSupply,
+    saleType: saleType,
+    admissionId: admissionId,
+    admissionNo: admissionNo,
+    doctorId: id,
+    doctorName: name,
+    hospitalReference: hospitalReference,
+    fromLocation: fromLocation,
+    toLocation: toLocation,
+    transferReason: transferReason,
+  );
+
+  /// A copy with a transfer's three fields replaced.
+  ///
+  /// One method rather than three setters, so a form that edits all three can
+  /// report its whole state at once instead of racing three partial writes.
+  PosCart withTransfer({String? from, String? to, String? reason}) => PosCart(
+    lines: lines,
+    customerId: customerId,
+    patientName: patientName,
+    patientMobile: patientMobile,
+    paymentMode: paymentMode,
+    tendered: tendered,
+    placeOfSupply: placeOfSupply,
+    saleType: saleType,
+    admissionId: admissionId,
+    admissionNo: admissionNo,
+    doctorId: doctorId,
+    doctorName: doctorName,
+    hospitalReference: hospitalReference,
+    fromLocation: from,
+    toLocation: to,
+    transferReason: reason,
   );
 
   /// A copy with the place of supply replaced, or cleared by passing `null`.
   PosCart withPlaceOfSupply(String? value) => PosCart(
     lines: lines,
     customerId: customerId,
+    patientName: patientName,
+    patientMobile: patientMobile,
     paymentMode: paymentMode,
     tendered: tendered,
     placeOfSupply: value,
     saleType: saleType,
+    admissionId: admissionId,
+    admissionNo: admissionNo,
+    doctorId: doctorId,
+    doctorName: doctorName,
+    hospitalReference: hospitalReference,
+    fromLocation: fromLocation,
+    toLocation: toLocation,
+    transferReason: transferReason,
   );
 
   /// A copy with the payment mode replaced.
   PosCart withPaymentMode(PaymentMode value) => PosCart(
     lines: lines,
     customerId: customerId,
+    patientName: patientName,
+    patientMobile: patientMobile,
     paymentMode: value,
     tendered: tendered,
     placeOfSupply: placeOfSupply,
     saleType: saleType,
+    admissionId: admissionId,
+    admissionNo: admissionNo,
+    doctorId: doctorId,
+    doctorName: doctorName,
+    hospitalReference: hospitalReference,
+    fromLocation: fromLocation,
+    toLocation: toLocation,
+    transferReason: transferReason,
   );
 
   /// A copy with the tender replaced.
   PosCart withTendered(double value) => PosCart(
     lines: lines,
     customerId: customerId,
+    patientName: patientName,
+    patientMobile: patientMobile,
     paymentMode: paymentMode,
     tendered: value,
     placeOfSupply: placeOfSupply,
     saleType: saleType,
+    admissionId: admissionId,
+    admissionNo: admissionNo,
+    doctorId: doctorId,
+    doctorName: doctorName,
+    hospitalReference: hospitalReference,
+    fromLocation: fromLocation,
+    toLocation: toLocation,
+    transferReason: transferReason,
   );
 
   /// A copy with the sale type replaced.
   ///
-  /// Separate from [withCustomer] and [withPlaceOfSupply] for the same reason they
-  /// are separate from each other: the type is what prices the basket, so changing
-  /// it has to produce a new cart rather than an edited field.
+  /// Nothing is discarded: what a type cannot carry is left out of the **payload**
+  /// rather than out of the cart, so a mis-tap does not lose the patient someone
+  /// has just been pinned - which matters because the patient is chosen before the
+  /// type (D-067's flow). Re-pricing the basket is the one thing a type change
+  /// cannot do silently; `PosController.setSaleType` refuses that instead.
   PosCart withSaleType(SaleType value) => PosCart(
     lines: lines,
     customerId: customerId,
+    patientName: patientName,
+    patientMobile: patientMobile,
     paymentMode: paymentMode,
     tendered: tendered,
     placeOfSupply: placeOfSupply,
     saleType: value,
+    admissionId: admissionId,
+    admissionNo: admissionNo,
+    doctorId: doctorId,
+    doctorName: doctorName,
+    hospitalReference: hospitalReference,
+    fromLocation: fromLocation,
+    toLocation: toLocation,
+    transferReason: transferReason,
+  );
+
+  /// A copy with the submission key replaced.
+  ///
+  /// The one copy that carries the key, because minting it is the whole point: it
+  /// is set once a submission starts so a retry is the same sale, and every other
+  /// `with…` clears it so an edit cannot reuse it.
+  PosCart withIdempotencyKey(String? value) => PosCart(
+    lines: lines,
+    customerId: customerId,
+    patientName: patientName,
+    patientMobile: patientMobile,
+    paymentMode: paymentMode,
+    tendered: tendered,
+    placeOfSupply: placeOfSupply,
+    saleType: saleType,
+    admissionId: admissionId,
+    admissionNo: admissionNo,
+    doctorId: doctorId,
+    doctorName: doctorName,
+    hospitalReference: hospitalReference,
+    fromLocation: fromLocation,
+    toLocation: toLocation,
+    transferReason: transferReason,
+    idempotencyKey: value,
   );
 }
 
@@ -203,6 +518,8 @@ class PosController extends _$PosController {
       // not an absence, and must not be replaced by the default. `??` reads exactly
       // that way: only a null slab falls through.
       gstPercent: gstPercent ?? product.gstPercent ?? defaultSaleGstPercent,
+      // Kept for the MRP ceiling a retail rate may not cross (`rateRefusal`).
+      mrp: batch.mrp,
       // Absent when the batch's expiry was never recorded, which is the honest
       // answer for the 145 opening-stock rows whose source had no date.
       expiryDateIso: batch.expiryDate?.toIso8601String(),
@@ -252,9 +569,44 @@ class PosController extends _$PosController {
       if (line.batchId != batchId) line,
   ]);
 
-  /// Records who is buying, or clears the customer with `null`.
+  /// Records who is buying by id, or clears the party with `null`.
+  ///
+  /// Clears the printed name and mobile with it: a party named by id alone has no
+  /// snapshot here, which is what the package sale's account picker wants and what
+  /// the patient step must not use - it calls [setPatient], which carries all three.
   void setCustomer(String? customerId) =>
       state = state.withCustomer(customerId);
+
+  /// Pins the patient, or clears them with `null`.
+  ///
+  /// The whole identity at once - the row, the printed name and the contact
+  /// number - because a counter sale's party *is* the patient and its name and
+  /// mobile are snapshots of that row (D-074).
+  void setPatient(Customer? patient) => state = state.withPatient(patient);
+
+  /// Records the patient's own name and mobile on a package bill.
+  ///
+  /// The package sale's debtor is the hospital's account rather than the patient,
+  /// and the server still requires the patient's name and number for traceability
+  /// (D-067) - which is what these two carry.
+  void setPatientDetails({String? name, String? mobile}) =>
+      state = state.withPatientDetails(name: name, mobile: mobile);
+
+  /// Records the episode an IPD bill posts to, or clears it with `null`.
+  void setAdmission(Admission? admission) =>
+      state = state.withAdmission(admission);
+
+  /// Records the hospital's own OPD/IPD number for the sale.
+  void setHospitalReference(String? value) =>
+      state = state.withHospitalReference(value);
+
+  /// Records the prescriber, or clears both halves with `null`.
+  void setDoctor({String? id, String? name}) =>
+      state = state.withDoctor(id: id, name: name);
+
+  /// Records a transfer's source, destination and reason.
+  void setTransfer({String? from, String? to, String? reason}) =>
+      state = state.withTransfer(from: from, to: to, reason: reason);
 
   /// Records where the goods are going, or clears it with `null`.
   void setPlaceOfSupply(String? value) =>
@@ -264,7 +616,39 @@ class PosController extends _$PosController {
   void setPaymentMode(PaymentMode mode) => state = state.withPaymentMode(mode);
 
   /// Records what kind of sale this is.
-  void setSaleType(SaleType type) => state = state.withSaleType(type);
+  ///
+  /// Refused while the basket is not empty **when the type changes the pricing
+  /// basis**: a package or transfer line is priced from the batch's cost, which the
+  /// cart does not carry (the server resolves it, and the client could only
+  /// re-derive it by reading every batch again), so re-pricing a rung-up basket
+  /// would silently leave the preview describing retail prices the server would
+  /// never store. The flow chooses the type before the items, so this is a guard
+  /// against a mis-tap rather than a limit on the counter.
+  void setSaleType(SaleType type) {
+    if (type == state.saleType) {
+      return;
+    }
+    final changesBasis =
+        type == SaleType.package ||
+        type == SaleType.transfer ||
+        state.saleType == SaleType.package ||
+        state.saleType == SaleType.transfer;
+    if (changesBasis && state.isNotEmpty) {
+      throw const ValidationException(
+        message:
+            'A package or transfer sale is priced from cost, so the type has to '
+            'be chosen before the medicines: empty the basket to change it.',
+      );
+    }
+    state = state.withSaleType(type);
+  }
+
+  /// Records the key this submission is identified by.
+  ///
+  /// Set once a write starts, so a retry is the same sale; every other change to
+  /// the basket clears it, because the server answers a repeated key with the
+  /// original sale rather than comparing payloads.
+  void setIdempotencyKey(String? key) => state = state.withIdempotencyKey(key);
 
   /// Records what the customer handed over.
   void setTendered(double amount) => state = state.withTendered(amount);

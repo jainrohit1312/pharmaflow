@@ -6,6 +6,7 @@
 /// against a number worked out by hand in the test.
 library;
 
+import 'package:app/core/errors/app_exception.dart';
 import 'package:app/data/models/product.dart';
 import 'package:app/data/models/sale.dart';
 import 'package:app/features/purchase/data/purchase_totals.dart';
@@ -14,7 +15,9 @@ import 'package:app/features/sales/data/sale_totals.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import '../../../support/fake_customers_repository.dart';
 import '../../../support/fake_inventory_repository.dart';
+import '../../../support/fake_patients_repository.dart';
 import '../../../support/fake_products_repository.dart';
 
 /// A container holding only the basket (which depends on nothing).
@@ -475,5 +478,261 @@ void main() {
     expect(_cart(container).isEmpty, isTrue);
     expect(_cart(container).isNotEmpty, isFalse);
     expect(_totals(container).grandTotal, 0);
+  });
+
+  group('the basket as a whole', () {
+    test('a setter changes its own field and nothing else', () {
+      // Every `with…` on the cart rebuilds the whole value, so a field left out of
+      // one of them is a value silently reset by an unrelated action - a client
+      // number cleared because someone chose a doctor. This asserts the *set* of
+      // fields each setter is allowed to move, which is the only way that trap
+      // shows up before a customer does.
+      final container = _container();
+      final pos = _pos(container);
+
+      /// The cart with everything the counter can choose, chosen.
+      void pin() {
+        pos
+          ..clear()
+          ..setSaleType(SaleType.counter)
+          ..setPatient(
+            buildCustomer(
+              'ZZTEST patient',
+              id: 'patient-1',
+              phone: '9876543210',
+            ),
+          )
+          ..setAdmission(buildAdmission())
+          ..setDoctor(id: 'doctor-1', name: 'Dr Rao')
+          ..setHospitalReference('IPD-7')
+          ..setTransfer(from: 'Counter', to: 'Godown', reason: 'Consolidation')
+          ..setPlaceOfSupply('Maharashtra')
+          ..setPaymentMode(PaymentMode.upi)
+          ..setTendered(105)
+          ..addLine(
+            product: buildProduct('Dolo 650'),
+            batch: buildBatch(),
+            qty: 1,
+          )
+          ..setIdempotencyKey('key-1');
+      }
+
+      /// Every field of the cart, as a comparable map.
+      Map<String, Object?> signature() {
+        final cart = _cart(container);
+        return <String, Object?>{
+          'lines': cart.lines
+              .map((line) => '${line.batchId}x${line.qty}')
+              .join(),
+          'customerId': cart.customerId,
+          'patientName': cart.patientName,
+          'patientMobile': cart.patientMobile,
+          'admissionId': cart.admissionId,
+          'admissionNo': cart.admissionNo,
+          'doctorId': cart.doctorId,
+          'doctorName': cart.doctorName,
+          'hospitalReference': cart.hospitalReference,
+          'from': cart.fromLocation,
+          'to': cart.toLocation,
+          'reason': cart.transferReason,
+          'placeOfSupply': cart.placeOfSupply,
+          'paymentMode': cart.paymentMode,
+          'tendered': cart.tendered,
+          'saleType': cart.saleType,
+          'key': cart.idempotencyKey,
+        };
+      }
+
+      /// Each setter, and the fields it owns. The key is allowed to move for every
+      /// one of them: it identifies a payload, and an edit makes a new one.
+      final setters = <String, ({void Function() apply, Set<String> owns})>{
+        'setPatient': (
+          apply: () => pos.setPatient(
+            buildCustomer('ZZTEST other', id: 'patient-2', phone: '9000000000'),
+          ),
+          owns: <String>{'customerId', 'patientName', 'patientMobile', 'key'},
+        ),
+        'setCustomer': (
+          apply: () => pos.setCustomer('account-1'),
+          owns: <String>{'customerId', 'patientName', 'patientMobile', 'key'},
+        ),
+        'setPatientDetails': (
+          apply: () => pos.setPatientDetails(name: 'ZZTEST other'),
+          owns: <String>{'patientName', 'patientMobile', 'key'},
+        ),
+        'setAdmission': (
+          apply: () => pos.setAdmission(
+            buildAdmission(id: 'admission-2', admissionNo: 'IPD-9'),
+          ),
+          owns: <String>{
+            'admissionId',
+            'admissionNo',
+            'hospitalReference',
+            'key',
+          },
+        ),
+        'setDoctor': (
+          apply: () => pos.setDoctor(id: 'doctor-2', name: 'Dr Other'),
+          owns: <String>{'doctorId', 'doctorName', 'key'},
+        ),
+        'setHospitalReference': (
+          apply: () => pos.setHospitalReference('IPD-9'),
+          owns: <String>{'hospitalReference', 'key'},
+        ),
+        'setTransfer': (
+          apply: () => pos.setTransfer(from: 'Godown', to: 'Counter'),
+          owns: <String>{'from', 'to', 'reason', 'key'},
+        ),
+        'setPlaceOfSupply': (
+          apply: () => pos.setPlaceOfSupply('Karnataka'),
+          owns: <String>{'placeOfSupply', 'key'},
+        ),
+        'setPaymentMode': (
+          apply: () => pos.setPaymentMode(PaymentMode.card),
+          owns: <String>{'paymentMode', 'key'},
+        ),
+        'setTendered': (
+          apply: () => pos.setTendered(500),
+          owns: <String>{'tendered', 'key'},
+        ),
+        'setQty': (
+          apply: () => pos.setQty('batch-1', 3),
+          owns: <String>{'lines', 'key'},
+        ),
+        'setSaleType': (
+          apply: () => pos.setSaleType(SaleType.ipdAdmission),
+          owns: <String>{'saleType', 'key'},
+        ),
+        'setIdempotencyKey': (
+          apply: () => pos.setIdempotencyKey('key-2'),
+          owns: <String>{'key'},
+        ),
+      };
+
+      for (final entry in setters.entries) {
+        pin();
+        final before = signature();
+        entry.value.apply();
+        final after = signature();
+
+        final moved = <String>{
+          for (final field in before.keys)
+            if (before[field] != after[field]) field,
+        };
+        expect(
+          moved,
+          entry.value.owns,
+          reason: '${entry.key} moved ${moved.join(', ')}',
+        );
+      }
+    });
+
+    test('a package or transfer type has to be chosen before the medicines', () {
+      // The preview for those two is priced from the batch's cost, which the cart
+      // does not carry, so a rung-up basket cannot be re-priced - and a preview
+      // that disagreed with the stored figures is worse than a refusal.
+      final container = _container();
+      _pos(
+        container,
+      ).addLine(product: buildProduct('Dolo 650'), batch: buildBatch(), qty: 1);
+
+      expect(
+        () => _pos(container).setSaleType(SaleType.transfer),
+        throwsA(
+          isA<ValidationException>().having(
+            (error) => error.message,
+            'message',
+            contains('chosen before the medicines'),
+          ),
+        ),
+      );
+      expect(_cart(container).saleType, SaleType.counter);
+    });
+
+    test('a counter sale and an IPD sale are the same basis, so they swap', () {
+      final container = _container();
+      _pos(container)
+        ..addLine(
+          product: buildProduct('Dolo 650'),
+          batch: buildBatch(),
+          qty: 1,
+        )
+        ..setSaleType(SaleType.ipdAdmission);
+
+      expect(_cart(container).saleType, SaleType.ipdAdmission);
+      expect(_cart(container).lines, hasLength(1));
+    });
+
+    test('setting the type it already is does nothing at all', () {
+      final container = _container();
+
+      expect(
+        () => _pos(container)..setSaleType(SaleType.counter),
+        returnsNormally,
+      );
+      expect(_cart(container).saleType, SaleType.counter);
+    });
+
+    test('a transfer takes no payment, whatever was tendered', () {
+      // A stock movement between locations is not a sale, and `checkout_sale()`
+      // refuses one that records money.
+      final container = _container();
+
+      _pos(container)
+        ..setSaleType(SaleType.transfer)
+        ..setTransfer(
+          from: 'Counter',
+          to: 'Godown',
+          reason: 'Stock consolidation',
+        )
+        ..setTendered(500);
+
+      expect(_cart(container).paidFor(100), 0);
+      expect(_cart(container).needsCustomer, isFalse);
+    });
+
+    test('pinning a patient carries the row, the name and the number', () {
+      final container = _container();
+
+      _pos(container).setPatient(
+        buildCustomer('ZZTEST patient', id: 'patient-1', phone: '9876543210'),
+      );
+
+      final cart = _cart(container);
+      expect(cart.customerId, 'patient-1');
+      expect(cart.patientName, 'ZZTEST patient');
+      expect(cart.patientMobile, '9876543210');
+    });
+
+    test('naming a party by id clears the identity it used to print', () {
+      final container = _container();
+
+      _pos(container)
+        ..setPatient(
+          buildCustomer('ZZTEST patient', id: 'patient-1', phone: '9876543210'),
+        )
+        ..setCustomer('hospital-account');
+
+      final cart = _cart(container);
+      expect(cart.customerId, 'hospital-account');
+      expect(
+        cart.patientName,
+        isNull,
+        reason:
+            'a different party is a different thing to print, so the old '
+            'snapshot must not survive it',
+      );
+      expect(cart.patientMobile, isNull);
+    });
+
+    test('clearing the basket forgets the key with everything else', () {
+      final container = _container();
+
+      _pos(container)
+        ..setIdempotencyKey('key-1')
+        ..clear();
+
+      expect(_cart(container).idempotencyKey, isNull);
+    });
   });
 }

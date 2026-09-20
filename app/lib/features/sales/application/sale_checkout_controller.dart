@@ -4,11 +4,13 @@ library;
 import 'package:app/core/errors/app_exception.dart';
 import 'package:app/data/models/sale.dart';
 import 'package:app/data/models/sale_cart_line.dart';
+import 'package:app/data/repositories/pharmacy_repository.dart';
 import 'package:app/features/auth/application/pharmacy_scope.dart';
 import 'package:app/features/inventory/application/stock_readers.dart';
 import 'package:app/features/products/data/products_repository.dart';
 import 'package:app/features/purchase/data/purchase_totals.dart';
 import 'package:app/features/sales/application/pos_controller.dart';
+import 'package:app/features/sales/application/sale_requirements.dart';
 import 'package:app/features/sales/application/sales_list_controller.dart';
 import 'package:app/features/sales/data/sale_checkout.dart';
 import 'package:app/features/sales/data/sale_totals.dart';
@@ -17,19 +19,41 @@ import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 part 'sale_checkout_controller.g.dart';
 
+/// Mints the key one submission is identified by.
+///
+/// Unique within this installation, which is all the server's
+/// `(pharmacy_id, idempotency_key)` index needs. A counter is enough rather than a
+/// random name because a pharmacy's submissions come from one process; the
+/// timestamp is what keeps two installations from colliding on the same counter.
+String newSubmissionKey() =>
+    'pos-${DateTime.now().microsecondsSinceEpoch}-${_submissionCount++}';
+
+/// How many keys this process has minted, to keep two in the same microsecond
+/// apart.
+int _submissionCount = 0;
+
 /// Writes the basket as a sale, in one transaction.
 ///
-/// The order of the two things this does is the whole design:
+/// The order of the things this does is the whole design:
 ///
-///  1. **Availability is re-read and checked before anything is written**, so an
+///  1. **The sale's own requirements are checked first** ([saleRefusal]): the type
+///     decides what the bill must carry, so a counter sale with no patient is
+///     refused before anything else is even read. The server refuses it too - in
+///     the same words - which is where these sentences come from.
+///  2. **Availability is re-read and checked before anything is written**, so an
 ///     out-of-stock line is refused with a message naming the product and what is
 ///     left. The database refuses it anyway - `stock_update_on_sale()` raises
 ///     `check_violation` and `checkout_sale()` is one transaction, so nothing
 ///     partial is ever stored - but its message names a batch id, which is no use
 ///     to a cashier.
-///  2. **The write is one RPC.** A sale's stock posts as each line is inserted, so
+///  3. **The write is one RPC.** A sale's stock posts as each line is inserted, so
 ///     a header-then-lines write would leave some units taken and some not if a
 ///     later line were refused.
+///
+/// A submission carries an **idempotency key** from the moment it starts, so a
+/// retry after a timeout is the same sale rather than a second one. Every edit to
+/// the basket clears the key (`PosCart`), because the server answers a repeated key
+/// with the original sale rather than comparing payloads.
 ///
 /// On success the basket is emptied and every reader of stock is refreshed: a sale
 /// is the movement that most often empties a batch.
@@ -52,6 +76,15 @@ class SaleCheckoutController extends _$SaleCheckoutController {
     state = const AsyncLoading<Sale?>();
     try {
       final pharmacyId = ref.read(requirePharmacyIdProvider);
+
+      final refusal = saleRefusal(
+        cart: cart,
+        packageMarkupPercent: await _packageMarkup(pharmacyId, cart.saleType),
+      );
+      if (refusal != null) {
+        throw ValidationException(message: refusal);
+      }
+
       await _requireStock(pharmacyId: pharmacyId, lines: cart.lines);
 
       final totals = SaleTotals.forLines(
@@ -59,6 +92,27 @@ class SaleCheckoutController extends _$SaleCheckoutController {
         split: split,
         saleType: cart.saleType,
       );
+      final paid = cart.paidFor(totals.grandTotal);
+      // The last line of defence rather than the first: every type that can be left
+      // unpaid requires a party (counter and IPD a patient, package an account), so
+      // `saleRefusal` has already refused this case. It stays because it is the
+      // server's own rule - "a sale with an unpaid balance needs a customer to owe
+      // it" - and a future type that allowed one would otherwise reach the till.
+      if (cart.saleType != SaleType.transfer &&
+          paid < totals.grandTotal &&
+          cart.customerId == null) {
+        throw const ValidationException(
+          message:
+              'Choose the customer who is owing the balance, or take the '
+              'payment in full.',
+        );
+      }
+
+      // Minted before the write and left on the cart, so a retry of a submission
+      // that timed out is the same sale.
+      final key = cart.idempotencyKey ?? newSubmissionKey();
+      ref.read(posControllerProvider.notifier).setIdempotencyKey(key);
+
       final checkout = SaleCheckout(
         lines: <SaleCheckoutLine>[
           for (final line in cart.lines)
@@ -69,24 +123,28 @@ class SaleCheckoutController extends _$SaleCheckoutController {
                 split: split,
                 saleType: cart.saleType,
               ),
+              saleType: cart.saleType,
             ),
         ],
+        saleType: cart.saleType,
         customerId: cart.customerId,
+        patientName: cart.patientName,
+        patientMobile: cart.patientMobile,
+        admissionId: cart.admissionId,
+        doctorId: cart.doctorId,
+        doctorName: cart.doctorName,
+        hospitalReference: cart.hospitalReference,
         paymentMode: cart.paymentMode,
         // What the counter says it took, by the same rule the screen showed:
         // the change handed back is not a payment, and `sales_payment_check`
         // refuses a sale paid beyond its total.
-        amountPaid: cart.paidFor(totals.grandTotal),
+        amountPaid: paid,
         placeOfSupply: cart.placeOfSupply,
+        fromLocation: cart.fromLocation,
+        toLocation: cart.toLocation,
+        transferReason: cart.transferReason,
+        idempotencyKey: key,
       );
-
-      if (checkout.amountPaid < totals.grandTotal && cart.customerId == null) {
-        throw const ValidationException(
-          message:
-              'Choose the customer who is owing the balance, or take the '
-              'payment in full.',
-        );
-      }
 
       final saved = await ref
           .read(salesRepositoryProvider)
@@ -101,6 +159,21 @@ class SaleCheckoutController extends _$SaleCheckoutController {
       state = AsyncError<Sale?>(error, stackTrace);
       rethrow;
     }
+  }
+
+  /// The pharmacy's package markup, read only when a package sale needs it.
+  ///
+  /// `null` is a real answer - nobody has configured it - and refuses the sale
+  /// rather than pricing it at an invented percentage (D-070). A counter sale does
+  /// not pay for this read.
+  Future<double?> _packageMarkup(String pharmacyId, SaleType saleType) async {
+    if (saleType != SaleType.package) {
+      return null;
+    }
+    final pharmacy = await ref
+        .read(pharmacyRepositoryProvider)
+        .byId(pharmacyId);
+    return pharmacy?.packageMarkupPercent;
   }
 
   /// Refuses the basket when a line asks for more than its batch holds.

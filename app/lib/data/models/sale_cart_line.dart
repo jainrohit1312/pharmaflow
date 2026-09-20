@@ -13,6 +13,12 @@ import 'package:freezed_annotation/freezed_annotation.dart';
 part 'sale_cart_line.freezed.dart';
 
 /// A line chosen at the counter.
+///
+/// [mrp] is the batch's printed price at the moment the line was rung up, kept
+/// because it is the **ceiling** a retail rate may not exceed - `rateRefusal`
+/// mirrors the server's own check and needs it. It is not a price anything is
+/// charged at: the rate is, and for a package or transfer line the server derives
+/// even that.
 @freezed
 abstract class SaleCartLine with _$SaleCartLine {
   /// Creates an immutable cart line.
@@ -26,6 +32,7 @@ abstract class SaleCartLine with _$SaleCartLine {
     required double rate,
     @Default(0) double discountPercent,
     @Default(0) double gstPercent,
+    @Default(0) double mrp,
     String? expiryDateIso,
   }) = _SaleCartLine;
 }

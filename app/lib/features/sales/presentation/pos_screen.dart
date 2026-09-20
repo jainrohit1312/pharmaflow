@@ -178,14 +178,16 @@ class _PosScreenState extends ConsumerState<PosScreen> {
               child: Column(
                 children: <Widget>[
                   AppDropdownField<String>(
-                    label: 'Customer',
-                    hint: 'Walk-in',
+                    label: 'Patient',
+                    hint: 'Choose one - a pharmacy sale needs a patient',
                     prefixIcon: Icons.person_outline,
                     value: cart.customerId,
                     values: _customerIds(customers, cart.customerId),
                     labelOf: (id) => _customerName(customers, id),
                     allowNone: true,
-                    onChanged: pos.setCustomer,
+                    onChanged: (id) => pos.setPatient(
+                      id == null ? null : _customerOf(customers, id),
+                    ),
                   ),
                   const SizedBox(height: 12),
                   Wrap(
@@ -631,6 +633,21 @@ String _customerName(List<Customer> customers, String id) {
     }
   }
   return 'Currently selected customer';
+}
+
+/// The customer row [id] names, or `null` when the list does not hold it.
+///
+/// The picker reports an id, and the cart needs the row: a pharmacy sale prints the
+/// patient's name and mobile as snapshots of it, so pinning a patient is pinning
+/// all three (D-074). A row the page did not load cannot be resolved, and the
+/// requirement will say the patient has no name on file rather than inventing one.
+Customer? _customerOf(List<Customer> customers, String id) {
+  for (final customer in customers) {
+    if (customer.id == id) {
+      return customer;
+    }
+  }
+  return null;
 }
 
 /// Formats [value] for a text field, leaving off a trailing `.0`.

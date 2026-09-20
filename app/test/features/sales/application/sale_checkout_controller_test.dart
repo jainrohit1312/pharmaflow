@@ -7,8 +7,10 @@
 library;
 
 import 'package:app/core/errors/app_exception.dart';
+import 'package:app/data/models/customer.dart';
 import 'package:app/data/models/product.dart';
 import 'package:app/data/models/sale.dart';
+import 'package:app/data/repositories/pharmacy_repository.dart';
 import 'package:app/features/auth/application/pharmacy_scope.dart';
 import 'package:app/features/products/data/products_repository.dart';
 import 'package:app/features/purchase/data/purchase_totals.dart';
@@ -19,7 +21,10 @@ import 'package:app/features/sales/data/sales_repository.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import '../../../support/fake_customers_repository.dart';
 import '../../../support/fake_inventory_repository.dart';
+import '../../../support/fake_patients_repository.dart';
+import '../../../support/fake_pharmacy_repository.dart';
 import '../../../support/fake_products_repository.dart';
 import '../../../support/fake_sales_repository.dart';
 
@@ -27,6 +32,7 @@ import '../../../support/fake_sales_repository.dart';
 ProviderContainer _container({
   required FakeSalesRepository sales,
   FakeProductsRepository? products,
+  FakePharmacyRepository? pharmacy,
 }) {
   final container = ProviderContainer(
     overrides: [
@@ -35,6 +41,9 @@ ProviderContainer _container({
         products ?? FakeProductsRepository(products: const <Product>[]),
       ),
       requirePharmacyIdProvider.overrideWith((ref) => 'ph-1'),
+      pharmacyRepositoryProvider.overrideWithValue(
+        pharmacy ?? FakePharmacyRepository(),
+      ),
     ],
   );
   addTearDown(container.dispose);
@@ -47,6 +56,7 @@ ProviderContainer _container({
 /// and what the batch holds - which is why it is returned rather than rebuilt.
 ({ProviderContainer container, FakeProductsRepository products}) _withStock({
   FakeSalesRepository? sales,
+  FakePharmacyRepository? pharmacy,
   int onHand = 50,
 }) {
   final products = FakeProductsRepository(products: const <Product>[]);
@@ -55,28 +65,43 @@ ProviderContainer _container({
     container: _container(
       sales: sales ?? FakeSalesRepository(),
       products: products,
+      pharmacy: pharmacy,
     ),
     products: products,
   );
 }
 
-/// Rings one line into the basket.
+/// The patient a pharmacy sale has to name.
+Customer _patient() =>
+    buildCustomer('ZZTEST patient', id: 'patient-1', phone: '9876543210');
+
+/// Rings one line into the basket, with the patient a pharmacy sale now needs.
+///
+/// The patient is pinned by default because almost every test here is about what
+/// happens *after* the bill is legal; the ones about the requirement itself pass
+/// `withPatient: false`, which is the omission they are testing.
 void _ringUp(
   ProviderContainer container, {
   int qty = 2,
   double rate = 100,
   double gstPercent = 5,
   String batchId = 'batch-1',
+  double mrp = 250,
+  bool withPatient = true,
 }) {
-  container
-      .read(posControllerProvider.notifier)
-      .addLine(
-        product: buildProduct('Dolo 650'),
-        batch: buildBatch(id: batchId, batchNo: 'B-$batchId'),
-        qty: qty,
-        rate: rate,
-        gstPercent: gstPercent,
-      );
+  final pos = container.read(posControllerProvider.notifier);
+  if (withPatient) {
+    pos.setPatient(_patient());
+  }
+  pos.addLine(
+    product: buildProduct('Dolo 650'),
+    // The MRP sits above every rate these tests charge, because it is a ceiling: a
+    // fixture that broke its own rule would be testing a bill the counter refuses.
+    batch: buildBatch(id: batchId, batchNo: 'B-$batchId', mrp: mrp),
+    qty: qty,
+    rate: rate,
+    gstPercent: gstPercent,
+  );
 }
 
 /// The basket's current totals.
@@ -231,13 +256,15 @@ void main() {
   );
 
   test('refuses a balance that nobody will owe', () async {
-    // The only payment rule a sale has, alongside the overpayment guard: a bill
-    // that is not settled at the counter needs a customer to carry it. There is no
-    // "invalid payment mode" to refuse - `PaymentMode` is a closed enum, so the
-    // credit-without-a-customer case is where a bad settlement actually shows up.
+    // The rule this protects - a bill that is not settled at the counter needs a
+    // party to carry it - is now enforced earlier and more precisely by the
+    // per-type requirements: a counter sale cannot be built without a patient at
+    // all. So the sentence the counter reports moved, and the assertion moved with
+    // it rather than being loosened to accept either. (Before Phase 7a this read
+    // "Choose the customer who is owing the balance, or take the payment in full.")
     final sales = FakeSalesRepository();
     final container = _withStock(sales: sales).container;
-    _ringUp(container);
+    _ringUp(container, withPatient: false);
 
     container
         .read(posControllerProvider.notifier)
@@ -249,27 +276,26 @@ void main() {
         isA<ValidationException>().having(
           (error) => error.message,
           'message',
-          'Choose the customer who is owing the balance, or take the payment in '
-              'full.',
+          contains('needs a patient'),
         ),
       ),
     );
     expect(sales.checkouts, isEmpty);
   });
 
-  test('writes a credit sale when a customer carries the balance', () async {
+  test('writes a credit sale when a patient carries the balance', () async {
     final sales = FakeSalesRepository();
     final container = _withStock(sales: sales).container;
     _ringUp(container);
 
     container.read(posControllerProvider.notifier)
       ..setPaymentMode(PaymentMode.credit)
-      ..setCustomer('customer-1');
+      ..setPatient(_patient());
 
     final saved = await _write(container);
 
     expect(saved.status, SaleStatus.credit);
-    expect(saved.customerId, 'customer-1');
+    expect(saved.customerId, 'patient-1');
     expect(saved.amountPaid, 0);
     expect(saved.balanceDue, 200);
   });
@@ -313,6 +339,7 @@ void main() {
       );
       addTearDown(subscription.close);
       _ringUp(container);
+      container.read(posControllerProvider.notifier).setPatient(_patient());
 
       await expectLater(_write(container), throwsA(isA<ServerException>()));
 
@@ -320,4 +347,277 @@ void main() {
       expect(container.read(saleCheckoutControllerProvider).hasError, isTrue);
     },
   );
+
+  group('the typed payload', () {
+    test('names its type and the patient the counter pinned', () async {
+      final sales = FakeSalesRepository();
+      final container = _withStock(sales: sales).container;
+      _ringUp(container);
+      container.read(posControllerProvider.notifier).setPatient(_patient());
+
+      final saved = await _write(container);
+
+      final payload = sales.checkouts.single;
+      expect(payload.saleType, SaleType.counter);
+      expect(payload.toPayload()['sale_type'], 'counter');
+      expect(payload.customerId, 'patient-1');
+      expect(saved.saleType, SaleType.counter);
+      expect(saved.patientName, 'ZZTEST patient');
+      expect(saved.patientMobile, '9876543210');
+    });
+
+    test('carries the prescriber and the episode on an IPD sale', () async {
+      final sales = FakeSalesRepository();
+      final container = _withStock(sales: sales).container;
+      _ringUp(container);
+      container.read(posControllerProvider.notifier)
+        ..setSaleType(SaleType.ipdAdmission)
+        ..setPatient(_patient())
+        ..setAdmission(buildAdmission())
+        ..setDoctor(id: 'doctor-1', name: 'Dr Rao');
+
+      final saved = await _write(container);
+
+      final payload = sales.checkouts.single.toPayload();
+      expect(payload['admission_id'], 'admission-1');
+      expect(payload['doctor_name'], 'Dr Rao');
+      expect(saved.admissionId, 'admission-1');
+      expect(saved.doctorName, 'Dr Rao');
+    });
+
+    test(
+      'carries the patient as text and no prescriber on a package sale',
+      () async {
+        final sales = FakeSalesRepository();
+        final container = _withStock(
+          sales: sales,
+          pharmacy: FakePharmacyRepository(
+            pharmacy: buildPharmacy(packageMarkupPercent: 20),
+          ),
+        ).container;
+        // The type first, on an empty basket: a package sale is priced from cost, so
+        // the basis cannot change once something has been rung up.
+        container.read(posControllerProvider.notifier)
+          ..setSaleType(SaleType.package)
+          ..setCustomer('hospital-account')
+          ..setPatientDetails(name: 'ZZTEST patient', mobile: '9876543210')
+          ..setHospitalReference('PKG-1');
+        // And no patient is pinned: a package bill's party is the account, with the
+        // patient travelling as text beside it.
+        _ringUp(container, withPatient: false);
+
+        final saved = await _write(container);
+
+        final payload = sales.checkouts.single.toPayload();
+        expect(payload['customer_id'], 'hospital-account');
+        expect(payload['patient_name'], 'ZZTEST patient');
+        expect(payload.keys, isNot(contains('doctor_name')));
+        expect(saved.saleType, SaleType.package);
+      },
+    );
+
+    test('carries the two locations and no payment on a transfer', () async {
+      final sales = FakeSalesRepository();
+      final container = _withStock(sales: sales).container;
+      container.read(posControllerProvider.notifier)
+        ..setSaleType(SaleType.transfer)
+        ..setTransfer(
+          from: 'Counter',
+          to: 'Godown',
+          reason: 'Stock consolidation',
+        );
+      _ringUp(container);
+      container.read(posControllerProvider.notifier).setTendered(500);
+
+      final saved = await _write(container);
+
+      final payload = sales.checkouts.single.toPayload();
+      expect(payload['from_location'], 'Counter');
+      expect(payload['amount_paid'], 0);
+      expect(payload.keys, isNot(contains('customer_id')));
+      expect(saved.fromLocation, 'Counter');
+      expect(saved.amountPaid, 0);
+    });
+  });
+
+  group('what is refused before anything is written', () {
+    test('a counter sale with no patient never reaches the till', () async {
+      final sales = FakeSalesRepository();
+      final container = _withStock(sales: sales).container;
+      _ringUp(container, withPatient: false);
+
+      await expectLater(
+        _write(container),
+        throwsA(
+          isA<ValidationException>().having(
+            (error) => error.message,
+            'message',
+            contains('needs a patient'),
+          ),
+        ),
+      );
+      expect(sales.checkouts, isEmpty);
+    });
+
+    test('an IPD sale with no episode never reaches the till', () async {
+      final sales = FakeSalesRepository();
+      final container = _withStock(sales: sales).container;
+      _ringUp(container);
+      container.read(posControllerProvider.notifier)
+        ..setSaleType(SaleType.ipdAdmission)
+        ..setPatient(_patient());
+
+      await expectLater(_write(container), throwsA(isA<ValidationException>()));
+      expect(sales.checkouts, isEmpty);
+    });
+
+    test(
+      'a Schedule H/H1/X bill with no prescriber never reaches the till',
+      () async {
+        final sales = FakeSalesRepository();
+        final container = _withStock(sales: sales).container;
+        container.read(posControllerProvider.notifier)
+          ..setPatient(_patient())
+          ..addLine(
+            product: buildProduct('Dolo 650', scheduleType: ScheduleType.h1),
+            batch: buildBatch(batchNo: 'B-batch-1'),
+            qty: 1,
+          );
+
+        await expectLater(
+          _write(container),
+          throwsA(
+            isA<ValidationException>().having(
+              (error) => error.message,
+              'message',
+              contains('prescriber'),
+            ),
+          ),
+        );
+        expect(sales.checkouts, isEmpty);
+      },
+    );
+
+    test('a package sale is refused while nobody configured a markup', () async {
+      // D-070: the column has no default on purpose, so this is the refusal a
+      // freshly onboarded pharmacy actually meets. Everything else about the bill
+      // is in place - only the markup is missing - so the refusal cannot be about
+      // anything else.
+      final sales = FakeSalesRepository();
+      final container = _withStock(sales: sales).container;
+      container.read(posControllerProvider.notifier)
+        ..setSaleType(SaleType.package)
+        ..setCustomer('hospital-account')
+        ..setPatientDetails(name: 'ZZTEST patient', mobile: '9876543210')
+        ..setHospitalReference('PKG-1');
+      _ringUp(container, withPatient: false);
+
+      await expectLater(
+        _write(container),
+        throwsA(
+          isA<ValidationException>().having(
+            (error) => error.message,
+            'message',
+            contains('package markup'),
+          ),
+        ),
+      );
+      expect(sales.checkouts, isEmpty);
+    });
+
+    test('the requirement is checked before the stock is even read', () async {
+      // The order matters to what the counter is told: a bill that names no patient
+      // is refused for the patient rather than for stock, and saying so here keeps
+      // a later refactor from quietly reversing the two.
+      final products = FakeProductsRepository(products: const <Product>[]);
+      products.batchQuantities['batch-1'] = 0;
+      final container = _container(
+        sales: FakeSalesRepository(),
+        products: products,
+      );
+      _ringUp(container, qty: 5, withPatient: false);
+
+      await expectLater(
+        _write(container),
+        throwsA(
+          isA<ValidationException>().having(
+            (error) => error.message,
+            'message',
+            contains('needs a patient'),
+          ),
+        ),
+      );
+    });
+  });
+
+  group('the submission key', () {
+    test(
+      'is minted once, sent with the write, and cleared with the basket',
+      () async {
+        final sales = FakeSalesRepository();
+        final container = _withStock(sales: sales).container;
+        _ringUp(container);
+        container.read(posControllerProvider.notifier).setPatient(_patient());
+
+        await _write(container);
+
+        expect(sales.checkouts.single.idempotencyKey, isNotNull);
+        expect(
+          container.read(posControllerProvider).idempotencyKey,
+          isNull,
+          reason: 'the basket is emptied with the sale, and so is its key',
+        );
+      },
+    );
+
+    test('is reused by a retry, so a timed-out submit stays one sale', () async {
+      final sales = FakeSalesRepository()
+        ..errorToThrow = const ServerException(message: 'Timed out.');
+      final container = _withStock(sales: sales).container;
+      _ringUp(container);
+      container.read(posControllerProvider.notifier).setPatient(_patient());
+
+      await expectLater(_write(container), throwsA(isA<ServerException>()));
+      final first = container.read(posControllerProvider).idempotencyKey;
+      expect(first, isNotNull);
+
+      sales.errorToThrow = null;
+      await _write(container);
+
+      expect(
+        sales.checkouts.single.idempotencyKey,
+        first,
+        reason:
+            'the server answers a repeated key with the original sale, which is '
+            'exactly what a retry of an unknown outcome needs',
+      );
+    });
+
+    test(
+      'is dropped once the basket is edited, because the payload changed',
+      () async {
+        final sales = FakeSalesRepository()
+          ..errorToThrow = const ServerException(message: 'Timed out.');
+        final container = _withStock(sales: sales).container;
+        _ringUp(container);
+        container.read(posControllerProvider.notifier).setPatient(_patient());
+
+        await expectLater(_write(container), throwsA(isA<ServerException>()));
+        final first = container.read(posControllerProvider).idempotencyKey;
+        expect(first, isNotNull);
+
+        // The cashier corrects the quantity and submits again: a new payload, so a
+        // new key - reusing the old one would hand back the sale already written.
+        container.read(posControllerProvider.notifier).setQty('batch-1', 1);
+        expect(container.read(posControllerProvider).idempotencyKey, isNull);
+
+        sales.errorToThrow = null;
+        await _write(container);
+
+        final retried = sales.checkouts.last.idempotencyKey;
+        expect(retried, isNotNull);
+        expect(retried, isNot(first));
+      },
+    );
+  });
 }

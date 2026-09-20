@@ -9,18 +9,25 @@ import 'package:app/core/router/routes.dart';
 import 'package:app/core/utils/formatters.dart';
 import 'package:app/core/widgets/expiry_badge.dart';
 import 'package:app/data/models/batch_status.dart';
+import 'package:app/data/models/customer.dart';
 import 'package:app/data/models/product.dart';
+import 'package:app/data/models/sale.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import '../../../support/fake_customers_repository.dart';
 import '../../../support/fake_inventory_repository.dart';
 import '../../../support/fake_products_repository.dart';
 import '../../../support/fake_sales_repository.dart';
 import '../../../support/sales_test_app.dart';
 
 /// A batch with a counter price, so the line the screen shows has a known rate.
+///
+/// The MRP sits above the counter price because it is a **ceiling**: a rate above
+/// it is refused at checkout, and a fixture that broke its own rule would be
+/// testing a bill the counter cannot actually write.
 BatchStatus _batch({String id = 'batch-1', String batchNo = 'B-1'}) =>
-    buildBatch(id: id, batchNo: batchNo).copyWith(sellingRate: 200);
+    buildBatch(id: id, batchNo: batchNo).copyWith(sellingRate: 200, mrp: 250);
 
 /// Adds the only product the fake search offers to the basket.
 ///
@@ -36,6 +43,25 @@ Future<void> _addLine(WidgetTester tester, {String batchNo = 'B-1'}) async {
 /// Types [value] into the field labelled [label].
 Future<void> _type(WidgetTester tester, String label, String value) async {
   await tester.enterText(find.widgetWithText(TextFormField, label), value);
+  await tester.pumpAndSettle();
+}
+
+/// The patient a pharmacy sale has to name.
+Customer _patient() => buildCustomer(
+  'ZZTEST patient',
+  id: 'id-ZZTEST patient',
+  phone: '9876543210',
+);
+
+/// Chooses [_patient] from the counter's patient picker.
+///
+/// Until the patient step lands the picker is the dropdown under Payment, and
+/// choosing from it is what pins the row - the counter cannot take payment for a
+/// bill that names nobody. The dropdown is the tap target; its hint text is not one.
+Future<void> _choosePatient(WidgetTester tester) async {
+  await tester.tap(find.byType(DropdownButtonFormField<String>));
+  await tester.pumpAndSettle();
+  await tester.tap(find.text('ZZTEST patient').last);
   await tester.pumpAndSettle();
 }
 
@@ -239,9 +265,13 @@ void main() {
       products: products,
       searchResults: <Product>[buildProduct('Dolo 650')],
       batches: <BatchStatus>[_batch()],
+      customers: <Customer>[_patient()],
       initialLocation: Routes.pos,
     );
     await _addLine(tester);
+    // A pharmacy sale needs a patient before the medicines, and the server refuses
+    // one without: the counter has to name them before it can take payment.
+    await _choosePatient(tester);
 
     await tester.tap(find.widgetWithText(ElevatedButton, 'Take payment'));
     await tester.pumpAndSettle();
@@ -249,9 +279,41 @@ void main() {
     expect(sales.checkouts, hasLength(1));
     expect(sales.checkouts.single.lines.single.batchId, 'batch-1');
     expect(sales.checkouts.single.lines.single.qty, 1);
+    expect(sales.checkouts.single.saleType, SaleType.counter);
+    expect(sales.checkouts.single.customerId, 'id-ZZTEST patient');
     // The bill the counter opened is the sale it wrote, and the basket is gone
     // with it.
     expect(find.textContaining('bill sale-1'), findsOneWidget);
     expect(find.text('Dolo 650'), findsNothing);
+  });
+
+  testWidgets('refuses to take payment for a bill with no patient', (
+    tester,
+  ) async {
+    // The refusal is the server's own rule, said before the write rather than after
+    // it: nothing reaches the till, and the message says what is missing.
+    final sales = FakeSalesRepository();
+    await pumpSalesApp(
+      tester,
+      repository: sales,
+      searchResults: <Product>[buildProduct('Dolo 650')],
+      batches: <BatchStatus>[_batch()],
+      initialLocation: Routes.pos,
+    );
+    await _addLine(tester);
+
+    await tester.tap(find.widgetWithText(ElevatedButton, 'Take payment'));
+    await tester.pumpAndSettle();
+
+    expect(sales.checkouts, isEmpty);
+    expect(
+      find.text(
+        'A pharmacy sale needs a patient: select or register one before the '
+        'medicines.',
+      ),
+      findsOneWidget,
+      reason:
+          'the sentence names what is missing rather than only that something is',
+    );
   });
 }

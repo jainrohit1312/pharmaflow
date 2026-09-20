@@ -239,6 +239,19 @@ class FakeSalesRepository implements SalesRepository {
       ),
       customerId: checkout.customerId,
       placeOfSupply: checkout.placeOfSupply,
+      // Echoed from the payload, the way `checkout_sale()` stores them: what the
+      // counter sent is what a test can then read back off the document.
+      saleType: checkout.saleType,
+      patientName: checkout.patientName,
+      patientMobile: checkout.patientMobile,
+      admissionId: checkout.admissionId,
+      doctorId: checkout.doctorId,
+      doctorName: checkout.doctorName,
+      hospitalReference: checkout.hospitalReference,
+      fromLocation: checkout.fromLocation,
+      toLocation: checkout.toLocation,
+      transferReason: checkout.transferReason,
+      idempotencyKey: checkout.idempotencyKey,
     );
     sales.insert(0, saved);
     return saved;
