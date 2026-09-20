@@ -3,6 +3,7 @@
 /// Not a `_test.dart` file, so `flutter test` does not try to run it.
 library;
 
+import 'package:app/data/models/batch_status.dart';
 import 'package:app/data/models/product.dart';
 import 'package:app/features/products/data/products_repository.dart';
 
@@ -57,6 +58,14 @@ class FakeProductsRepository implements ProductsRepository {
   /// before it writes, so a test can make a basket look short.
   final Map<String, int> batchQuantities = <String, int>{};
 
+  /// The batches [batchesForProducts] answers with, by product id.
+  ///
+  /// For the counter's dropdown, which reads the batches of every product its page
+  /// matched in one go. A product absent here has no batch at all - which the
+  /// dropdown reads as "nothing to dispense", not as a failed read.
+  final Map<String, List<BatchStatus>> batchesByProduct =
+      <String, List<BatchStatus>>{};
+
   /// The last query the controller sent.
   ProductsQuery? lastQuery;
 
@@ -108,6 +117,15 @@ class FakeProductsRepository implements ProductsRepository {
   }) async => <String, int>{
     for (final entry in batchQuantities.entries)
       if (batchIds.contains(entry.key)) entry.key: entry.value,
+  };
+
+  @override
+  Future<Map<String, List<BatchStatus>>> batchesForProducts({
+    required String pharmacyId,
+    required List<String> productIds,
+  }) async => <String, List<BatchStatus>>{
+    for (final id in productIds)
+      if (batchesByProduct.containsKey(id)) id: batchesByProduct[id]!,
   };
 
   @override

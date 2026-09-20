@@ -34,6 +34,13 @@ abstract final class Formatters {
   /// Formats [date] as `September 2026`, for a month heading.
   static String monthYear(DateTime date) => _monthYear.format(date);
 
+  /// Formats [date] as `09/26`, the `MM/YY` a batch expiry is read in.
+  ///
+  /// Not [dateDdMmmYyyy]: a counter reading a strip of shelf labels wants the
+  /// month and the year, and the day is noise. A two-digit year is what is printed
+  /// on the pack, so it is what the screen offers beside it.
+  static String monthYearShort(DateTime date) => _monthYearShort.format(date);
+
   /// Formats [d] as `18/09/2026`, or returns `null` when [d] is `null`.
   static String? dateDdMmYyyyOrNull(DateTime? d) =>
       d == null ? null : _ddMmYyyy.format(d);
@@ -71,4 +78,5 @@ abstract final class Formatters {
   static final DateFormat _ddMmmYyyyHm = DateFormat('dd MMM yyyy HH:mm');
   static final DateFormat _hm = DateFormat('HH:mm');
   static final DateFormat _monthYear = DateFormat('MMMM yyyy');
+  static final DateFormat _monthYearShort = DateFormat('MM/yy');
 }

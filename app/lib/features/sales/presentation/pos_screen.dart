@@ -15,17 +15,19 @@ import 'package:app/core/widgets/section_card.dart';
 import 'package:app/data/models/product.dart';
 import 'package:app/data/models/sale.dart';
 import 'package:app/data/models/sale_cart_line.dart';
-import 'package:app/features/products/application/product_search.dart';
 import 'package:app/features/purchase/data/purchase_totals.dart';
 import 'package:app/features/sales/application/pos_controller.dart';
+import 'package:app/features/sales/application/pos_search.dart';
 import 'package:app/features/sales/application/sale_checkout_controller.dart';
 import 'package:app/features/sales/application/sale_tax_split.dart';
 import 'package:app/features/sales/data/sale_totals.dart';
 import 'package:app/features/sales/presentation/patients/patient_step.dart';
 import 'package:app/features/sales/presentation/widgets/batch_chooser_sheet.dart';
+import 'package:app/features/sales/presentation/widgets/pos_search_results.dart';
 import 'package:app/features/sales/presentation/widgets/sale_identity_fields.dart';
 import 'package:app/features/sales/presentation/widgets/sale_type_selector.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
@@ -47,27 +49,156 @@ class _PosScreenState extends ConsumerState<PosScreen> {
   final _debounce = Debouncer();
   final _tender = TextEditingController();
   final _placeOfSupply = TextEditingController();
+
+  /// The product search's field, driven rather than left to the widget: a
+  /// selection, a dialog and a refusal all have to empty it and put the caret back.
+  final _search = TextEditingController();
+  final _searchFocus = FocusNode();
   String _term = '';
+
+  /// Which row of the dropdown Enter would add, as an index into the results.
+  int _highlighted = 0;
+
+  /// Whether Escape has closed the dropdown for the current term.
+  ///
+  /// Reset by the next keystroke, so Escape dismisses the list without ending the
+  /// search.
+  bool _searchClosed = false;
 
   @override
   void dispose() {
     _debounce.dispose();
     _tender.dispose();
     _placeOfSupply.dispose();
+    _search.dispose();
+    _searchFocus.dispose();
     super.dispose();
   }
 
-  /// Applies a search term once the user stops typing.
-  void _search(String value) {
+  /// Applies a search term once the counter stops typing.
+  void _searchChanged(String value) {
     final trimmed = value.trim();
-    if (trimmed == _term) {
+    _debounce.run(() {
+      if (!mounted || trimmed == _term) {
+        return;
+      }
+      setState(() {
+        _term = trimmed;
+        // A new term is a new list, so the highlight goes back to the top rather
+        // than pointing at a row of the previous search - and a keystroke reopens
+        // the list Escape closed.
+        _highlighted = 0;
+        _searchClosed = false;
+      });
+    });
+  }
+
+  /// How many rows the dropdown is actually showing, or 0 when it is not.
+  ///
+  /// Not simply the results' length: the dropdown is hidden while the field is
+  /// empty **and** something is already rung up, and Enter must not add a product
+  /// the counter cannot see. This is the guard that makes "Enter never adds
+  /// something invisible" true.
+  int get _shownResults {
+    if (_searchClosed ||
+        (_term.isEmpty && ref.read(posControllerProvider).isNotEmpty)) {
+      return 0;
+    }
+    return ref.read(posSearchResultsProvider(_term)).value?.length ?? 0;
+  }
+
+  /// The counter's keyboard contract for the keys the field itself does not use.
+  ///
+  /// Arrows move the highlight, Enter adds the highlighted row, and Escape closes
+  /// the list. Every key this returns `ignored` for is left alone, so Tab still
+  /// moves focus and typing still reaches the field - a character is consumed by
+  /// the field before this node is ever asked.
+  ///
+  /// **Enter never checks out.** The only way to write the sale is the button,
+  /// which is why a keyboard mistake at the counter cannot take money.
+  KeyEventResult _onSearchKey(FocusNode node, KeyEvent event) {
+    if (event is! KeyDownEvent) {
+      return KeyEventResult.ignored;
+    }
+    final key = event.logicalKey;
+
+    if (key == LogicalKeyboardKey.escape) {
+      if (!_searchClosed && _term.isNotEmpty) {
+        // Closes the list and claims nothing else: Escape steps back out of the
+        // search, it never empties a basket a cashier is mid-way through.
+        setState(() => _searchClosed = true);
+        return KeyEventResult.handled;
+      }
+      return KeyEventResult.ignored;
+    }
+
+    final count = _shownResults;
+    if (count == 0) {
+      return KeyEventResult.ignored;
+    }
+
+    if (key == LogicalKeyboardKey.arrowDown) {
+      setState(() => _highlighted = (_highlighted + 1).clamp(0, count - 1));
+      return KeyEventResult.handled;
+    }
+    if (key == LogicalKeyboardKey.arrowUp) {
+      setState(() => _highlighted = (_highlighted - 1).clamp(0, count - 1));
+      return KeyEventResult.handled;
+    }
+    if (key == LogicalKeyboardKey.enter ||
+        key == LogicalKeyboardKey.numpadEnter) {
+      _addHighlighted();
+      return KeyEventResult.handled;
+    }
+    return KeyEventResult.ignored;
+  }
+
+  /// Adds the row Enter is on, if the dropdown is showing one.
+  void _addHighlighted() {
+    if (_shownResults == 0) {
       return;
     }
-    _debounce.run(() {
-      if (mounted) {
-        setState(() => _term = trimmed);
-      }
+    final hits =
+        ref.read(posSearchResultsProvider(_term)).value ??
+        const <PosSearchHit>[];
+    if (_highlighted < 0 || _highlighted >= hits.length) {
+      return;
+    }
+    _addHit(hits[_highlighted]);
+  }
+
+  /// Adds [hit]'s FEFO batch, or says why it cannot.
+  ///
+  /// The batch is taken from the hit rather than read again: it is the same value
+  /// the row showed, so what the counter saw is what it gets. The add is synchronous
+  /// for the same reason, which is half of what stops a rapid double Enter - the
+  /// other half is [_resetSearch] closing the list.
+  void _addHit(PosSearchHit hit) {
+    final batch = hit.dispensable;
+    if (batch == null) {
+      _report('Nothing in stock for ${hit.product.name}.');
+      return;
+    }
+    ref
+        .read(posControllerProvider.notifier)
+        .addLine(product: hit.product, batch: batch, qty: 1);
+    _resetSearch();
+  }
+
+  /// Empties the field, closes the list and puts the caret back.
+  ///
+  /// This is what makes a rapid second Enter harmless: with no term and a basket
+  /// that is no longer empty the dropdown is not showing, so a second press has
+  /// nothing to add and cannot double-add.
+  void _resetSearch() {
+    _debounce.cancel();
+    _search.clear();
+    setState(() {
+      _term = '';
+      _highlighted = 0;
+      _searchClosed = true;
     });
+    _searchFocus.requestFocus();
   }
 
   @override
@@ -142,13 +273,33 @@ class _PosScreenState extends ConsumerState<PosScreen> {
             child: SaleIdentityFields(cart: cart),
           ),
           const SizedBox(height: 16),
-          AppSearchField(
-            hint: 'Search by name, generic or barcode',
-            onChanged: _search,
+          // The counter's working surface: type or scan, press Enter, next line.
+          // The field takes the caret on load, and the Focus above it is where the
+          // keys the field does not use are caught (arrows, Enter, Escape) - it is
+          // not focusable itself, so the caret stays in the field.
+          Focus(
+            canRequestFocus: false,
+            onKeyEvent: _onSearchKey,
+            child: AppSearchField(
+              controller: _search,
+              focusNode: _searchFocus,
+              autofocus: true,
+              hint: 'Search by name, generic or barcode',
+              onChanged: _searchChanged,
+              // The platform's own submit (a mobile search key, a desktop Enter the
+              // field consumes): the same action as the raw Enter above, and safe
+              // beside it because a second one finds the list already closed.
+              onSubmitted: (_) => _addHighlighted(),
+            ),
           ),
-          if (_term.isNotEmpty || cart.isEmpty) ...<Widget>[
+          if (!_searchClosed && (_term.isNotEmpty || cart.isEmpty)) ...<Widget>[
             const SizedBox(height: 8),
-            _SearchResults(term: _term, onSelected: _chooseBatch),
+            PosSearchResults(
+              term: _term,
+              highlighted: _highlighted,
+              onAdd: _addHit,
+              onChooseBatch: _chooseBatch,
+            ),
           ],
           const SizedBox(height: 16),
           SectionCard(
@@ -267,6 +418,10 @@ class _PosScreenState extends ConsumerState<PosScreen> {
   }
 
   /// Opens the batch chooser for [product] and adds what was picked.
+  ///
+  /// The deliberate path rather than the default one: Enter takes the FEFO batch,
+  /// and this is what a counter uses when the customer asked for a later expiry -
+  /// so the chooser is still here, just not in the way of the common case.
   Future<void> _chooseBatch(Product product) async {
     final batch = await showBatchChooser(context, product: product);
     if (batch == null || !mounted) {
@@ -275,6 +430,7 @@ class _PosScreenState extends ConsumerState<PosScreen> {
     ref
         .read(posControllerProvider.notifier)
         .addLine(product: product, batch: batch, qty: 1);
+    _resetSearch();
   }
 
   /// Writes the sale and opens its invoice.
@@ -313,65 +469,6 @@ class _PosScreenState extends ConsumerState<PosScreen> {
 double _tenderedValue(double grandTotal, PosCart cart) => cart.tendered > 0
     ? cart.tendered
     : (cart.paymentMode.isOnAccount ? 0 : grandTotal);
-
-/// The product search results, while a term is being typed.
-class _SearchResults extends ConsumerWidget {
-  const _SearchResults({required this.term, required this.onSelected});
-
-  /// The term to search for.
-  final String term;
-
-  /// Called with the product that was tapped.
-  final ValueChanged<Product> onSelected;
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final results = ref.watch(productSearchProvider(term));
-    final theme = Theme.of(context);
-
-    if (results.hasValue) {
-      final products = results.value!;
-      if (products.isEmpty) {
-        return Text(
-          'No product matches "$term".',
-          style: theme.textTheme.bodySmall,
-        );
-      }
-      return Card(
-        margin: EdgeInsets.zero,
-        child: Column(
-          children: <Widget>[
-            for (final product in products)
-              ListTile(
-                dense: true,
-                title: Text(product.name),
-                subtitle: Text(
-                  <String>[
-                    if (product.genericName != null) product.genericName!,
-                    if (product.packSize != null) product.packSize!,
-                  ].join(' · '),
-                ),
-                trailing: const Icon(Icons.add_circle_outline),
-                onTap: () => onSelected(product),
-              ),
-          ],
-        ),
-      );
-    }
-
-    if (results.hasError) {
-      return Text(
-        describeError(results.error!),
-        style: theme.textTheme.bodySmall,
-      );
-    }
-
-    return const Padding(
-      padding: EdgeInsets.symmetric(vertical: 8),
-      child: LinearProgressIndicator(),
-    );
-  }
-}
 
 /// One basket line, with everything the counter may change about it.
 class _CartLineTile extends StatefulWidget {

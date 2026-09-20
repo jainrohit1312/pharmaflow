@@ -3,10 +3,17 @@
 /// The assertions read the *bill* rather than the basket line, and only figures
 /// that appear in one place: the line's own total and the bill's total are the same
 /// number by design, so asserting on it would only prove that two widgets show it.
+///
+/// C2 changed how a product reaches the basket: the search dropdown's row shows the
+/// batch FEFO would take, so tapping it (or pressing Enter on it) adds that batch
+/// **without a chooser**. The chooser is still here - the row's own affordance asks
+/// for it - and both paths are tested, because "no chooser in the common case" only
+/// means anything if the deliberate case still works.
 library;
 
 import 'package:app/core/router/routes.dart';
 import 'package:app/core/utils/formatters.dart';
+import 'package:app/core/widgets/app_search_field.dart';
 import 'package:app/core/widgets/expiry_badge.dart';
 import 'package:app/data/models/admission.dart';
 import 'package:app/data/models/batch_status.dart';
@@ -15,6 +22,7 @@ import 'package:app/data/models/doctor.dart';
 import 'package:app/data/models/product.dart';
 import 'package:app/data/models/sale.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import '../../../support/fake_customers_repository.dart';
@@ -33,20 +41,35 @@ import '../../../support/sales_test_app.dart';
 BatchStatus _batch({String id = 'batch-1', String batchNo = 'B-1'}) =>
     buildBatch(id: id, batchNo: batchNo).copyWith(sellingRate: 200, mrp: 250);
 
-/// Adds the only product the fake search offers to the basket.
+/// Adds the only product the fake search offers, by tapping its row.
 ///
-/// The screen shows its results whenever the basket is empty, so no term has to be
-/// typed - which keeps the search field's debounce out of these tests.
-Future<void> _addLine(WidgetTester tester, {String batchNo = 'B-1'}) async {
+/// No chooser and no term: the screen shows its results while the basket is empty,
+/// and tapping a row takes the batch FEFO would - which is the default case. The
+/// deliberate path (the row's affordance) has its own test.
+Future<void> _addLine(WidgetTester tester) async {
   await tester.tap(find.text('Dolo 650'));
-  await tester.pumpAndSettle();
-  await tester.tap(find.text('Batch $batchNo'));
   await tester.pumpAndSettle();
 }
 
 /// Types [value] into the field labelled [label].
 Future<void> _type(WidgetTester tester, String label, String value) async {
   await tester.enterText(find.widgetWithText(TextFormField, label), value);
+  await tester.pumpAndSettle();
+}
+
+/// Types [value] into the counter's own product search field.
+///
+/// The patient step has a search field of its own above this one, so the counter's
+/// is the last in the tree.
+Future<void> _searchFor(WidgetTester tester, String value) async {
+  await tester.enterText(find.byType(AppSearchField).last, value);
+  await tester.pump(const Duration(milliseconds: 400));
+  await tester.pumpAndSettle();
+}
+
+/// Presses [key] as a keyboard would, and lets the screen settle.
+Future<void> _key(WidgetTester tester, LogicalKeyboardKey key) async {
+  await tester.sendKeyEvent(key);
   await tester.pumpAndSettle();
 }
 
@@ -91,7 +114,7 @@ void main() {
     );
   });
 
-  testWidgets('adds a product through the batch chooser and renders the line', (
+  testWidgets('a search row shows the batch Enter would take, and adds it', (
     tester,
   ) async {
     await pumpSalesApp(
@@ -102,20 +125,20 @@ void main() {
       initialLocation: Routes.pos,
     );
 
-    // The chooser is a choice, not an automatic FEFO pick: a customer asking for a
-    // longer expiry is a real request, and the first row is only marked as the one
-    // to dispense.
-    await tester.tap(find.text('Dolo 650'));
-    await tester.pumpAndSettle();
+    // The row itself is the preview: the batch FEFO would take, when it expires,
+    // what is left in it, and what it costs - so Enter is an informed choice.
+    expect(find.textContaining('Batch B-1'), findsOneWidget);
+    expect(find.textContaining('exp 10/26'), findsOneWidget);
+    expect(find.textContaining('10 in stock'), findsOneWidget);
+    expect(find.textContaining('MRP'), findsOneWidget);
+
+    await _addLine(tester);
+
+    // No chooser interrupted the common case.
     expect(
       find.text('First expiry, first out — dispense from the top.'),
-      findsOneWidget,
+      findsNothing,
     );
-    expect(find.textContaining('dispense this one first'), findsOneWidget);
-
-    await tester.tap(find.text('Batch B-1'));
-    await tester.pumpAndSettle();
-
     expect(find.text('Dolo 650'), findsOneWidget);
     expect(find.text('Batch B-1'), findsOneWidget);
     expect(find.text('Bill'), findsOneWidget);
@@ -130,6 +153,169 @@ void main() {
     expect(find.text(Formatters.currency(200)), findsNWidgets(3));
     // And the till is now on offer.
     expect(find.widgetWithText(ElevatedButton, 'Take payment'), findsOneWidget);
+  });
+
+  testWidgets('the choose-batch affordance still opens the chooser', (
+    tester,
+  ) async {
+    await pumpSalesApp(
+      tester,
+      repository: FakeSalesRepository(),
+      searchResults: <Product>[buildProduct('Dolo 650')],
+      batches: <BatchStatus>[_batch()],
+      initialLocation: Routes.pos,
+    );
+
+    // The deliberate path: a customer asking for a longer expiry is a real request,
+    // and it is one tap away rather than gone.
+    await tester.tap(find.byTooltip('Choose batch'));
+    await tester.pumpAndSettle();
+
+    expect(
+      find.text('First expiry, first out — dispense from the top.'),
+      findsOneWidget,
+    );
+    expect(find.textContaining('dispense this one first'), findsOneWidget);
+
+    await tester.tap(find.text('Batch B-1'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Dolo 650'), findsOneWidget);
+    expect(find.text('Batch B-1'), findsOneWidget);
+    expect(find.widgetWithText(ElevatedButton, 'Take payment'), findsOneWidget);
+  });
+
+  testWidgets('Enter adds the highlighted row and never checks out', (
+    tester,
+  ) async {
+    final sales = FakeSalesRepository();
+    await pumpSalesApp(
+      tester,
+      repository: sales,
+      searchResults: <Product>[buildProduct('Dolo 650')],
+      batches: <BatchStatus>[_batch()],
+      initialLocation: Routes.pos,
+    );
+
+    // The field takes the caret on load, so Enter reaches the search rather than
+    // anything below it.
+    await _key(tester, LogicalKeyboardKey.enter);
+
+    expect(find.text('Dolo 650'), findsOneWidget);
+    expect(
+      find.text('Batch B-1'),
+      findsOneWidget,
+      reason: 'Enter took the batch the row showed',
+    );
+    expect(
+      sales.checkouts,
+      isEmpty,
+      reason: 'the only way to write a sale is the button, never a keystroke',
+    );
+  });
+
+  testWidgets('the arrow keys move which row Enter adds', (tester) async {
+    await pumpSalesApp(
+      tester,
+      repository: FakeSalesRepository(),
+      searchResults: <Product>[
+        buildProduct('Dolo 650'),
+        buildProduct('Crocin'),
+      ],
+      batches: <BatchStatus>[_batch()],
+      initialLocation: Routes.pos,
+    );
+
+    // The first row is highlighted to begin with, so one arrow down moves to the
+    // second - which is the one Enter then takes.
+    await _key(tester, LogicalKeyboardKey.arrowDown);
+    await _key(tester, LogicalKeyboardKey.enter);
+
+    expect(find.text('Crocin'), findsOneWidget);
+    expect(
+      find.text('Dolo 650'),
+      findsNothing,
+      reason: 'only the highlighted row was added',
+    );
+  });
+
+  testWidgets('Escape closes the list and leaves the basket alone', (
+    tester,
+  ) async {
+    await pumpSalesApp(
+      tester,
+      repository: FakeSalesRepository(),
+      searchResults: <Product>[
+        buildProduct('Dolo 650'),
+        buildProduct('Crocin'),
+      ],
+      batches: <BatchStatus>[_batch()],
+      initialLocation: Routes.pos,
+    );
+    await _addLine(tester);
+
+    await _searchFor(tester, 'croc');
+    expect(find.text('Crocin'), findsOneWidget);
+
+    await _key(tester, LogicalKeyboardKey.escape);
+
+    expect(
+      find.text('Crocin'),
+      findsNothing,
+      reason: 'Escape dismissed the list',
+    );
+    expect(
+      find.text('Dolo 650'),
+      findsOneWidget,
+      reason: 'and stepped back out of the search without touching the basket',
+    );
+  });
+
+  testWidgets('a rapid double Enter adds one line, not two', (tester) async {
+    await pumpSalesApp(
+      tester,
+      repository: FakeSalesRepository(),
+      searchResults: <Product>[buildProduct('Dolo 650')],
+      batches: <BatchStatus>[_batch()],
+      initialLocation: Routes.pos,
+    );
+
+    // Two presses with no frame between them: the first adds and closes the list,
+    // and the second finds nothing to add - the "cannot double-add" half of the
+    // keyboard contract.
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pumpAndSettle();
+
+    expect(
+      find.text(Formatters.currency(200)),
+      findsNWidgets(3),
+      reason: 'one unit, not two - a doubled line would bill 400',
+    );
+    expect(find.text(Formatters.currency(400)), findsNothing);
+  });
+
+  testWidgets('offers a product with nothing in stock, but does not add it', (
+    tester,
+  ) async {
+    await pumpSalesApp(
+      tester,
+      repository: FakeSalesRepository(),
+      searchResults: <Product>[buildProduct('Dolo 650')],
+      batches: <BatchStatus>[buildBatch(qty: 0)],
+      initialLocation: Routes.pos,
+    );
+
+    expect(find.textContaining('Nothing in stock'), findsOneWidget);
+
+    await _key(tester, LogicalKeyboardKey.enter);
+
+    expect(
+      find.text('Nothing in stock for Dolo 650.'),
+      findsOneWidget,
+      reason: 'the refusal names the product instead of silently doing nothing',
+    );
+    expect(find.text('Bill'), findsNothing);
   });
 
   testWidgets('a quantity edit moves the bill', (tester) async {
@@ -202,8 +388,8 @@ void main() {
   ) async {
     // The regression this exists for: `product_batches.expiry_date` became nullable
     // in migration 00031 and 145 of the owner's opening-stock batches have no date,
-    // so reading one used to throw on the way in - the chooser could not be opened
-    // for any such product at all.
+    // so reading one used to throw on the way in - the counter could not add such a
+    // product at all.
     await pumpSalesApp(
       tester,
       repository: FakeSalesRepository(),
@@ -221,9 +407,6 @@ void main() {
       initialLocation: Routes.pos,
     );
 
-    await tester.tap(find.text('Dolo 650'));
-    await tester.pumpAndSettle();
-
     expect(find.textContaining('expiry unknown'), findsOneWidget);
     expect(
       find.byType(ExpiryBadge),
@@ -233,8 +416,7 @@ void main() {
           'date that does not exist',
     );
 
-    await tester.tap(find.text('Batch B-1'));
-    await tester.pumpAndSettle();
+    await _addLine(tester);
 
     expect(find.text('Batch B-1'), findsOneWidget);
     expect(find.widgetWithText(ElevatedButton, 'Take payment'), findsOneWidget);

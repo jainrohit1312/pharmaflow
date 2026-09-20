@@ -314,6 +314,51 @@ class ProductsRepository {
     }
   }
 
+  /// Every batch of [productIds], FEFO within each product, keyed by product id.
+  ///
+  /// One read rather than one per product, for the one caller that has to show a
+  /// list of products *and* what each can be dispensed from: the counter's search
+  /// dropdown shows, per hit, the batch FEFO would take, its stock and its expiry,
+  /// and a read per row would make typing a name fire a request per keystroke per
+  /// match. `batch_status` carries the product id, so the rows group here.
+  ///
+  /// Products with no batch at all are simply absent from the map, which a caller
+  /// reads as "nothing to dispense".
+  Future<Map<String, List<BatchStatus>>> batchesForProducts({
+    required String pharmacyId,
+    required List<String> productIds,
+  }) async {
+    if (productIds.isEmpty) {
+      return const <String, List<BatchStatus>>{};
+    }
+    try {
+      final rows = await _client
+          .from('batch_status')
+          .select()
+          .eq('pharmacy_id', pharmacyId)
+          .inFilter('product_id', productIds)
+          .order('expiry_date')
+          .order('batch_no');
+
+      final grouped = <String, List<BatchStatus>>{};
+      for (final row in rows) {
+        final batch = BatchStatus.fromJson(row);
+        (grouped[batch.productId] ??= <BatchStatus>[]).add(batch);
+      }
+      return grouped;
+    } on sb.PostgrestException catch (error) {
+      throw mapPostgrestException(
+        error,
+        fallbackMessage: 'Unable to load the batches for those products.',
+      );
+    } on Object catch (error) {
+      throw ServerException(
+        message: 'Unable to load the batches for those products.',
+        cause: error,
+      );
+    }
+  }
+
   /// The `product_stock` row for [productId], or `null` when the view has none
   /// (a product with no batches at all still has a row, so this is rare).
   Future<ProductStock?> stockFor({

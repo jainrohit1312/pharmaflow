@@ -11,10 +11,10 @@ import 'package:app/features/auth/application/pharmacy_scope.dart';
 import 'package:app/features/customers/application/customer_options.dart';
 import 'package:app/features/customers/application/patient_lookup.dart';
 import 'package:app/features/customers/data/patients_repository.dart';
-import 'package:app/features/products/application/product_search.dart';
 import 'package:app/features/products/data/products_repository.dart';
 import 'package:app/features/purchase/data/purchase_totals.dart';
 import 'package:app/features/sales/application/doctor_options.dart';
+import 'package:app/features/sales/application/pos_search.dart';
 import 'package:app/features/sales/application/sale_tax_split.dart';
 import 'package:app/features/sales/application/sellable_batches_controller.dart';
 import 'package:app/features/sales/data/doctors_repository.dart';
@@ -102,7 +102,16 @@ Future<GoRouter> pumpSalesApp(
       overrides: [
         salesRepositoryProvider.overrideWithValue(repository),
         requirePharmacyIdProvider.overrideWith((ref) => 'ph-1'),
-        productSearchProvider.overrideWith((ref, term) async => searchResults),
+        posSearchResultsProvider.overrideWith(
+          // Every hit carries the whole batch fixture list: these tests use one
+          // product and one batch, and a hit's product id need not match the
+          // batch's - the flat override is the point, the same way the batch
+          // chooser's `sellableBatchesProvider` override works.
+          (ref, term) async => <PosSearchHit>[
+            for (final product in searchResults)
+              PosSearchHit(product: product, batches: batches),
+          ],
+        ),
         sellableBatchesProvider.overrideWith((ref, productId) async => batches),
         customerOptionsProvider.overrideWith((ref) async => customers),
         patientsRepositoryProvider.overrideWithValue(patientRepository),
