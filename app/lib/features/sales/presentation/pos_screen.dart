@@ -14,7 +14,6 @@ import 'package:app/core/widgets/app_text_field.dart';
 import 'package:app/core/widgets/section_card.dart';
 import 'package:app/data/models/product.dart';
 import 'package:app/data/models/sale.dart';
-import 'package:app/data/models/sale_cart_line.dart';
 import 'package:app/features/purchase/data/purchase_totals.dart';
 import 'package:app/features/sales/application/pos_controller.dart';
 import 'package:app/features/sales/application/pos_search.dart';
@@ -23,6 +22,7 @@ import 'package:app/features/sales/application/sale_tax_split.dart';
 import 'package:app/features/sales/data/sale_totals.dart';
 import 'package:app/features/sales/presentation/patients/patient_step.dart';
 import 'package:app/features/sales/presentation/widgets/batch_chooser_sheet.dart';
+import 'package:app/features/sales/presentation/widgets/pos_cart_line.dart';
 import 'package:app/features/sales/presentation/widgets/pos_search_results.dart';
 import 'package:app/features/sales/presentation/widgets/sale_identity_fields.dart';
 import 'package:app/features/sales/presentation/widgets/sale_type_selector.dart';
@@ -317,38 +317,45 @@ class _PosScreenState extends ConsumerState<PosScreen> {
                     'Nothing rung up yet. Search for a product above.',
                     style: Theme.of(context).textTheme.bodyMedium,
                   )
-                : Column(
-                    children: <Widget>[
-                      for (
-                        var index = 0;
-                        index < cart.lines.length;
-                        index++
-                      ) ...<Widget>[
-                        _CartLineTile(
-                          key: ValueKey<String>(cart.lines[index].batchId),
-                          line: cart.lines[index],
-                          lineTotal: SaleTotals.forLine(
-                            cart.lines[index],
-                            split: split,
-                            saleType: cart.saleType,
-                          ).total,
-                          onQty: (qty) =>
-                              pos.setQty(cart.lines[index].batchId, qty),
-                          onRate: (rate) =>
-                              pos.setRate(cart.lines[index].batchId, rate),
-                          onDiscount: (percent) => pos.setDiscount(
-                            cart.lines[index].batchId,
-                            percent,
+                // The group, with an ordered policy, is what makes the line
+                // widget's own FocusTraversalOrders mean anything: Tab walks the
+                // quantities in basket order rather than the tree's.
+                : FocusTraversalGroup(
+                    policy: OrderedTraversalPolicy(),
+                    child: Column(
+                      children: <Widget>[
+                        for (
+                          var index = 0;
+                          index < cart.lines.length;
+                          index++
+                        ) ...<Widget>[
+                          PosCartLine(
+                            key: ValueKey<String>(cart.lines[index].batchId),
+                            line: cart.lines[index],
+                            order: index,
+                            lineTotal: SaleTotals.forLine(
+                              cart.lines[index],
+                              split: split,
+                              saleType: cart.saleType,
+                            ).total,
+                            onQty: (qty) =>
+                                pos.setQty(cart.lines[index].batchId, qty),
+                            onRate: (rate) =>
+                                pos.setRate(cart.lines[index].batchId, rate),
+                            onDiscount: (percent) => pos.setDiscount(
+                              cart.lines[index].batchId,
+                              percent,
+                            ),
+                            onGst: (percent) =>
+                                pos.setGst(cart.lines[index].batchId, percent),
+                            onRemove: () =>
+                                pos.removeLine(cart.lines[index].batchId),
                           ),
-                          onGst: (percent) =>
-                              pos.setGst(cart.lines[index].batchId, percent),
-                          onRemove: () =>
-                              pos.removeLine(cart.lines[index].batchId),
-                        ),
-                        if (index < cart.lines.length - 1)
-                          const Divider(height: 24),
+                          if (index < cart.lines.length - 1)
+                            const Divider(height: 24),
+                        ],
                       ],
-                    ],
+                    ),
                   ),
           ),
           if (cart.isNotEmpty) ...<Widget>[
@@ -470,171 +477,6 @@ double _tenderedValue(double grandTotal, PosCart cart) => cart.tendered > 0
     ? cart.tendered
     : (cart.paymentMode.isOnAccount ? 0 : grandTotal);
 
-/// One basket line, with everything the counter may change about it.
-class _CartLineTile extends StatefulWidget {
-  const _CartLineTile({
-    required this.line,
-    required this.lineTotal,
-    required this.onQty,
-    required this.onRate,
-    required this.onDiscount,
-    required this.onGst,
-    required this.onRemove,
-    super.key,
-  });
-
-  /// The line as the basket holds it.
-  final SaleCartLine line;
-
-  /// What the line comes to, already worked out.
-  final double lineTotal;
-
-  /// Called with the new quantity.
-  final ValueChanged<int> onQty;
-
-  /// Called with the new rate.
-  final ValueChanged<double> onRate;
-
-  /// Called with the new discount percentage.
-  final ValueChanged<double> onDiscount;
-
-  /// Called with the new GST slab.
-  final ValueChanged<double> onGst;
-
-  /// Called when the line is removed.
-  final VoidCallback onRemove;
-
-  @override
-  State<_CartLineTile> createState() => _CartLineTileState();
-}
-
-class _CartLineTileState extends State<_CartLineTile> {
-  late final TextEditingController _qty = TextEditingController(
-    text: '${widget.line.qty}',
-  );
-  late final TextEditingController _rate = TextEditingController(
-    text: _numberText(widget.line.rate),
-  );
-  late final TextEditingController _discount = TextEditingController(
-    text: _numberText(widget.line.discountPercent),
-  );
-  late final TextEditingController _gst = TextEditingController(
-    text: _numberText(widget.line.gstPercent),
-  );
-
-  @override
-  void initState() {
-    super.initState();
-    // Listeners rather than `onSubmitted`: a browser and a desktop have no submit
-    // key, and the basket's totals must follow every keystroke (the bug the
-    // purchase-return form paid for).
-    _qty.addListener(() => widget.onQty(int.tryParse(_qty.text.trim()) ?? 0));
-    _rate.addListener(
-      () => widget.onRate(double.tryParse(_rate.text.trim()) ?? 0),
-    );
-    _discount.addListener(
-      () => widget.onDiscount(double.tryParse(_discount.text.trim()) ?? 0),
-    );
-    _gst.addListener(
-      () => widget.onGst(double.tryParse(_gst.text.trim()) ?? 0),
-    );
-  }
-
-  @override
-  void dispose() {
-    for (final controller in <TextEditingController>[
-      _qty,
-      _rate,
-      _discount,
-      _gst,
-    ]) {
-      controller.dispose();
-    }
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final line = widget.line;
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: <Widget>[
-        Row(
-          children: <Widget>[
-            Expanded(
-              child: Text(
-                line.productName,
-                style: theme.textTheme.titleSmall,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-              ),
-            ),
-            Text(
-              Formatters.currency(widget.lineTotal),
-              style: theme.textTheme.titleSmall,
-            ),
-            IconButton(
-              icon: const Icon(Icons.delete_outline),
-              tooltip: 'Remove this line',
-              onPressed: widget.onRemove,
-            ),
-          ],
-        ),
-        Text('Batch ${line.batchNo}', style: theme.textTheme.bodySmall),
-        const SizedBox(height: 8),
-        Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: <Widget>[
-            Expanded(
-              child: AppTextField(
-                controller: _qty,
-                label: 'Qty',
-                keyboardType: TextInputType.number,
-                validator: Validators.positiveInt,
-              ),
-            ),
-            const SizedBox(width: 8),
-            Expanded(
-              child: AppTextField(
-                controller: _rate,
-                label: 'Rate',
-                keyboardType: const TextInputType.numberWithOptions(
-                  decimal: true,
-                ),
-                validator: Validators.nonNegativeDecimal,
-              ),
-            ),
-            const SizedBox(width: 8),
-            Expanded(
-              child: AppTextField(
-                controller: _discount,
-                label: 'Disc %',
-                keyboardType: const TextInputType.numberWithOptions(
-                  decimal: true,
-                ),
-                validator: Validators.percentIfPresent,
-              ),
-            ),
-            const SizedBox(width: 8),
-            Expanded(
-              child: AppTextField(
-                controller: _gst,
-                label: 'GST %',
-                keyboardType: const TextInputType.numberWithOptions(
-                  decimal: true,
-                ),
-                validator: Validators.percentIfPresent,
-              ),
-            ),
-          ],
-        ),
-      ],
-    );
-  }
-}
-
 /// The bill: what it adds up to, and what comes back.
 class _TotalsPanel extends StatelessWidget {
   const _TotalsPanel({
@@ -724,7 +566,3 @@ class _AmountRow extends StatelessWidget {
     );
   }
 }
-
-/// Formats [value] for a text field, leaving off a trailing `.0`.
-String _numberText(double value) =>
-    value == value.roundToDouble() ? value.toStringAsFixed(0) : '$value';

@@ -21,6 +21,7 @@ import 'package:app/data/models/customer.dart';
 import 'package:app/data/models/doctor.dart';
 import 'package:app/data/models/product.dart';
 import 'package:app/data/models/sale.dart';
+import 'package:app/features/sales/presentation/widgets/pos_cart_line.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -40,6 +41,15 @@ import '../../../support/sales_test_app.dart';
 /// testing a bill the counter cannot actually write.
 BatchStatus _batch({String id = 'batch-1', String batchNo = 'B-1'}) =>
     buildBatch(id: id, batchNo: batchNo).copyWith(sellingRate: 200, mrp: 250);
+
+/// A second batch of the same product at a different price.
+///
+/// So a test can tell two basket lines apart by what each comes to: a Tab that
+/// landed on the wrong line would move a different figure.
+BatchStatus _secondBatch() => buildBatch(
+  id: 'batch-2',
+  batchNo: 'B-2',
+).copyWith(sellingRate: 100, mrp: 250);
 
 /// Adds the only product the fake search offers, by tapping its row.
 ///
@@ -140,7 +150,7 @@ void main() {
       findsNothing,
     );
     expect(find.text('Dolo 650'), findsOneWidget);
-    expect(find.text('Batch B-1'), findsOneWidget);
+    expect(find.textContaining('Batch B-1 · exp 10/26'), findsOneWidget);
     expect(find.text('Bill'), findsOneWidget);
     // One unit at the batch's counter price: 200 charged, of which 190.48 is value
     // and 9.52 the tax it contains at the 5% slab the fixture product has no
@@ -181,7 +191,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Dolo 650'), findsOneWidget);
-    expect(find.text('Batch B-1'), findsOneWidget);
+    expect(find.textContaining('Batch B-1 · exp 10/26'), findsOneWidget);
     expect(find.widgetWithText(ElevatedButton, 'Take payment'), findsOneWidget);
   });
 
@@ -203,7 +213,7 @@ void main() {
 
     expect(find.text('Dolo 650'), findsOneWidget);
     expect(
-      find.text('Batch B-1'),
+      find.textContaining('Batch B-1 · exp 10/26'),
       findsOneWidget,
       reason: 'Enter took the batch the row showed',
     );
@@ -349,6 +359,13 @@ void main() {
     );
     await _addLine(tester);
 
+    // Rate, discount and slab are the counter's exceptions rather than its
+    // routine, so they are one tap away rather than always on screen.
+    expect(find.text('Rate'), findsNothing);
+    await tester.tap(find.byTooltip('Rate, discount and GST'));
+    await tester.pumpAndSettle();
+    expect(find.text('Rate'), findsOneWidget);
+
     await _type(tester, 'Rate', '217.6');
     await _type(tester, 'GST %', '18');
 
@@ -418,7 +435,7 @@ void main() {
 
     await _addLine(tester);
 
-    expect(find.text('Batch B-1'), findsOneWidget);
+    expect(find.textContaining('Batch B-1 · exp unknown'), findsOneWidget);
     expect(find.widgetWithText(ElevatedButton, 'Take payment'), findsOneWidget);
   });
 
@@ -498,6 +515,157 @@ void main() {
       reason:
           'the sentence names what is missing rather than only that something is',
     );
+  });
+
+  group('the basket lines', () {
+    testWidgets('show the quantity and the total, and the details on demand', (
+      tester,
+    ) async {
+      await pumpSalesApp(
+        tester,
+        repository: FakeSalesRepository(),
+        searchResults: <Product>[buildProduct('Dolo 650')],
+        batches: <BatchStatus>[_batch()],
+        initialLocation: Routes.pos,
+      );
+      await _addLine(tester);
+
+      // What the counter reads off every line: what it is, which batch and expiry,
+      // how many, and what it comes to.
+      expect(find.text('Dolo 650'), findsOneWidget);
+      expect(find.textContaining('Batch B-1 · exp 10/26'), findsOneWidget);
+      expect(find.widgetWithText(TextFormField, 'Qty'), findsOneWidget);
+      expect(find.text(Formatters.currency(200)), findsNWidgets(3));
+
+      // And what it does not, until it asks: pricing detail is the exception, not
+      // the routine.
+      for (final label in <String>['Rate', 'Disc %', 'GST %']) {
+        expect(find.text(label), findsNothing, reason: label);
+      }
+
+      await tester.tap(find.byTooltip('Rate, discount and GST'));
+      await tester.pumpAndSettle();
+
+      for (final label in <String>['Rate', 'Disc %', 'GST %']) {
+        expect(find.text(label), findsOneWidget, reason: label);
+      }
+      expect(find.byTooltip('Hide rate, discount and GST'), findsOneWidget);
+
+      // And away again, which is what keeps a phone's line compact.
+      await tester.tap(find.byTooltip('Hide rate, discount and GST'));
+      await tester.pumpAndSettle();
+      expect(find.text('Rate'), findsNothing);
+    });
+
+    testWidgets('Tab from a quantity moves to the next line, not its details', (
+      tester,
+    ) async {
+      await pumpSalesApp(
+        tester,
+        repository: FakeSalesRepository(),
+        searchResults: <Product>[buildProduct('Dolo 650')],
+        // Two batches, so the same product can be rung up twice - the one case a
+        // basket really does hold the same medicine out of two batches.
+        batches: <BatchStatus>[_batch(), _secondBatch()],
+        initialLocation: Routes.pos,
+      );
+      await _addLine(tester);
+      // A term, so the dropdown is open again and the row's affordance is there -
+      // the same way a counter reaches a second batch after the first add closed
+      // the list.
+      await _searchFor(tester, 'dolo');
+      await tester.tap(find.byTooltip('Choose batch'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Batch B-2'));
+      await tester.pumpAndSettle();
+
+      // The first line's details are open on purpose: in the widget tree's own
+      // order a Tab would land in them, and the contract says it must not.
+      await tester.tap(find.byTooltip('Rate, discount and GST').first);
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.widgetWithText(TextFormField, 'Qty').first);
+      await tester.pumpAndSettle();
+      await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+      await tester.pumpAndSettle();
+
+      final focused = FocusManager.instance.primaryFocus?.context
+          ?.findAncestorWidgetOfExactType<PosCartLine>();
+      expect(
+        focused?.order,
+        1,
+        reason: 'Tab walks the quantities in basket order, not the tree\u2019s',
+      );
+    });
+
+    testWidgets('Delete removes the line the caret is on', (tester) async {
+      await pumpSalesApp(
+        tester,
+        repository: FakeSalesRepository(),
+        searchResults: <Product>[buildProduct('Dolo 650')],
+        batches: <BatchStatus>[_batch()],
+        initialLocation: Routes.pos,
+      );
+      await _addLine(tester);
+      expect(find.text('Bill'), findsOneWidget);
+
+      // The caret goes on the line itself - its own space, not a field inside it -
+      // which is what makes Delete mean "this line".
+      await tester.tap(find.text('Dolo 650'));
+      await tester.pumpAndSettle();
+      await tester.sendKeyEvent(LogicalKeyboardKey.delete);
+      await tester.pumpAndSettle();
+
+      expect(find.text('Bill'), findsNothing);
+      expect(
+        find.text('Nothing rung up yet. Search for a product above.'),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('lay out on a 360x800 phone with targets a thumb can hit', (
+      tester,
+    ) async {
+      await pumpSalesApp(
+        tester,
+        repository: FakeSalesRepository(),
+        searchResults: <Product>[buildProduct('Dolo 650')],
+        batches: <BatchStatus>[_batch()],
+        initialLocation: Routes.pos,
+        size: const Size(360, 800),
+      );
+
+      // A Row that cannot fit throws in debug, so reaching the assertions is
+      // already the layout passing at the narrow end.
+      final scrollable = find.byType(Scrollable).first;
+      await tester.scrollUntilVisible(
+        find.text('Dolo 650'),
+        200,
+        scrollable: scrollable,
+      );
+      expect(find.textContaining('10 in stock'), findsOneWidget);
+
+      await tester.tap(find.text('Dolo 650'));
+      await tester.pumpAndSettle();
+      await tester.scrollUntilVisible(
+        find.textContaining('Batch B-1 · exp 10/26'),
+        200,
+        scrollable: scrollable,
+      );
+
+      expect(tester.takeException(), isNull);
+      // Every control a thumb reaches is at least a fingertip high.
+      for (final (label, target) in <(String, Finder)>[
+        ('the remove control', find.byTooltip('Remove this line')),
+        ('the details control', find.byTooltip('Rate, discount and GST')),
+      ]) {
+        expect(
+          tester.getSize(target).height,
+          greaterThanOrEqualTo(44),
+          reason: '$label is a tap target',
+        );
+      }
+    });
   });
 
   group('the sale type', () {

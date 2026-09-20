@@ -186,6 +186,11 @@ class _Row extends StatelessWidget {
                 IconButton(
                   icon: const Icon(Icons.swap_horiz),
                   tooltip: 'Choose batch',
+                  // Material's default is 40; a thumb wants a fingertip.
+                  constraints: const BoxConstraints(
+                    minWidth: 44,
+                    minHeight: 44,
+                  ),
                   onPressed: onChooseBatch,
                 ),
               ],
