@@ -1,8 +1,22 @@
 # PharmaFlow — Progress Tracker
 
 **Last Updated:** 2026-09-20
-**Current Phase:** **PHASE 6 IN PROGRESS** (chunk 3 of n, done; `context/chat3n-summary.md`). Phase 5 is complete. Phase 6 chunk 1 closed everything needing no account (W-1, A-1, I-1, N-5, T-3/T-4/T-5/T-6, the printer and bill-screen coverage, R-1, `docs/`); chunk 2 shipped the **Android APK** and settled **N-7**/**N-8**; **chunk 3 wrote the Vercel deploy** (`app/vercel.json` + `docs/DEPLOY_VERCEL.md` — configured and **not run**) and **exposed the re-read** the N-8 fix made safe (D-062), and then **implemented I-3** in a commit of its own (D-064) once it turned out the chunk-2 message had claimed it against no diff at all. Next: **import the repo into Vercel and run the first deploy** (the account exists; the project does not), then the credentials behind D-046/D-052/N-1, N-9's re-measurement, and the manual's screenshot pass (`context/chat3o-opening-prompt.md`)
-**Overall Status:** Phases 0-5 done and gated; Phase 6 chunks 1-3 done and gated — Phase 5 closed with its database substrate, **five deployed Edge Functions**, a bill that reads and saves end to end, a matcher that suggests and learns, a backfilled catalogue with a measured similarity floor, its alert sources, the notification function and inbox, and a chatbot a person can type into. Phase 6 added one migration since Phase 5 closed (the alias key, N-5), the Android sideload APK (D-061), a Vercel build config for the web app, the bill re-read with its three-read limit (D-062), and the purchase picker's three-way search (I-3, D-064) — **664 Flutter tests, 181 Deno tests**
+**Current Phase:** **PHASE 6.5a DONE** (2026-09-20 — the opening stock import, D-065/D-066; see
+below). **PHASE 6 IN PROGRESS** (chunk 3 of n, done; `context/chat3n-summary.md`). Phase 5 is complete. Phase 6 chunk 1 closed everything needing no account (W-1, A-1, I-1, N-5, T-3/T-4/T-5/T-6, the printer and bill-screen coverage, R-1, `docs/`); chunk 2 shipped the **Android APK** and settled **N-7**/**N-8**; **chunk 3 wrote the Vercel deploy** (`app/vercel.json` + `docs/DEPLOY_VERCEL.md` — configured and **not run**) and **exposed the re-read** the N-8 fix made safe (D-062), and then **implemented I-3** in a commit of its own (D-064) once it turned out the chunk-2 message had claimed it against no diff at all. Next: **import the repo into Vercel and run the first deploy** (the account exists; the project does not), then the credentials behind D-046/D-052/N-1, N-9's re-measurement, and the manual's screenshot pass (`context/chat3o-opening-prompt.md`)
+**Overall Status:** Phases 0-5 done and gated; Phase 6 chunks 1-3 done and gated — Phase 5 closed with its database substrate, **five deployed Edge Functions**, a bill that reads and saves end to end, a matcher that suggests and learns, a backfilled catalogue with a measured similarity floor, its alert sources, the notification function and inbox, and a chatbot a person can type into. Phase 6 added one migration since Phase 5 closed (the alias key, N-5), the Android sideload APK (D-061), a Vercel build config for the web app, the bill re-read with its three-read limit (D-062), and the purchase picker's three-way search (I-3, D-064) — **729 Flutter tests, 181 Deno tests**
+
+**Phase 6.5a — the opening stock import — is DONE (2026-09-20).** The one-time Marg
+migration the owner has been preparing: 314 rows, one product and one batch each, written by
+`commit_opening_stock_import()` in one transaction, with `preview_opening_stock()` behind the
+screen that shows what would happen (D-065, D-066). Files:
+`supabase/migrations/20260920000031_phase6_5a_opening_stock_import.sql` (and `…000032_…`, which
+corrects one expression in it — see D-065 on `extensions.digest`),
+`supabase/tests/opening_stock_import.sql` (65 assertions, all passing),
+`app/lib/features/import/opening_stock/`. **Measured against the owner's real export, read-only:**
+314 rows, 61,360 units, ₹6,04,832.90 at cost, 53 rows with no stock, 138 with no batch number,
+145 with no expiry, 3 already expired, **314 new products and no refusals** — so the catalogue
+as it stands has no name in that file, which is what the preview is for. **Nothing has been
+imported**: the owner runs it from `/settings/import/opening-stock`.
 
 ---
 
@@ -17,6 +31,9 @@
 | 4 | Ledger + Payments + Reports | COMPLETE | 2026-09-18 | 2026-09-19 |
 | 5 | AI OCR + Smart Matching + Notifications | COMPLETE | 2026-09-19 | 2026-09-19 |
 | 6 | Testing + Deployment + Documentation | IN PROGRESS (chunks 1-3 done) | 2026-09-19 | - |
+| 6.5a | Opening stock import (the Marg import) | COMPLETE | 2026-09-20 | 2026-09-20 |
+| 6.5b | The receiver app | not started | - | - |
+| 6.5c | The approval RBAC (with an `action_type` enum and a `payload` jsonb) | not started | - | - |
 
 ---
 
@@ -132,10 +149,12 @@ design time.
 
 ### Backend (Supabase Hosted)
 
-- 30 migrations applied, all idempotent (`supabase migration list`: 30/30 local
+- 32 migrations applied, all idempotent (`supabase migration list`: 32/32 local
   and remote match)
-- 24 tables and 2 views (`product_stock`, `batch_status`), RLS enforced on every
-  business table; migration 00022 added `device_tokens`, `notification_logs`, the
+- 26 tables and 2 views (`product_stock`, `batch_status`), RLS enforced on every
+  business table; `import_jobs` and `import_job_rows` arrived with Phase 6.5a
+  (migration 00031 — the opening stock import's two tables, written only by its
+  RPC); migration 00022 added `device_tokens`, `notification_logs`, the
   `products.embedding` column and the private `purchase-bills` storage bucket
   (00019-00021 added one table, `invoice_counters`, and no view), 00023 added
   the two matching functions, 00024 the alias-learning function, 00025 the
@@ -170,8 +189,10 @@ design time.
   repo's `config.toml`, which only ever seeds a local stack — D-003): a signup
   returns `confirmation_sent_at` and no session, and the password grant answers
   `email_not_confirmed`. See open item N-7.
-- User `owner@pharmaflow.dev` registered and promoted to `owner`
-- Pharmacy row created: "My Pharmacy"
+- **The deployed account is `rohit@arihant.com`, owner of "Arihant Pharmacy"** — verified
+  2026-09-20 while measuring the import against production. The placeholder account and
+  pharmacy name this line recorded until then are not in the hosted project any more, so
+  anything that probes production has to find the owner by **role**, not by an address.
 - Multi-tenant isolation verified with two test tenants
 
 ### Flutter App
@@ -237,7 +258,7 @@ design time.
 | N-2 | The Gemini key is on a **free tier: 5 requests per minute**, and a burst is shed as `503 UNAVAILABLE` rather than `429`, so a busy counter (or a double-tapped retry) meets "the reader is busy" with no queue behind it. `ocr-purchase-bill` makes one attempt and reports it as retryable on purpose (D-032); the app retries once, visibly (D-033) | Medium | A paid tier, or a deliberate retry-once policy with a visible waiting state — decide before the OCR flow meets a real counter |
 | N-4 | A deployed function's `console.error` is only visible in the Supabase dashboard: CLI 2.113.0 has no `functions logs` subcommand (only list/delete/download/deploy/new/serve) and there is no container to serve one locally. Debugging a function is therefore a deploy-and-probe cycle | Low | Accept it and probe deliberately (D-031 records the practice), or find a log path for the CLI version in use |
 | N-5 | `product_aliases`' unique index is `(pharmacy_id, supplier_id, normalized_name)` with `supplier_id` nullable and **no `NULLS NOT DISTINCT`**, so two rows for one printed text coexist when neither names a supplier — Postgres treats NULLs as distinct. `ProductsRepository.addAlias`'s doc says re-adding text "re-points the alias … instead of failing … which is what the unique key is for" (`app/lib/features/products/data/products_repository.dart:451`, upserting on that target at `:484`), and migration 00015's own comment says NULL-supplier rows "never conflict" (`20260918000015_phase2_extras.sql:353`). Both cannot be true: the second manual alias with no supplier **inserts a duplicate** rather than updating. C2 leaves it exactly as it is: `learn_product_aliases` (00024) writes a NULL-supplier row with an explicit update-then-insert so a *learned* alias converges, but the index, `addAlias` and migration 00015's comment are untouched, and the OCR path names a supplier anyway — so a learned alias is normally supplier-scoped. Both SQL tests assert the coexistence rather than hiding it | Low | Phase 6: make the index expression `(pharmacy_id, coalesce(supplier_id, '00000000-0000-0000-0000-000000000000'::uuid), normalized_name)` or add `NULLS NOT DISTINCT` (PG 15+), then reconcile the two comments above |
-| N-7 | A throwaway probe account cannot sign in on the hosted project: signup returns `confirmation_sent_at` with no session and the password grant answers `email_not_confirmed`, while `config.toml` says `enable_confirmations = false` (a local-stack-only setting, D-003). Setting `auth.users.email_confirmed_at` by hand is the obvious workaround and is correctly refused by the auto-mode guard as an auth-weakening write to production | Low | Probe with a session obtained from the app (`owner@pharmaflow.dev`), or decide deliberately whether "Confirm email" should be off in the hosted project the way the repo believes it is |
+| N-7 | A throwaway probe account cannot sign in on the hosted project: signup returns `confirmation_sent_at` with no session and the password grant answers `email_not_confirmed`, while `config.toml` says `enable_confirmations = false` (a local-stack-only setting, D-003). Setting `auth.users.email_confirmed_at` by hand is the obvious workaround and is correctly refused by the auto-mode guard as an auth-weakening write to production | Low | Probe with a session obtained from the app (`rohit@arihant.com`, the only owner — found by **role**, since the address this line used to name is no longer in the project), or decide deliberately whether "Confirm email" should be off in the hosted project the way the repo believes it is |
 | N-8 | A **successful second read** of the same bill replaces the whole verify form, so the supplier the human had chosen is dropped (and with it the suggestions, which are scoped by that supplier). It is the direct consequence of fixing the re-seed defect with `ValueKey(scan.bill)` (D-039): the new parse replaces the header fields too, which is right for the invoice number and date and merely inconvenient for the supplier. The match is asked again as soon as the supplier is named again | Low | Re-seed only the *lines* (and clear the suggestions) in `didUpdateWidget` when the parse changes, keeping the header the human already edited |
 | N-9 | The vector floor (**0.78**) was measured against a live catalogue that holds **one product**, so the window it sits in (0.7216 refused / 0.8280 kept) rests on one catalogue vector and nine query texts. Three things follow, and they are the whole open item: **(a) the recipe** — lower the floor to 0.01, read the `distance` the matcher reports for a set of real and near-miss invoice texts, and install the chosen value in a new migration (D-013; and on a temporary tenant, never the live function — **D-045**); **(b) the direction** — 0.78 errs **high**, so the cost of being wrong is a *missed* suggestion rather than a wrong one (the human picks, and the alias and trigram legs still answer); **(c) the trigger to revisit** — Phase 6's testing should re-tune it once the catalogue has **50+ products**, because that is when "two catalogue products of the same brand" becomes a real band to separate rather than a one-row guess | Low | Phase 6, once the catalogue is real. Nothing depends on the exact value: it is a one-line migration and the tests move with it |
 | N-10 | `flutter run -d chrome` fails **after** a successful compile with "Failed to establish connection with the web debug service" (a 5s timeout in dwds' `WebkitDebugger.enable`). It is Chrome 153 against the dwds 26.2.5 bundled in Flutter 3.44.8 — upstream `flutter/flutter#192976`, fixed by dwds 27.1.2 in Flutter 3.47.5 — so it is the toolchain and not this app, it happens in a bare `flutter create` app on this host too, and it does **not** affect `flutter build web`. Recorded as an item because it was tribal knowledge in the `Makefile`'s `run-web-server` comment rather than a numbered defect | Low | `make run-web-server` (the `web-server` device, port 8090) until the SDK is upgraded; delete that target once it is |
@@ -245,6 +266,8 @@ design time.
 | N-12 | **A future Flutter upgrade will fail the Android build**, and say so only as advice: `flutter build apk --release` warns *"Your app uses the following plugins that apply Kotlin Gradle Plugin (KGP): mobile_scanner. **Future versions of Flutter will fail to build** if your app uses plugins that apply KGP."* `mobile_scanner` is pinned `^5.2.3`. Today it is a warning and the APK builds (verified 2026-09-19, D-061); the trap is that the failure arrives on a Flutter upgrade as an unrelated-looking Gradle error, in the same shape N-10 has for web debugging | Low | When the SDK is next upgraded: check `mobile_scanner`'s changelog for a Built-in Kotlin release and bump it, or make the scan path switchable if no such release exists. Nothing is blocked until then. **Chunk 3 reviewed it at the user's request and left it deferred** — it is a warning today and the trigger is an SDK upgrade, so there is nothing to do until one happens |
 | N-13 | **The three-read limit is enforced where a bill has been *read*, not where it has only been *uploaded*.** `_ChooseBill`'s failure card ("That bill could not be read" → "Read it again") calls `rescan()`, which does not refuse past `PurchaseOcrState.maxReads` — deliberately, because that card is the D-033 recovery for a first read that never succeeded: nothing on that screen can be saved, and refusing the last retry would strand the file. The consequence is that a bill whose reads keep failing can be sent to the reader more than three times, and the cap is a *cost* fence with a gate on one side of it. Found and recorded while building the re-read button (D-062) | Low | Show the same cap on that card — the button disabled with the same sentence the verify form's failure card uses — or decide that an unread bill's recovery is worth unlimited reads and say so where the cap is defined. One screen's worth of work |
 | N-14 | **GST on a retail sale: the compliance question is open, the profit-sharing formula is settled.** The owner said *"B2C sale hai to GST ka koi matlab nahi hai"*, which is a probable misunderstanding — GST applies to retail pharmacy sales in India regardless of B2B/B2C (B2C only means no buyer GSTIN is needed). Three readings: **(a)** GST is charged but not shown as its own line on the bill; **(b)** the pharmacy is in a hospital-exempt category (needs a CA to confirm — rare); **(c)** it is a display choice only (safe). **Settled 2026-09-20 and no longer waiting on this:** the hospital's share is computed on **GST-inclusive** gross profit and the **owner bears the GST from their own share** — an accepted business model, not an accounting error (D-068), so the GP basis is decided. Also unstated: whether a `package` sale charges GST (`transfer` is stated as no-GST) | Medium | Put the three-way question to the owner (`MASTER_PLAN.md` Phase 7 §6). **No GST logic changes until then** |
+| T-7 | **An unknown expiry wears the "safe" badge.** Phase 6.5a made `product_batches.expiry_date` nullable and gave `batch_status` a fourth bucket, `'unknown'`, precisely so a batch nobody can date is not reported as having more than ninety days of shelf life. The server side is done and asserted; the app is not — `expiryStatusFromDb` (`app/lib/data/models/batch_status.dart`) maps anything it does not recognise to `ExpiryStatus.safe`, and `ExpiryBadge`'s label for that bucket reads *"More than 90 days of shelf life"*. So the 145 imported rows with no expiry will show a badge that says the opposite of what is known. Nothing crashes and nothing is lost; it is the label that lies | Low | Add an `ExpiryStatus.unknown` member and its label (*"Expiry not recorded"*), map `'unknown'` to it in `expiryStatusFromDb`, and give it a neutral tone — the same shape the `'expired'` bucket already has. Then check the expiry dashboard's bucket counts, which currently cannot include an unknown date |
+| T-8 | **The import has never been committed at scale.** `supabase/tests/opening_stock_import.sql` proves the commit on ten rows, and the *preview* has been measured against the owner's real 314-row export (read-only: 314 new products, 61,360 units, no refusals). The 314-row **commit** is unexercised until the owner runs it — by design, since this chunk was told not to import. If it fails it fails safe (one transaction, whole file refused, row-numbered reason), so the cost of finding out is one message rather than half a catalogue | Low | The owner runs it from `/settings/import/opening-stock` after reviewing the preview. Watch for the one thing the ten-row test cannot see: a `(product_id, batch_no)` pair the pharmacy's existing stock already holds, which refuses the file naming that line |
 
 **Resolved in chat 4 (Phase 6, chunk 3 — `context/chat3n-summary.md`):** **I-3**, in a
 commit of its own after chunk 3's (the chunk-2 message had claimed it shipped when it had
@@ -355,6 +378,95 @@ environment:
 ```
 
 Changing any pin above requires explicit user approval (see DECISIONS.md D-007).
+
+---
+
+## Phase 6.5a — the opening stock import [DONE]
+
+**What this chunk delivered.** The one-time import of the owner's existing stock from Marg:
+a schema that can represent what that file contains, three RPCs, the screen that previews and
+runs it, and a test for each layer.
+
+- **Two migrations.** `20260920000031_phase6_5a_opening_stock_import.sql` adds
+  `import_jobs` + `import_job_rows` (RLS: owner-only select, **no write policy** —
+  the RPC is the only way in), `products.gst_percent/cgst_percent/sgst_percent`
+  (nullable, no default), `product_batches.is_unknown_batch`, drops `expiry_date`'s NOT NULL,
+  and replaces `batch_status` with an explicit column list plus the new flag — the view's
+  `select b.*` was frozen at creation in 00013, and a naive `create or replace` is refused
+  because the new column would land *before* `expiry_status`. It gained a fourth bucket,
+  `'unknown'`, because the old CASE would have called an undated batch 'safe'.
+  `20260920000032_phase6_5a_opening_stock_digest_schema.sql` corrects one expression in 00031:
+  `digest()` is in Supabase's `extensions` schema and every function here pins
+  `set search_path = public`, so the fingerprint needed `extensions.digest(...)`. It is a
+  second migration rather than an edit because 00031 was already applied (D-013's rule).
+- **Three public RPCs and one internal.** `preview_opening_stock(jsonb)` (writes nothing),
+  `commit_opening_stock_import(jsonb, text)`, `get_import_job(uuid)`, and the shared
+  `opening_stock_classify(uuid, jsonb)` that both of the first two call — granted to no role,
+  so a preview cannot classify differently from a commit.
+- **The Flutter module** at `app/lib/features/import/opening_stock/`: an RFC 4180 reader that
+  sends every value as text, a picker seam, the three envelope models, the repository, the
+  controller (stage machine: idle → reading → previewing → preview → committing → success /
+  error), the screen and three widgets, and an audit-CSV renderer saved through
+  `FilePicker.saveFile`. Routed at `/settings/import/opening-stock` (D-022 — it nests under
+  Settings rather than taking a top-level `/import/…` that would leave the rail on Dashboard),
+  with the way in offered to an owner only.
+- **New dependency: `file_picker: ^13.1.0`** — CSV selection and the audit download, since
+  `image_picker` opens a gallery and cannot pick a CSV. It brought six platform packages with
+  it, all of them already-pointless-or-used; nothing else in `pubspec.yaml` moved.
+
+**Files.**
+
+- `supabase/migrations/20260920000031_phase6_5a_opening_stock_import.sql` (new)
+- `supabase/migrations/20260920000032_phase6_5a_opening_stock_digest_schema.sql` (new)
+- `supabase/tests/opening_stock_import.sql` (new — 65 assertions, inline fixtures)
+- `app/lib/features/import/opening_stock/{data/{opening_stock_csv,opening_stock_file_picker,opening_stock_models,opening_stock_repository,opening_stock_audit_csv}.dart,application/opening_stock_controller.dart,presentation/opening_stock_import_screen.dart,presentation/widgets/{preview_table,import_summary_card,import_error_row}.dart}` (new)
+- `app/test/features/import/opening_stock/{opening_stock_csv_test,opening_stock_models_test,opening_stock_audit_csv_test,presentation/opening_stock_import_screen_test}.dart`, `app/test/features/settings/presentation/settings_placeholder_test.dart`, `app/test/support/{fake_opening_stock_repository,fake_opening_stock_file_picker,opening_stock_test_app}.dart` (new)
+- `app/lib/core/router/routes.dart`, `app/lib/core/router/app_router.dart`,
+  `app/lib/features/settings/presentation/settings_placeholder.dart`, `app/pubspec.yaml`,
+  `app/pubspec.lock` (changed)
+- `.gitignore` (changed — `supabase/fixtures/opening_stock/` is the owner's real export,
+  kept locally and deliberately **not** committed; the SQL test writes its own rows inline and
+  reads no file, so a fresh clone runs the whole suite without it)
+- `DECISIONS.md` (D-065, D-066), `PROGRESS.md` (this)
+
+**Verification evidence.** Every gate from the repo root, raw:
+
+- `dart format lib test` → `Formatted 448 files (0 changed)`
+- `dart run build_runner build --delete-conflicting-outputs` → `Built with build_runner in 62s; wrote 42 outputs`
+- `dart run custom_lint` → `No issues found!`
+- `flutter analyze` → `No issues found! (ran in 19.4s)`
+- `flutter test` → `01:43 +729: All tests passed!`
+- `deno test supabase/functions` → `ok | 181 passed | 0 failed (1s)` (no function touched)
+- `deno check` × 5 entry points → exit 0
+- `supabase db push --dry-run` → `Remote database is up to date.` (32/32)
+- `supabase db query --linked --file supabase/tests/opening_stock_import.sql` →
+  `SUMMARY: 65 PASS / 0 FAIL of 67 assertions` (the file ends by raising, so it rolls back)
+- **The migration was pushed** (2 new versions, 00031 and 00032). A first push of 00031 failed
+  on an unescaped apostrophe in a `comment on table` and **left nothing behind** — a migration
+  file is applied in one transaction, verified by querying information_schema afterwards
+  (0 columns, 0 tables, 0 functions, no recorded version).
+- **A read-only measurement against the owner's real export** (not a test — a probe, since the
+  file is not in the repository): `preview_opening_stock` as the real owner answered
+  `314 rows, 61,360 units, ₹6,04,832.90 at cost, 53 zero-qty, 138 unknown batch, 145 unknown
+  expiry, 3 expired, 314 new products, 0 refused, 0 ambiguous`. Production still holds
+  **1 product, 0 batches, 0 import jobs** — the import has not been run and the SQL test wrote
+  nothing outside its transaction.
+
+**What this chunk deliberately did not do.**
+
+- **Nothing was imported.** The owner runs it after reviewing the preview (T-8).
+- **No xlsx reader.** The column keeps `'xlsx'` as a value; reading a spreadsheet needs a
+  parser in an Edge Function, and the owner's file is a CSV (D-065).
+- **No collision-resolution UI.** Rule 7's "block and let the owner resolve" is enforced by the
+  refusal — the preview lists every ambiguous line with the catalogue products it matches, and
+  the owner settles it in the catalogue first. Nothing auto-picks and nothing creates a third
+  product.
+- **No inventory labels.** The `'unknown'` expiry badge and the "unknown batch" wording in the
+  inventory screens are T-7, and this chunk does not own those screens.
+- **No billing, stock-trigger or FEFO change.** `checkout_sale` and the Phase 2/3 automation are
+  untouched; `supabase/tests/opening_stock_import.sql` asserts no purchase, purchase line,
+  payment, ledger entry, sale or stock adjustment is written, and that the batches hold exactly
+  the imported quantity.
 
 ---
 

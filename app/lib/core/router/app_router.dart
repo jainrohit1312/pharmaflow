@@ -21,6 +21,7 @@ import 'package:app/features/customers/presentation/customers_screen.dart';
 import 'package:app/features/dashboard/presentation/dashboard_home.dart';
 import 'package:app/features/dashboard/presentation/dashboard_shell.dart';
 import 'package:app/features/expenses/presentation/expenses_screen.dart';
+import 'package:app/features/import/opening_stock/presentation/opening_stock_import_screen.dart';
 import 'package:app/features/inventory/presentation/expiry_calendar_screen.dart';
 import 'package:app/features/inventory/presentation/inventory_screen.dart';
 import 'package:app/features/ledger/presentation/ledger_screen.dart';
@@ -339,6 +340,15 @@ final appRouterProvider = Provider<GoRouter>((ref) {
             path: Routes.settings,
             name: 'settings',
             builder: (context, state) => const SettingsPlaceholder(),
+          ),
+          // A child of the settings destination, declared right after it: the
+          // two share a prefix, so the rail stays on Settings while the owner is
+          // running the one-time opening stock import (D-022). Neither path is
+          // parameterised, so the order here is for a reader, not the matcher.
+          GoRoute(
+            path: Routes.openingStockImport,
+            name: 'openingStockImport',
+            builder: (context, state) => const OpeningStockImportScreen(),
           ),
         ],
       ),

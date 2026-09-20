@@ -102,8 +102,10 @@ supabase db push                       -> 14 migrations applied
 **Backend:**
 
 - Auth working (email provider ON, confirm email OFF)
-- User `owner@pharmaflow.dev` registered and promoted to `owner`
-- Pharmacy "My Pharmacy"
+- User `rohit@arihant.com` registered and promoted to `owner`
+- Pharmacy "Arihant Pharmacy"
+  *(Corrected 2026-09-20: this page recorded the Phase 0 placeholder account and pharmacy
+  name, neither of which is in the hosted project today. See `PROGRESS.md`.)*
 - All 21 tables ready
 
 **Frontend:**

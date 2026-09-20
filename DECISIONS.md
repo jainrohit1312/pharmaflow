@@ -2339,8 +2339,10 @@ nobody is expected to hit.
   the address in the dashboard. The app tells an unconfirmed user that their address is
   not confirmed, rather than pretending the password was wrong.
 - **For probes and tests that need a session**: use a real signed-in account
-  (`owner@pharmaflow.dev`), which is what every live probe since chunk C2 has done. The
-  guard that refuses a hand-edited auth row stays exactly as it is.
+  (`rohit@arihant.com`, the only owner in the hosted project — found by **role**, not by
+  address: the address this line originally named is no longer there), which is what every
+  live probe since chunk C2 has done. The guard that refuses a hand-edited auth row stays
+  exactly as it is.
 - **For the app**: nothing changes. A future decision to allow self-service signup would
   revisit this and turn the dashboard setting off, or add the resend flow; the comment in
   `.env.example`, the README and the user manual now state the policy so the repository
@@ -3031,3 +3033,132 @@ what a printed bill said.
   `sale_items.schedule_type` exists precisely to drive statutory register reporting
   (`20260918000006_sales_tables.sql`), and a register that cannot name the prescriber is not
   a register.
+
+---
+
+## D-065 — The Opening Stock Import Reads the File in the App and Decides in the Database
+
+**Date:** 2026-09-20
+
+**Status:** Active (Phase 6.5a, built)
+
+**Decision:** The one-time import of a pharmacy's existing stock is two halves with one owner
+each. The **client reads the bytes** — it splits the CSV into records, honours quoting and
+encodings, trims each field's edges and keeps its inside, and sends every value as **text**.
+The **database decides everything else**: `opening_stock_classify()` parses each field,
+validates it, matches the name against the catalogue and classifies the row, and both
+`preview_opening_stock()` (which writes nothing) and `commit_opening_stock_import()` (which
+writes everything) call **that same function**, so a preview cannot promise something the
+commit refuses.
+
+- **CSV only.** `import_jobs.source_format` accepts `'csv'` and `'xlsx'`, but only `'csv'` is
+  written: the owner's export is a CSV, and reading a spreadsheet would need a parser in an
+  Edge Function to be worth anything. The column keeps the value for the day one exists.
+- **The route is `/settings/import/opening-stock`**, not a top-level `/import/…` (D-022): the
+  shell lights a destination by prefix, and a one-time migration the owner runs once belongs to
+  the settings it is reached from rather than to a fourteenth rail entry the shell has no room
+  for (D-018).
+
+**Rationale:** every rule about what an opening-stock row may contain ends up mattering twice —
+once when the owner is looking at a preview and once when the file is written — and two
+implementations of "is this row acceptable?" is how the two come to disagree. The Dart side
+therefore owns only what the server cannot see: the file's bytes. It is also the reason
+`normalize_product_name()` is reused rather than re-expressed: the app never normalizes a name
+at all, so the matching rule the alias learner already uses is the only one in play.
+
+**Consequences:**
+
+- **The client validates nothing but the header.** A blank name, a negative quantity, a date
+  that is not `YYYY-MM-DD` and a non-numeric rate are all refused by the server, each with the
+  line number and a sentence — `qty "abc" is not a whole number` — which is what lets the screen
+  list every bad row at once instead of the first one it happens to parse.
+- **A field that cannot be read is refused rather than dropped.** An unparseable expiry is an
+  error, not a null: silently discarding a date the owner wrote would hide a broken column in
+  their export, which is exactly the failure the preview exists to catch.
+- **The reader is a small RFC 4180 reader**, not a split on commas, because
+  `normalize_product_name()` strips commas out of item names — which only makes sense if a name
+  may contain one — and a quoted field must survive intact. It handles a byte-order mark, CRLF,
+  doubled quotes inside a quoted cell, blank lines and a trailing newline, and it refuses an
+  unclosed quote.
+- **Row numbers count data rows** (1 = the first row after the header), and they are the same
+  number in the preview, in a refusal and in the audit trail, because the payload the server
+  reads is that list in that order.
+- **Four functions, and one of them is internal.** `opening_stock_classify(uuid, jsonb)` is
+  granted to **no role** — its callers are SECURITY DEFINER and gate on the owner and the tenant
+  before it runs. The three public ones (`preview_opening_stock`, `commit_opening_stock_import`,
+  `get_import_job`) are granted to `authenticated` and revoked from `anon, public`, per
+  migration 00018's finding.
+- **`digest()` needed qualifying.** pgcrypto lives in Supabase's `extensions` schema, and every
+  function here pins `set search_path = public`, so the fingerprint is
+  `extensions.digest(...)` — the same qualification migration 00022 uses for
+  `extensions.vector(768)`. Migration 00032 exists solely to correct that call in 00031, where it
+  had been written unqualified and failed only at runtime on a valid payload.
+
+---
+
+## D-066 — The Import Is All-or-Nothing, Idempotent by Content, and One Batch Per Product
+
+**Date:** 2026-09-20
+
+**Status:** Active (Phase 6.5a, built)
+
+**Decision:** The commit is one transaction that either writes every row or refuses the file,
+and it is idempotent **by content**:
+
+- `import_jobs` has `unique (pharmacy_id, content_fingerprint)`, where the fingerprint is a
+  sha256 over the canonical rows — item name normalized, batch number and expiry trimmed and
+  lowered, money at the two places the columns hold — **sorted**, so the same rows in another
+  order, under another filename, or with a row's outer whitespace trimmed, are the same import.
+- Idempotency is decided by the **insert**, not by a select-then-insert: `on conflict do nothing`
+  is what arbitrates two identical uploads at once, and the loser finds the committed job and
+  answers with its id (and `idempotent: true`). Nothing claims success before the commit, because
+  the answer is built from rows this transaction wrote.
+- **A refusal is total and row-numbered.** Unreadable rows and **ambiguous** names are both
+  refused, in one message naming every affected line (capped at 25, with a count of the rest).
+- **One batch per product**, enforced rather than assumed: two rows whose names normalize alike
+  are refused, because opening stock is one batch per product by definition and the alternative is
+  either double stock in two batches or a silently dropped row.
+- **Unknown is a value, not an absence.** A blank batch number becomes `OPENING-<first 8 of the
+  product uuid>` with `is_unknown_batch`, and a blank expiry is **NULL** —
+  `product_batches.expiry_date` had to lose its NOT NULL for that, and `batch_status` gained a
+  fourth expiry bucket, `'unknown'`, because the old CASE would have reported a batch nobody can
+  date as having more than ninety days of shelf life.
+- **Opening stock is not a financial event.** No purchase, no purchase line, no payment, no
+  ledger entry, no sale, no stock adjustment. `landed_cost_per_unit` is set equal to
+  `purchase_rate` (D-012's formula with no freight and no free quantity), and `selling_rate` is
+  left at its 0 default so the till prices at MRP until the owner sets counter prices.
+- **The GST slab is stored, nullable, with no default.** `products.gst_percent`,
+  `cgst_percent` and `sgst_percent` are new columns and the import writes 5.00 / 2.50 / 2.50 on the
+  products it creates. `default 5.00` was rejected: every pre-existing product would then read as
+  5, including the ones already bought and sold at 12, and "nobody has said" would stop being
+  distinguishable from "five per cent" — which is D-068's own rule about 0.
+- **Neither new table has a write policy.** `import_jobs` and `import_job_rows` are written only
+  by the SECURITY DEFINER RPC and hold a select policy for the owner; a client cannot insert a row
+  claiming `status = 'committed'`, which is the audit record the owner would otherwise trust.
+
+**Rationale:** an import that half-succeeds is worse than one that fails, because the owner has no
+way to know which half — and the file is a one-time migration, so re-running it is cheap. The
+fingerprint exists for the same reason: the first thing an owner does after a refusal is fix the
+file and upload it again, and the second thing they do is upload it again by accident.
+
+**Consequences:**
+
+- **Two of the four `status` values are unreachable from this path.** A refused import raises and
+  takes its own `import_jobs` row with it, so `'failed'` and `'rolled_back'` are vocabulary rather
+  than behaviour — recorded in the migration's comment so a later reader does not go looking for
+  the code path that writes them.
+- **A batch number the pharmacy already holds refuses the whole file** with a row-numbered
+  message (`unique_violation`), rather than adding quantity to the existing batch: opening stock
+  states a quantity, it does not add one, and a merge would be invisible in the audit trail.
+- **The fingerprint covers well-formed content only.** A file with an unreadable row has no
+  canonical content, so it has no fingerprint and the preview offers no "already imported" — the
+  commit refuses before it looks for one. Content that is well-formed but ambiguous *does* get a
+  fingerprint, because the fingerprint names content rather than importability.
+- **The client must render an expiry state the app has never shown before.**
+  `expiryStatusFromDb` maps anything it does not recognise to `ExpiryStatus.safe`, so an
+  unknown-expiry batch currently wears the "more than 90 days of shelf life" badge. That label is
+  the inventory screens' to add, and it is recorded as an open item rather than fixed here,
+  because this chunk does not own those screens.
+- **Re-running is free and safe:** the same content answers with the first job's id and writes
+  nothing, which `supabase/tests/opening_stock_import.sql` asserts four ways (replayed, reordered,
+  re-trimmed, renamed).

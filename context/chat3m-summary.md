@@ -72,7 +72,9 @@ the real policy is now stated where people read it: `.env.example`, `README.md`,
 new note in `docs/USER_MANUAL.md` ("creating an account is two steps").
 
 For anyone who needs a session to probe with: use a real signed-in account
-(`owner@pharmaflow.dev`), which is what every live probe since chunk C2 has done.
+(`rohit@arihant.com` — corrected 2026-09-20; the address this page originally named is no
+longer in the hosted project, so find the owner by role), which is what every live probe since
+chunk C2 has done.
 
 ### 3. N-8 — a re-read no longer discards what the human decided
 

@@ -227,6 +227,17 @@ abstract final class Routes {
   /// Application and pharmacy settings (Phase 1 placeholder).
   static const String settings = '/settings';
 
+  /// The one-time opening stock import (Phase 6.5a): a CSV of the pharmacy's
+  /// existing stock, read into products and batches.
+  ///
+  /// Nested under [settings] rather than given a top-level `/import/opening-stock`,
+  /// for the reason `/reports/expenses` is nested under reports (D-022): the shell
+  /// lights a destination by prefix, so a path matching none of them would leave
+  /// the rail sitting on Dashboard while the owner was reading their import. It is
+  /// also not a destination of its own - it is a one-time migration the owner runs
+  /// once, reached from the settings it belongs to.
+  static const String openingStockImport = '/settings/import/opening-stock';
+
   /// The four primary destinations shown in the bottom bar and the
   /// navigation rail. The order of this list defines the tab order.
   static const List<String> bottomNavPaths = <String>[

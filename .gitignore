@@ -29,6 +29,13 @@ app/test/**/*.freezed.dart
 supabase/.branches/
 supabase/.temp/
 
+# ─── One-time migration inputs ─────────────────────────────────────────────────
+# The owner's Marg export for the Phase 6.5a opening-stock import: real catalogue
+# and cost data, kept locally so it is never a repository artifact. The import's
+# SQL test writes its own rows inline and reads no file, so a fresh clone runs
+# the full suite without this present.
+supabase/fixtures/opening_stock/
+
 # ─── Editors / OS ──────────────────────────────────────────────────────────────
 .idea/
 .vscode/
