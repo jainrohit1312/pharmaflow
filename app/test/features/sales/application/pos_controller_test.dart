@@ -32,13 +32,19 @@ PosController _pos(ProviderContainer container) =>
 PosCart _cart(ProviderContainer container) =>
     container.read(posControllerProvider);
 
-/// The basket's totals, split intra-state.
-SaleDocumentTotals _totals(ProviderContainer container) =>
-    SaleTotals.forLines(_cart(container).lines, split: TaxSplit.intraState);
+/// The basket's totals, split intra-state, on the cart's own sale type.
+SaleDocumentTotals _totals(ProviderContainer container) {
+  final cart = _cart(container);
+  return SaleTotals.forLines(
+    cart.lines,
+    split: TaxSplit.intraState,
+    saleType: cart.saleType,
+  );
+}
 
 void main() {
   group('adding a line', () {
-    test('takes the batch counter price and the common slab as defaults', () {
+    test('takes the batch counter price and the named slab as defaults', () {
       final container = _container();
       final product = buildProduct('Dolo 650', scheduleType: ScheduleType.h);
       final batch = buildBatch(batchNo: 'B-7').copyWith(sellingRate: 200);
@@ -52,13 +58,62 @@ void main() {
       expect(line.batchNo, 'B-7');
       expect(line.qty, 1);
       expect(line.rate, 200);
-      expect(line.gstPercent, defaultSaleGstPercent);
+      expect(
+        line.gstPercent,
+        defaultSaleGstPercent,
+        reason:
+            'the fixture product has no slab recorded, so the 5% POS default - '
+            "the server's pos_default_gst_percent() - is what a line starts on",
+      );
       expect(
         line.scheduleType,
         ScheduleType.h,
         reason: 'the schedule is a snapshot for the drug register, not a join',
       );
-      expect(line.expiryDateIso, batch.expiryDate.toIso8601String());
+      expect(line.expiryDateIso, batch.expiryDate?.toIso8601String());
+    });
+
+    test("takes the product's own slab, and a recorded zero is a slab", () {
+      final container = _container();
+
+      _pos(container)
+        ..addLine(
+          product: buildProduct('Dolo 650', gstPercent: 12),
+          batch: buildBatch(),
+          qty: 1,
+        )
+        ..addLine(
+          product: buildProduct('Amoxicillin', gstPercent: 0),
+          batch: buildBatch(id: 'batch-2', batchNo: 'B-2'),
+          qty: 1,
+        );
+
+      final lines = _cart(container).lines;
+      expect(lines[0].gstPercent, 12);
+      expect(
+        lines[1].gstPercent,
+        0,
+        reason:
+            'a recorded zero is a rate, not an absence - the default must not '
+            'replace it, or a genuinely untaxed medicine would be taxed at 5%',
+      );
+    });
+
+    test('carries a batch whose expiry nobody recorded', () {
+      // Migration 00031 made `product_batches.expiry_date` nullable, and 145 of the
+      // owner's opening-stock rows have none. The line says so rather than
+      // inventing a date, and nothing here may throw on the way.
+      final container = _container();
+
+      _pos(container).addLine(
+        product: buildProduct('Dolo 650'),
+        batch: buildBatch(unknownExpiry: true, isUnknownBatch: true),
+        qty: 1,
+      );
+
+      final line = _cart(container).lines.single;
+      expect(line.expiryDateIso, isNull);
+      expect(line.batchNo, 'B-1');
     });
 
     test('falls back to the batch MRP when no counter price was ever set', () {
@@ -87,7 +142,9 @@ void main() {
       final line = _cart(container).lines.single;
       expect(line.rate, 12.5);
       expect(line.gstPercent, 5);
-      expect(_totals(container).grandTotal, 26.25);
+      // 2 x 12.50 is 25.00 charged, and the 5% tax is contained in that figure.
+      // (Before D-075 this read 26.25: the tax was added to the rate.)
+      expect(_totals(container).grandTotal, 25);
     });
 
     test('a second scan of the same batch adds a unit to the line already '
@@ -172,9 +229,12 @@ void main() {
         ..setQty(batch.id, 4);
 
       final totals = _totals(container);
-      expect(totals.subTotal, 400);
-      expect(totals.taxTotal, 48);
-      expect(totals.grandTotal, 448);
+      // Four units at 100 is 400 charged, and at 12% that 400 contains 357.14 of
+      // value and 42.86 of tax. (Before D-075 this read subTotal 400 / taxTotal 48 /
+      // grandTotal 448.)
+      expect(totals.subTotal, 357.14);
+      expect(totals.taxTotal, 42.86);
+      expect(totals.grandTotal, 400);
     });
 
     test('a rate change moves the totals', () {
@@ -194,7 +254,7 @@ void main() {
       expect(_totals(container).grandTotal, 300);
     });
 
-    test('a discount moves the taxable value and the tax with it', () {
+    test('a discount moves the price and the tax contained in it', () {
       final container = _container();
       final batch = buildBatch();
 
@@ -208,14 +268,17 @@ void main() {
         )
         ..setDiscount(batch.id, 10);
 
+      // 1000 shelf price, 100 off, 900 charged - and at 12% that 900 contains
+      // 803.57 of value and 96.43 of tax. (Before D-075 the same line read
+      // subTotal 900 / taxTotal 108 / grandTotal 1008, with the tax charged on top.)
       final totals = _totals(container);
       expect(totals.discountTotal, 100);
-      expect(totals.subTotal, 900);
-      expect(totals.taxTotal, 108);
-      expect(totals.grandTotal, 1008);
+      expect(totals.subTotal, 803.57);
+      expect(totals.taxTotal, 96.43);
+      expect(totals.grandTotal, 900);
     });
 
-    test('a slab change moves only the tax', () {
+    test('a slab change moves the tax, not the price the customer pays', () {
       final container = _container();
       final batch = buildBatch();
 
@@ -229,10 +292,14 @@ void main() {
         )
         ..setGst(batch.id, 18);
 
+      // One unit at 100 is 100 whichever slab applies, because the rate is the price
+      // on the shelf. What the slab decides is how much of that 100 is tax: 10.71 at
+      // 12%, 15.25 at 18%. (Before D-075 this read subTotal 100 / taxTotal 18 /
+      // grandTotal 118 - the tax was added to the rate.)
       final totals = _totals(container);
-      expect(totals.subTotal, 100);
-      expect(totals.taxTotal, 18);
-      expect(totals.grandTotal, 118);
+      expect(totals.grandTotal, 100);
+      expect(totals.subTotal, 84.75);
+      expect(totals.taxTotal, 15.25);
     });
 
     test('removing a line leaves the others alone', () {
@@ -293,6 +360,30 @@ void main() {
 
       expect(_cart(container).customerId, isNull);
       expect(_cart(container).placeOfSupply, isNull);
+    });
+
+    test('carries the sale type, and no other choice displaces it', () {
+      // One type per document, and every `with…` on the cart rebuilds the whole
+      // value - so a field left out of one of them would silently reset the type
+      // that prices the basket.
+      final container = _container();
+
+      _pos(container)
+        ..setSaleType(SaleType.package)
+        ..setCustomer('customer-1')
+        ..setTendered(500)
+        ..addLine(
+          product: buildProduct('Dolo 650'),
+          batch: buildBatch(),
+          qty: 1,
+        );
+
+      expect(_cart(container).saleType, SaleType.package);
+      expect(_cart(container).lines, hasLength(1));
+    });
+
+    test('starts on a counter sale, the commonest one there is', () {
+      expect(_cart(_container()).saleType, SaleType.counter);
     });
 
     test('a counter sale with no tender typed is paid in full', () {

@@ -7,6 +7,12 @@ part 'pharmacy.freezed.dart';
 part 'pharmacy.g.dart';
 
 /// A pharmacy tenant: the top-level organisation of a PharmaFlow install.
+///
+/// [packageMarkupPercent] is the markup a package sale adds to the batch's purchase
+/// rate (D-070). It is **nullable and has no default**, so `null` means "nobody has
+/// configured it" - and a package sale is refused while it is null rather than
+/// priced at an invented percentage. A configured **zero is a value**, not an
+/// absence.
 @freezed
 abstract class Pharmacy with _$Pharmacy {
   /// Creates an immutable [Pharmacy].
@@ -30,6 +36,8 @@ abstract class Pharmacy with _$Pharmacy {
     String? gstin,
     String? drugLicenseNo,
     String? logoUrl,
+    String? hospitalId,
+    double? packageMarkupPercent,
   }) = _Pharmacy;
 
   /// Decodes a snake_case Postgres/Supabase row into a [Pharmacy].

@@ -54,13 +54,21 @@ class SaleCheckoutController extends _$SaleCheckoutController {
       final pharmacyId = ref.read(requirePharmacyIdProvider);
       await _requireStock(pharmacyId: pharmacyId, lines: cart.lines);
 
-      final totals = SaleTotals.forLines(cart.lines, split: split);
+      final totals = SaleTotals.forLines(
+        cart.lines,
+        split: split,
+        saleType: cart.saleType,
+      );
       final checkout = SaleCheckout(
         lines: <SaleCheckoutLine>[
           for (final line in cart.lines)
             SaleCheckoutLine.from(
               line: line,
-              totals: SaleTotals.forLine(line, split: split),
+              totals: SaleTotals.forLine(
+                line,
+                split: split,
+                saleType: cart.saleType,
+              ),
             ),
         ],
         customerId: cart.customerId,

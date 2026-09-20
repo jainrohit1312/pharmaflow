@@ -7,17 +7,23 @@ import 'package:flutter_test/flutter_test.dart';
 /// Builds a [BatchStatus].
 ///
 /// [expiryStatus] and [qty] are required rather than defaulted, so every test
-/// states the bucket and balance it is actually exercising.
+/// states the bucket and balance it is actually exercising. Pass [unknownExpiry]
+/// for the row the view produces for a null `expiry_date`: it reports its own
+/// `'unknown'` bucket, so the date cannot be told from an explicit null through
+/// [expiryDate] alone.
 BatchStatus _batch({
   required ExpiryStatus expiryStatus,
   required int qty,
   DateTime? expiryDate,
+  bool unknownExpiry = false,
+  bool isUnknownBatch = false,
 }) => BatchStatus(
   id: 'b-1',
   pharmacyId: 'ph-1',
   productId: 'p-1',
   batchNo: 'B-001',
-  expiryDate: expiryDate ?? DateTime(2030),
+  expiryDate: unknownExpiry ? null : (expiryDate ?? DateTime(2030)),
+  isUnknownBatch: isUnknownBatch,
   createdAt: DateTime(2026),
   updatedAt: DateTime(2026),
   expiryStatus: expiryStatus,
@@ -81,12 +87,71 @@ void main() {
       expect(batch.expiryStatus, ExpiryStatus.critical);
       expect(batch.mfgDate, DateTime(2026));
     });
+
+    test('decodes a batch whose expiry nobody recorded', () {
+      // The row migration 00031 made possible: a nullable `expiry_date` (145 of the
+      // owner's opening-stock batches) and the view's own `'unknown'` bucket. This
+      // decode used to throw, which took every batch read down with it.
+      final batch = BatchStatus.fromJson(<String, dynamic>{
+        'id': 'b-2',
+        'pharmacy_id': 'ph-1',
+        'product_id': 'p-1',
+        'batch_no': 'OPENING-40b53500',
+        'expiry_date': null,
+        'is_unknown_batch': true,
+        'qty': 12,
+        'purchase_rate': 10.5,
+        'mrp': 20,
+        'selling_rate': 18.25,
+        'expiry_status': 'unknown',
+        'created_at': '2026-09-20T00:00:00.000Z',
+        'updated_at': '2026-09-20T00:00:00.000Z',
+      });
+
+      expect(batch.expiryDate, isNull);
+      expect(batch.hasKnownExpiry, isFalse);
+      expect(batch.isUnknownBatch, isTrue);
+      expect(
+        batch.expiryStatus,
+        ExpiryStatus.safe,
+        reason:
+            "the view's 'unknown' literal folds to safe, which is why a screen "
+            'that matters asks the date rather than the bucket',
+      );
+    });
   });
 
   group('BatchStatusX', () {
     test('hasStock follows the quantity', () {
       expect(_batch(expiryStatus: ExpiryStatus.safe, qty: 0).hasStock, isFalse);
       expect(_batch(expiryStatus: ExpiryStatus.safe, qty: 1).hasStock, isTrue);
+    });
+
+    test('hasKnownExpiry follows the date, not the bucket', () {
+      expect(
+        _batch(expiryStatus: ExpiryStatus.critical, qty: 5).hasKnownExpiry,
+        isTrue,
+      );
+      expect(
+        _batch(
+          expiryStatus: ExpiryStatus.safe,
+          qty: 5,
+          unknownExpiry: true,
+          isUnknownBatch: true,
+        ).hasKnownExpiry,
+        isFalse,
+      );
+    });
+
+    test('a batch with no expiry is not expired, and has no countdown', () {
+      final unknown = _batch(
+        expiryStatus: ExpiryStatus.safe,
+        qty: 5,
+        unknownExpiry: true,
+      );
+
+      expect(unknown.isExpired, isFalse);
+      expect(unknown.daysToExpiry, isNull);
     });
 
     test('isExpired follows the server-computed bucket', () {

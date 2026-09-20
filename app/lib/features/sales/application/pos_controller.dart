@@ -10,12 +10,15 @@ import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 part 'pos_controller.g.dart';
 
-/// The GST slab a line starts on.
+/// The GST slab a line falls back to when its product has none recorded.
 ///
-/// The same default the purchase line editor uses, and for the same reason:
-/// `products` has no slab column, 0 asserts nothing but is wrong for almost every
-/// medicine, and the field is on screen and editable either way.
-const double defaultSaleGstPercent = 12;
+/// The client's copy of the server's `pos_default_gst_percent()` (migration
+/// 00036), which is the one named POS default: 5%, the common slab for a pharmacy
+/// counter in India. A **product's own slab always wins**, including a recorded
+/// zero - [PosController.addLine] takes it from the product first and only falls
+/// back here. The old blanket 12% is gone (D-075); the purchase path keeps its own
+/// 12%, which is a different question about a different document.
+const double defaultSaleGstPercent = 5;
 
 /// What the counter has rung up, and how it is being paid.
 ///
@@ -31,6 +34,7 @@ class PosCart {
     this.paymentMode = PaymentMode.cash,
     this.tendered = 0,
     this.placeOfSupply,
+    this.saleType = SaleType.counter,
   });
 
   /// Its lines, in the order they were added.
@@ -47,6 +51,14 @@ class PosCart {
 
   /// Where the goods are going, which decides the tax split.
   final String? placeOfSupply;
+
+  /// What kind of sale this is, which decides how its lines are priced.
+  ///
+  /// One type per document: the server takes a single `sale_type` for the whole
+  /// bill. The counter starts on [SaleType.counter], the commonest sale, and the
+  /// type is what [SaleTotals] reads - so a change of type re-prices the basket
+  /// rather than leaving figures behind from the previous basis.
+  final SaleType saleType;
 
   /// Whether nothing has been rung up yet.
   bool get isEmpty => lines.isEmpty;
@@ -89,6 +101,7 @@ class PosCart {
     paymentMode: paymentMode,
     tendered: tendered,
     placeOfSupply: placeOfSupply,
+    saleType: saleType,
   );
 
   /// A copy with the customer replaced, or cleared by passing `null`.
@@ -98,6 +111,7 @@ class PosCart {
     paymentMode: paymentMode,
     tendered: tendered,
     placeOfSupply: placeOfSupply,
+    saleType: saleType,
   );
 
   /// A copy with the place of supply replaced, or cleared by passing `null`.
@@ -107,6 +121,7 @@ class PosCart {
     paymentMode: paymentMode,
     tendered: tendered,
     placeOfSupply: value,
+    saleType: saleType,
   );
 
   /// A copy with the payment mode replaced.
@@ -116,6 +131,7 @@ class PosCart {
     paymentMode: value,
     tendered: tendered,
     placeOfSupply: placeOfSupply,
+    saleType: saleType,
   );
 
   /// A copy with the tender replaced.
@@ -125,6 +141,21 @@ class PosCart {
     paymentMode: paymentMode,
     tendered: value,
     placeOfSupply: placeOfSupply,
+    saleType: saleType,
+  );
+
+  /// A copy with the sale type replaced.
+  ///
+  /// Separate from [withCustomer] and [withPlaceOfSupply] for the same reason they
+  /// are separate from each other: the type is what prices the basket, so changing
+  /// it has to produce a new cart rather than an edited field.
+  PosCart withSaleType(SaleType value) => PosCart(
+    lines: lines,
+    customerId: customerId,
+    paymentMode: paymentMode,
+    tendered: tendered,
+    placeOfSupply: placeOfSupply,
+    saleType: value,
   );
 }
 
@@ -147,7 +178,8 @@ class PosController extends _$PosController {
   /// have their own expiry and their own stock.
   ///
   /// [rate] defaults to the batch's counter price, falling back to its MRP when no
-  /// counter price was ever set; [gstPercent] to the common slab.
+  /// counter price was ever set; [gstPercent] to the product's own slab, falling
+  /// back to the named 5% default when the catalogue has none recorded.
   void addLine({
     required Product product,
     required BatchStatus batch,
@@ -167,8 +199,13 @@ class PosController extends _$PosController {
       batchNo: batch.batchNo,
       qty: qty,
       rate: rate ?? _defaultRate(batch),
-      gstPercent: gstPercent ?? defaultSaleGstPercent,
-      expiryDateIso: batch.expiryDate.toIso8601String(),
+      // The product's own slab wins, including a recorded zero - which is a rate,
+      // not an absence, and must not be replaced by the default. `??` reads exactly
+      // that way: only a null slab falls through.
+      gstPercent: gstPercent ?? product.gstPercent ?? defaultSaleGstPercent,
+      // Absent when the batch's expiry was never recorded, which is the honest
+      // answer for the 145 opening-stock rows whose source had no date.
+      expiryDateIso: batch.expiryDate?.toIso8601String(),
     );
 
     final existing = state.lines.indexWhere(
@@ -225,6 +262,9 @@ class PosController extends _$PosController {
 
   /// Records how the sale is being settled.
   void setPaymentMode(PaymentMode mode) => state = state.withPaymentMode(mode);
+
+  /// Records what kind of sale this is.
+  void setSaleType(SaleType type) => state = state.withSaleType(type);
 
   /// Records what the customer handed over.
   void setTendered(double amount) => state = state.withTendered(amount);

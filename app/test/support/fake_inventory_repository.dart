@@ -32,11 +32,20 @@ ProductStock buildStock({
 );
 
 /// Builds a `batch_status` row with only the fields a test cares about.
+///
+/// [expiryDate] defaults to a known date, because most tests want a batch that
+/// expires; pass [unknownExpiry] for the row an opening-stock batch whose source
+/// recorded no date produces - `expiry_date is null`, which the view reports as the
+/// `'unknown'` bucket. The two cannot be told apart through [expiryDate] alone
+/// (Dart has no way to default a parameter to "explicitly null" beside a fallback),
+/// which is what the flag is for.
 BatchStatus buildBatch({
   String id = 'batch-1',
   String productId = 'product-1',
   String batchNo = 'B-1',
   DateTime? expiryDate,
+  bool unknownExpiry = false,
+  bool isUnknownBatch = false,
   ExpiryStatus expiryStatus = ExpiryStatus.critical,
   int qty = 10,
   double mrp = 150,
@@ -46,7 +55,8 @@ BatchStatus buildBatch({
   pharmacyId: 'ph-1',
   productId: productId,
   batchNo: batchNo,
-  expiryDate: expiryDate ?? DateTime(2026, 10),
+  expiryDate: unknownExpiry ? null : (expiryDate ?? DateTime(2026, 10)),
+  isUnknownBatch: isUnknownBatch,
   createdAt: DateTime(2026),
   updatedAt: DateTime(2026),
   expiryStatus: expiryStatus,
@@ -54,6 +64,23 @@ BatchStatus buildBatch({
   mrp: mrp,
   purchaseRate: purchaseRate,
 );
+
+/// FEFO order, with a batch whose expiry nobody recorded last.
+///
+/// The real reads order by `expiry_date` then `batch_no`, and Postgres sorts NULLs
+/// last when ascending - so an unknown-expiry batch is never the one a counter is
+/// told to dispense first, which is the property the POS relies on.
+int _byExpiry(BatchStatus a, BatchStatus b) {
+  final first = a.expiryDate;
+  final second = b.expiryDate;
+  if (first == null || second == null) {
+    if (first == null && second == null) {
+      return a.batchNo.compareTo(b.batchNo);
+    }
+    return first == null ? 1 : -1;
+  }
+  return first.compareTo(second);
+}
 
 /// An in-memory [InventoryRepository] that applies the query the way the real one
 /// would, and records what a correction was given.
@@ -169,7 +196,7 @@ class FakeInventoryRepository implements InventoryRepository {
             (batch) => batch.qty > 0 && statuses.contains(batch.expiryStatus),
           )
           .toList(growable: false)
-        ..sort((a, b) => a.expiryDate.compareTo(b.expiryDate));
+        ..sort(_byExpiry);
 
   @override
   Future<List<BatchStatus>> batchesExpiringBetween({
@@ -178,14 +205,17 @@ class FakeInventoryRepository implements InventoryRepository {
     required DateTime to,
   }) async =>
       batches
-          .where(
-            (batch) =>
-                batch.qty > 0 &&
-                !batch.expiryDate.isBefore(from) &&
-                !batch.expiryDate.isAfter(to),
-          )
+          .where((batch) {
+            // The real query compares the column, so a batch with no expiry is not
+            // in the window - `expiry_date` is nullable since migration 00031.
+            final date = batch.expiryDate;
+            return batch.qty > 0 &&
+                date != null &&
+                !date.isBefore(from) &&
+                !date.isAfter(to);
+          })
           .toList(growable: false)
-        ..sort((a, b) => a.expiryDate.compareTo(b.expiryDate));
+        ..sort(_byExpiry);
 
   @override
   Future<void> adjustStock({

@@ -68,8 +68,7 @@ class ExpiryBatchCard extends StatelessWidget {
               ),
               const SizedBox(height: 4),
               Text(
-                'Batch ${batch.batchNo} · expires '
-                '${Formatters.dateDdMmmYyyy(batch.expiryDate)}'
+                'Batch ${batch.batchNo} · ${_expiryText(batch)}'
                 '${_remaining(batch)}',
                 style: theme.textTheme.bodySmall,
               ),
@@ -88,9 +87,20 @@ class ExpiryBatchCard extends StatelessWidget {
   }
 }
 
-/// How long the batch has left, or nothing once it is past its date.
-String _remaining(BatchStatus batch) =>
-    batch.isExpired ? '' : ' (${_daysLabel(batch.daysToExpiry)})';
+/// When the batch expires, or that nobody recorded a date.
+String _expiryText(BatchStatus batch) {
+  final date = batch.expiryDate;
+  return date == null
+      ? 'expiry unknown'
+      : 'expires ${Formatters.dateDdMmmYyyy(date)}';
+}
+
+/// How long the batch has left, or nothing once it is past its date - or once
+/// nobody recorded one, since a countdown needs a date to count down to.
+String _remaining(BatchStatus batch) {
+  final days = batch.daysToExpiry;
+  return batch.isExpired || days == null ? '' : ' (${_daysLabel(days)})';
+}
 
 /// `in 12 days`, `tomorrow` or `today`.
 String _daysLabel(int days) => switch (days) {

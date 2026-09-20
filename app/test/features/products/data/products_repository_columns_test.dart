@@ -23,6 +23,7 @@ void main() {
         'manufacturer': 'Acme Labs',
         'hsn_code': '3004',
         'category': 'Analgesic',
+        'gst_percent': 5.0,
         'schedule_type': 'H1',
         'pack_size': '10 tablets',
         'unit': 'strip',
@@ -45,6 +46,11 @@ void main() {
       expect(product.minStockLevel, 20);
       expect(product.barcode, '8901234567890');
       expect(product.isActive, isTrue);
+      expect(
+        product.gstPercent,
+        5,
+        reason: 'the slab a sale line is priced from (D-075)',
+      );
     });
 
     test('lists no column twice', () {

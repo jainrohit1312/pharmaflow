@@ -14,9 +14,13 @@ import 'package:app/features/sales/data/sale_totals.dart';
 /// One line as `checkout_sale()` expects it.
 ///
 /// Every money column is sent explicitly, computed by [SaleTotals] from what the
-/// counter chose: the function *sums* these for the header but never recomputes
-/// them, which is what keeps the stored lines and the stored header describing the
-/// same sale.
+/// counter chose. What the server does with them depends on whether the payload
+/// names a `sale_type` (migration 00036's compatibility seam): a **typed** payload
+/// has its slab, its four tax columns and its totals recomputed server-side, so
+/// these figures are the client's *preview* of the same arithmetic rather than the
+/// authority - which is exactly why [SaleTotals] replicates the server's basis
+/// (D-075) instead of choosing one of its own. An **untyped** payload is the legacy
+/// counter sale, and there the figures are stored verbatim, as they always were.
 class SaleCheckoutLine {
   /// Creates a checkout line.
   const SaleCheckoutLine({

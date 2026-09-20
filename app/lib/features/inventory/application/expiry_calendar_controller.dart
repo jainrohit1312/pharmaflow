@@ -105,13 +105,18 @@ class ExpiryMonth {
   int unitsOn(int day) => unitsByDay[day] ?? 0;
 
   /// The batches expiring on [day], in FEFO order.
+  ///
+  /// A batch with no recorded expiry cannot be placed on a day, so it is not on any
+  /// of them - `expiry_date` is nullable since migration 00031, and a countdown
+  /// needs a date to count down to.
   List<ExpiryBatch> rowsOn(DateTime day) => rows
-      .where(
-        (row) =>
-            row.batch.expiryDate.year == day.year &&
-            row.batch.expiryDate.month == day.month &&
-            row.batch.expiryDate.day == day.day,
-      )
+      .where((row) {
+        final date = row.batch.expiryDate;
+        return date != null &&
+            date.year == day.year &&
+            date.month == day.month &&
+            date.day == day.day;
+      })
       .toList(growable: false);
 }
 
@@ -145,8 +150,14 @@ class ExpiryMonthController extends _$ExpiryMonthController {
 
     final unitsByDay = <int, int>{};
     for (final batch in batches) {
+      // The query bounds `expiry_date`, so a batch without one cannot arrive here;
+      // the check is what keeps the model's nullable date from being asserted away.
+      final date = batch.expiryDate;
+      if (date == null) {
+        continue;
+      }
       unitsByDay.update(
-        batch.expiryDate.day,
+        date.day,
         (units) => units + batch.qty,
         ifAbsent: () => batch.qty,
       );

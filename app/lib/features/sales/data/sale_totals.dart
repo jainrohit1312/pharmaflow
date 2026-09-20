@@ -1,20 +1,41 @@
-/// Money math for a sale.
+/// Money math for a sale, on the basis the server prices it.
 ///
 /// Pure, and separate from the repository, for the same reason `PurchaseTotals`
 /// is: these figures are what the customer is charged and what the ledger posts,
 /// so a rounding mistake is money rather than a display glitch.
 ///
-/// Two rules, inherited from the purchase path so the two cannot disagree:
+/// **The basis is tax-INCLUSIVE** (D-075, migration 00036). For a pharmacy sale the
+/// rate on a line *is* the price the customer pays, and the tax is **extracted**
+/// from it rather than added on top: ₹105 at 5% is ₹100 taxable plus ₹5 tax, not
+/// ₹110.25. Three things follow, and every one of them matches the server:
 ///
-///  * every figure is rounded to two decimals *before* it is summed, so the
-///    stored `grand_total` always equals the sum of the stored lines;
-///  * rounding is half-away-from-zero with an epsilon, which is what Postgres
-///    `numeric` does and what a naive `round()` gets wrong on values like `1.005`.
+///  * a line's total is `qty × rate − discount`, so a bill comes to the price on
+///    the shelf;
+///  * a line's taxable value is `total / (1 + slab/100)` and its tax is the
+///    remainder, which makes the document's `sub_total` equal
+///    `grand_total − tax_total` - the identity `checkout_sale()` writes;
+///  * the rate itself is per sale type: a `counter` or `ipd_admission` line is
+///    retail-priced, a `package` line is cost plus the pharmacy's markup, and a
+///    `transfer` is plain cost with no tax at all.
 ///
-/// The rounding itself is `PurchaseTotals.round2` rather than a second copy: one
-/// rule, one implementation, both money paths.
+/// Two rules keep the stored numbers self-consistent, and both are inherited from
+/// the purchase path so the two money paths cannot disagree:
+///
+///  * every figure is rounded to two decimals *before* it is summed, so the stored
+///    `grand_total` always equals the sum of the stored lines;
+///  * rounding is half-away-from-zero with an epsilon ([PurchaseTotals.round2]),
+///    which is what Postgres `numeric` does - every figure is therefore a whole
+///    number of paise, and `1.005` does not come out a paisa short of what the
+///    column will hold.
+///
+/// The money is carried as `double` rather than as an integer-paise type because
+/// the models decode `numeric(14,2)` columns into `double` and a parallel paise
+/// type would exist only to be converted at every boundary. The rounding rule is
+/// what makes that safe: at these magnitudes `round2` lands on the exact paise, and
+/// the tests assert exact equality on figures anchored to the server's own.
 library;
 
+import 'package:app/data/models/sale.dart';
 import 'package:app/data/models/sale_cart_line.dart';
 import 'package:app/features/purchase/data/purchase_totals.dart';
 
@@ -31,25 +52,25 @@ class SaleLineTotals {
     required this.total,
   });
 
-  /// Value before tax, after the line discount.
+  /// What the line's tax was charged on: [total] less [tax].
   final double taxable;
 
   /// Amount the discount took off, for the `discount_amount` column.
   final double discount;
 
-  /// Total tax charged on the line.
+  /// Tax *contained in* [total], for the `tax_amount` column.
   final double tax;
 
   /// Central share of [tax], or 0 when the supply is inter-state.
   final double cgst;
 
-  /// State share of [tax], or 0 when the supply is intra-state.
+  /// State share of [tax], or 0 when the supply is inter-state.
   final double sgst;
 
   /// Integrated tax, or 0 when the supply is intra-state.
   final double igst;
 
-  /// What the customer pays for the line: [taxable] plus [tax].
+  /// The price the customer pays: quantity x rate, less the discount.
   final double total;
 }
 
@@ -63,20 +84,25 @@ class SaleDocumentTotals {
     required this.grandTotal,
   });
 
-  /// Sum of the lines' taxable values.
+  /// Sum of the lines' taxable values: `grandTotal - taxTotal`.
   final double subTotal;
 
   /// Sum of the lines' discounts.
   final double discountTotal;
 
-  /// Sum of the lines' tax.
+  /// Sum of the tax extracted from the lines.
   final double taxTotal;
 
   /// Sum of the lines' totals: what the customer is charged.
   final double grandTotal;
 }
 
-/// Line and document totals for a sale.
+/// Line and document totals for a sale, and the pricing rules the server applies.
+///
+/// The refusals are here rather than in the screen because they are pricing rules
+/// rather than presentation: each returns the sentence to show, or `null` when the
+/// figure is acceptable. They mirror `checkout_sale()`'s own checks, so the counter
+/// refuses a line for the same reason the server would, with the same words.
 abstract final class SaleTotals {
   /// What a line's discount takes off its gross value.
   static double discountAmount({
@@ -85,8 +111,8 @@ abstract final class SaleTotals {
     required double discountPercent,
   }) => PurchaseTotals.round2(qty * rate * discountPercent / 100);
 
-  /// Value of a line before tax: quantity x rate, less its discount.
-  static double taxable({
+  /// The price a line is charged at: quantity x rate, less its discount.
+  static double lineTotal({
     required int qty,
     required double rate,
     required double discountPercent,
@@ -95,20 +121,56 @@ abstract final class SaleTotals {
         discountAmount(qty: qty, rate: rate, discountPercent: discountPercent),
   );
 
-  /// Tax charged on [taxable] at [gstPercent].
-  static double tax({required double taxable, required double gstPercent}) =>
-      PurchaseTotals.round2(taxable * gstPercent / 100);
+  /// The value a tax-inclusive [total] carries, at [gstPercent].
+  ///
+  /// The tax is *extracted*, not added (D-075): ₹105 at 5% is ₹100 plus ₹5, so
+  /// this divides rather than multiplying. A slab of zero - or a type that charges
+  /// no tax, whose line is priced at zero - leaves the total as its own taxable
+  /// value.
+  static double taxableFromInclusive({
+    required double total,
+    required double gstPercent,
+  }) => gstPercent > 0
+      ? PurchaseTotals.round2(total / (1 + gstPercent / 100))
+      : PurchaseTotals.round2(total);
 
-  /// The full breakdown of one cart line.
-  static SaleLineTotals forLine(SaleCartLine line, {required TaxSplit split}) {
+  /// The tax contained in a tax-inclusive [total], at [gstPercent].
+  ///
+  /// The remainder rather than its own division, so the two figures always add back
+  /// to the total the customer paid - the same rule the two tax heads follow.
+  static double taxFromInclusive({
+    required double total,
+    required double gstPercent,
+  }) => PurchaseTotals.round2(
+    total - taxableFromInclusive(total: total, gstPercent: gstPercent),
+  );
+
+  /// The full breakdown of one cart line, on [saleType]'s basis.
+  ///
+  /// What a line may carry is the type's business, and this applies the type as the
+  /// server applies it rather than trusting what the cart happens to hold: a package
+  /// or transfer line is computed with no discount, and a transfer line with no tax.
+  /// A line that *does* carry one the type forbids is refused by [discountRefusal]
+  /// before it is sent - the server refuses it too, and would not silently price it
+  /// at zero.
+  static SaleLineTotals forLine(
+    SaleCartLine line, {
+    required TaxSplit split,
+    required SaleType saleType,
+  }) {
     final gross = PurchaseTotals.round2(line.qty * line.rate);
-    final discount = discountAmount(
-      qty: line.qty,
-      rate: line.rate,
-      discountPercent: line.discountPercent,
-    );
-    final taxableValue = PurchaseTotals.round2(gross - discount);
-    final taxValue = tax(taxable: taxableValue, gstPercent: line.gstPercent);
+    final discount = saleType.hasDiscount
+        ? discountAmount(
+            qty: line.qty,
+            rate: line.rate,
+            discountPercent: line.discountPercent,
+          )
+        : 0.0;
+    final total = PurchaseTotals.round2(gross - discount);
+    final slab = saleType.chargesGst ? line.gstPercent : 0.0;
+
+    final taxableValue = taxableFromInclusive(total: total, gstPercent: slab);
+    final taxValue = taxFromInclusive(total: total, gstPercent: slab);
 
     // The second half is the difference rather than its own division, so the two
     // halves always add back to the tax: rounding 0.01 in half twice gives 0.01
@@ -128,14 +190,15 @@ abstract final class SaleTotals {
       cgst: cgst,
       sgst: sgst,
       igst: igst,
-      total: PurchaseTotals.round2(taxableValue + taxValue),
+      total: total,
     );
   }
 
-  /// The document totals for [lines].
+  /// The document totals for [lines], on [saleType]'s basis.
   static SaleDocumentTotals forLines(
     List<SaleCartLine> lines, {
     required TaxSplit split,
+    required SaleType saleType,
   }) {
     var subTotal = 0.0;
     var discountTotal = 0.0;
@@ -143,7 +206,7 @@ abstract final class SaleTotals {
     var grandTotal = 0.0;
 
     for (final line in lines) {
-      final totals = forLine(line, split: split);
+      final totals = forLine(line, split: split, saleType: saleType);
       subTotal += totals.taxable;
       discountTotal += totals.discount;
       taxTotal += totals.tax;
@@ -156,6 +219,93 @@ abstract final class SaleTotals {
       taxTotal: PurchaseTotals.round2(taxTotal),
       grandTotal: PurchaseTotals.round2(grandTotal),
     );
+  }
+
+  /// The retail price of one unit, as `checkout_sale()` resolves it.
+  ///
+  /// The caller's own rate when there is one, else the batch's counter price, else
+  /// its MRP - so a product that was never given a counter price is still billable.
+  static double retailRate({
+    required double sellingRate,
+    required double mrp,
+    double? rate,
+  }) {
+    if (rate != null && rate > 0) {
+      return PurchaseTotals.round2(rate);
+    }
+    return sellingRate > 0 ? sellingRate : mrp;
+  }
+
+  /// The price of one package unit: cost plus the pharmacy's markup (D-070).
+  ///
+  /// The **batch's purchase rate** deliberately, not the landed cost. [markupPercent]
+  /// may be 0, which is a real configured deal (D-068's "0% is a value, not an
+  /// absence") and multiplies to the purchase rate itself.
+  static double packageRate({
+    required double purchaseRate,
+    required double markupPercent,
+  }) => PurchaseTotals.round2(purchaseRate * (1 + markupPercent / 100));
+
+  /// The price of one transferred unit: the batch's purchase rate, no markup.
+  static double transferRate({required double purchaseRate}) =>
+      PurchaseTotals.round2(purchaseRate);
+
+  /// Why a package sale cannot be priced, or `null` when it can.
+  ///
+  /// `null` markup means nobody has configured the pharmacy's markup, and the sane
+  /// answer is to refuse rather than to price at an invented percentage - the same
+  /// rule the server applies, in the server's own words.
+  static String? packageMarkupRefusal({required double? markupPercent}) =>
+      markupPercent == null
+      ? 'This pharmacy has no package markup configured, so a package cannot be '
+            'priced: set the package markup percentage first.'
+      : null;
+
+  /// Why a discount cannot be applied, or `null` when it can.
+  ///
+  /// Two rules, both the server's: a package or transfer sale has no discount
+  /// concept at all, and a pharmacy sale is capped at 10% - above which the owner's
+  /// approval is required. That approval (`approval_requests`, Phase 6.5c) does not
+  /// exist, so the cap is a real ceiling rather than a prompt, and **at exactly 10%
+  /// the sale proceeds**.
+  static String? discountRefusal({
+    required SaleType saleType,
+    required double discountPercent,
+  }) {
+    if (discountPercent < 0 || discountPercent > 100) {
+      return 'A discount percent must be between 0 and 100.';
+    }
+    if (discountPercent == 0) {
+      return null;
+    }
+    if (!saleType.hasDiscount) {
+      return 'A ${saleType.label.toLowerCase()} sale has no discount.';
+    }
+    if (discountPercent > 10) {
+      return 'A discount above 10% needs the owner\u2019s approval, and the '
+          'approval workflow is not built yet - bill at 10% or less.';
+    }
+    return null;
+  }
+
+  /// Why a rate cannot be charged, or `null` when it can.
+  ///
+  /// MRP is a **ceiling** on a retail rate, which is the rule that stops a counter
+  /// billing more than the price printed on the box. The server refuses the same
+  /// case in the same words, naming the product.
+  static String? rateRefusal({
+    required SaleType saleType,
+    required double rate,
+    required double mrp,
+    required String productName,
+  }) {
+    if (rate <= 0) {
+      return 'Cannot price $productName - it has no rate and no MRP.';
+    }
+    if (saleType.isPharmacySale && mrp > 0 && rate > mrp) {
+      return 'The rate for $productName is above its MRP of ${mrp.toStringAsFixed(2)}.';
+    }
+    return null;
   }
 
   /// What a sale of [total] may record as paid, given a tender of [tendered].

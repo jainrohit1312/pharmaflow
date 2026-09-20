@@ -82,7 +82,11 @@ class _PosScreenState extends ConsumerState<PosScreen> {
     final split =
         ref.watch(saleTaxSplitProvider(cart.placeOfSupply)).value ??
         TaxSplit.intraState;
-    final totals = SaleTotals.forLines(cart.lines, split: split);
+    final totals = SaleTotals.forLines(
+      cart.lines,
+      split: split,
+      saleType: cart.saleType,
+    );
     final paid = cart.paidFor(totals.grandTotal);
     final change = SaleTotals.changeFor(
       tendered: _tenderedValue(totals.grandTotal, cart),
@@ -146,6 +150,7 @@ class _PosScreenState extends ConsumerState<PosScreen> {
                           lineTotal: SaleTotals.forLine(
                             cart.lines[index],
                             split: split,
+                            saleType: cart.saleType,
                           ).total,
                           onQty: (qty) =>
                               pos.setQty(cart.lines[index].batchId, qty),

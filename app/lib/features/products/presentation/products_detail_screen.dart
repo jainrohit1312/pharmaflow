@@ -434,10 +434,7 @@ class _BatchCard extends StatelessWidget {
               runSpacing: 4,
               children: <Widget>[
                 _Metric(label: 'Qty', value: '${batch.qty}'),
-                _Metric(
-                  label: 'Expiry',
-                  value: Formatters.dateDdMmmYyyy(batch.expiryDate),
-                ),
+                _Metric(label: 'Expiry', value: _expiryText(batch)),
                 _Metric(label: 'MRP', value: Formatters.currency(batch.mrp)),
                 _Metric(
                   label: 'Rate',
@@ -450,6 +447,16 @@ class _BatchCard extends StatelessWidget {
       ),
     );
   }
+}
+
+/// A batch's expiry as `18 Oct 2026`, or `Unknown` when none was recorded.
+///
+/// `product_batches.expiry_date` is nullable since migration 00031, so a batch
+/// imported as opening stock may legitimately have no date. `Unknown` rather than a
+/// blank: the metric is a label and a value, and an empty value reads as a fault.
+String _expiryText(BatchStatus batch) {
+  final date = batch.expiryDate;
+  return date == null ? 'Unknown' : Formatters.dateDdMmmYyyy(date);
 }
 
 /// A label and value sitting side by side, for compact batch metrics.

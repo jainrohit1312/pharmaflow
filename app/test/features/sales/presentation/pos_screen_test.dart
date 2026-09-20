@@ -7,6 +7,7 @@ library;
 
 import 'package:app/core/router/routes.dart';
 import 'package:app/core/utils/formatters.dart';
+import 'package:app/core/widgets/expiry_badge.dart';
 import 'package:app/data/models/batch_status.dart';
 import 'package:app/data/models/product.dart';
 import 'package:flutter/material.dart';
@@ -91,9 +92,15 @@ void main() {
     expect(find.text('Dolo 650'), findsOneWidget);
     expect(find.text('Batch B-1'), findsOneWidget);
     expect(find.text('Bill'), findsOneWidget);
-    // One unit at the batch's counter price: value 200, tax 24 at the common slab.
-    expect(find.text(Formatters.currency(200)), findsOneWidget);
-    expect(find.text(Formatters.currency(24)), findsOneWidget);
+    // One unit at the batch's counter price: 200 charged, of which 190.48 is value
+    // and 9.52 the tax it contains at the 5% slab the fixture product has no
+    // recorded override for.
+    expect(find.text(Formatters.currency(190.48)), findsOneWidget);
+    expect(find.text(Formatters.currency(9.52)), findsOneWidget);
+    // The 200 is deliberately not "one place": the line's own total, the bill's total
+    // and what was paid are all the same number, which is what makes a cash sale
+    // legible at a glance.
+    expect(find.text(Formatters.currency(200)), findsNWidgets(3));
     // And the till is now on offer.
     expect(find.widgetWithText(ElevatedButton, 'Take payment'), findsOneWidget);
   });
@@ -112,11 +119,12 @@ void main() {
 
     // The field reports every keystroke through a listener rather than on submit,
     // so the bill follows without a submit key - a browser and a desktop have none.
-    expect(find.text(Formatters.currency(600)), findsOneWidget);
-    expect(find.text(Formatters.currency(72)), findsOneWidget);
+    // 600 charged at 5% is 571.43 of value and 28.57 of tax.
+    expect(find.text(Formatters.currency(571.43)), findsOneWidget);
+    expect(find.text(Formatters.currency(28.57)), findsOneWidget);
   });
 
-  testWidgets('a rate and a slab edit move the line and the tax head', (
+  testWidgets('a rate and a slab edit move the value and the tax head', (
     tester,
   ) async {
     await pumpSalesApp(
@@ -131,9 +139,10 @@ void main() {
     await _type(tester, 'Rate', '217.6');
     await _type(tester, 'GST %', '18');
 
-    expect(find.text(Formatters.currency(217.6)), findsOneWidget);
-    // 217.60 at 18% is 39.168, which rounds to what Postgres would store.
-    expect(find.text(Formatters.currency(39.17)), findsOneWidget);
+    // 217.60 at 18% contains 184.41 of value and 33.19 of tax - the tax is taken out
+    // of the price on the shelf rather than added to it (D-075).
+    expect(find.text(Formatters.currency(184.41)), findsOneWidget);
+    expect(find.text(Formatters.currency(33.19)), findsOneWidget);
   });
 
   testWidgets('an over-tender shows the change, and leaves no balance due', (
@@ -151,14 +160,57 @@ void main() {
 
     await _type(tester, 'Received', '500');
 
-    // 448 billed, 500 handed over, 52 back - and the sale records the 448.
+    // 400 billed, 500 handed over, 100 back - and the sale records the 400.
     expect(find.text('Change'), findsOneWidget);
-    expect(find.text(Formatters.currency(52)), findsOneWidget);
+    expect(find.text(Formatters.currency(100)), findsOneWidget);
     expect(
       find.text('Balance due'),
       findsNothing,
       reason: 'the change handed back is not a debt',
     );
+  });
+
+  testWidgets('offers a batch whose expiry nobody recorded, without a fake date', (
+    tester,
+  ) async {
+    // The regression this exists for: `product_batches.expiry_date` became nullable
+    // in migration 00031 and 145 of the owner's opening-stock batches have no date,
+    // so reading one used to throw on the way in - the chooser could not be opened
+    // for any such product at all.
+    await pumpSalesApp(
+      tester,
+      repository: FakeSalesRepository(),
+      searchResults: <Product>[buildProduct('Dolo 650')],
+      batches: <BatchStatus>[
+        buildBatch(
+          unknownExpiry: true,
+          isUnknownBatch: true,
+          // What the view reports for a null date: the 'unknown' bucket, which
+          // `expiryStatusFromDb` folds to safe. That fold is exactly why the screen
+          // has to ask the date and not the bucket.
+          expiryStatus: ExpiryStatus.safe,
+        ),
+      ],
+      initialLocation: Routes.pos,
+    );
+
+    await tester.tap(find.text('Dolo 650'));
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('expiry unknown'), findsOneWidget);
+    expect(
+      find.byType(ExpiryBadge),
+      findsNothing,
+      reason:
+          'the bucket for a null date would read "Safe", which is a claim about a '
+          'date that does not exist',
+    );
+
+    await tester.tap(find.text('Batch B-1'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Batch B-1'), findsOneWidget);
+    expect(find.widgetWithText(ElevatedButton, 'Take payment'), findsOneWidget);
   });
 
   testWidgets('offers the till once something is rung up', (tester) async {

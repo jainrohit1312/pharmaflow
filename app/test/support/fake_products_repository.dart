@@ -12,17 +12,24 @@ import 'package:app/features/products/data/products_repository.dart';
 /// usable as a stable reference in assertions. Pass it explicitly when a test has
 /// to match a product id that something else already knows, such as a batch or a
 /// sale line fixture.
+///
+/// [gstPercent] defaults to `null` - the product nobody has recorded a slab for,
+/// which is what most of the tests want, since it is the case that exercises the
+/// named 5% POS default. Pass `0` to prove a recorded zero is a rate rather than an
+/// absence.
 Product buildProduct(
   String name, {
   String? id,
   ScheduleType scheduleType = ScheduleType.otc,
   bool isActive = true,
+  double? gstPercent,
 }) => Product(
   id: id ?? 'id-$name',
   pharmacyId: 'ph-1',
   name: name,
   scheduleType: scheduleType,
   isActive: isActive,
+  gstPercent: gstPercent,
   createdAt: DateTime(2026),
   updatedAt: DateTime(2026),
 );

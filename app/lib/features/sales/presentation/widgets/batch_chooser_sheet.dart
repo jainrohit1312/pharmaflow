@@ -148,13 +148,17 @@ class _BatchRow extends StatelessWidget {
                       style: theme.textTheme.titleSmall,
                     ),
                   ),
-                  ExpiryBadge(status: batch.expiryStatus),
+                  // No badge without a date: the view reports a batch whose expiry
+                  // nobody recorded as the 'unknown' bucket, which folds to the
+                  // *safe* badge - and "Safe" beside "expiry unknown" would be a
+                  // statement about a date that does not exist.
+                  if (batch.hasKnownExpiry)
+                    ExpiryBadge(status: batch.expiryStatus),
                 ],
               ),
               const SizedBox(height: 6),
               Text(
-                '${batch.qty} in stock · expires '
-                '${Formatters.dateDdMmmYyyy(batch.expiryDate)} · '
+                '${batch.qty} in stock · ${_expiry(batch)} · '
                 '${Formatters.currency(batch.sellingRate > 0 ? batch.sellingRate : batch.mrp)}'
                 '${isFirstOut ? ' · dispense this one first' : ''}',
                 style: theme.textTheme.bodySmall,
@@ -165,4 +169,16 @@ class _BatchRow extends StatelessWidget {
       ),
     );
   }
+}
+
+/// When the batch expires, or that nobody recorded a date.
+///
+/// `expiry unknown` rather than a blank or an invented date: 145 of the owner's
+/// opening-stock batches have no expiry on record (migration 00031), and an empty
+/// space there reads as a rendering fault rather than as missing information.
+String _expiry(BatchStatus batch) {
+  final date = batch.expiryDate;
+  return date == null
+      ? 'expiry unknown'
+      : 'expires ${Formatters.dateDdMmmYyyy(date)}';
 }

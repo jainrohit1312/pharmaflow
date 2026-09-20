@@ -28,8 +28,12 @@ enum ExpiryStatus {
 
 /// Parses a `batch_status.expiry_status` literal into an [ExpiryStatus].
 ///
-/// Anything unrecognised falls back to [ExpiryStatus.safe], mirroring how
-/// `scheduleTypeFromDb` treats unknown schedule values.
+/// Anything unrecognised - **including the view's `'unknown'`, which it emits for a
+/// batch whose expiry nobody recorded** - falls back to [ExpiryStatus.safe], so
+/// [BatchStatusX.hasKnownExpiry] is the question to ask when the two cases have to
+/// be told apart. Treating an unknown bucket as safe is a recorded open item from
+/// migration 00031 rather than an oversight, and the screens that show a date ask
+/// the date, not the bucket.
 ExpiryStatus expiryStatusFromDb(String? raw) =>
     switch (raw?.trim().toLowerCase()) {
       'expired' => ExpiryStatus.expired,
@@ -73,6 +77,14 @@ class ExpiryStatusConverter extends JsonConverter<ExpiryStatus, String?> {
 
 /// One row of the `batch_status` view: every `product_batches` column plus its
 /// server-computed [expiryStatus].
+///
+/// [expiryDate] is nullable, and [expiryStatus] is `unknown` when it is: the view
+/// (migration 00031) reports a batch whose expiry nobody recorded as its own
+/// bucket rather than as `safe`. [expiryStatusFromDb] still folds an unrecognised
+/// literal - including `'unknown'` - into [ExpiryStatus.safe], so **check
+/// [hasKnownExpiry] rather than the bucket** when the difference matters: a screen
+/// that prints a date, or a receipt, must say "unknown" rather than draw a bucket
+/// for a date that does not exist.
 @freezed
 abstract class BatchStatus with _$BatchStatus {
   /// Creates an immutable [BatchStatus].
@@ -86,9 +98,10 @@ abstract class BatchStatus with _$BatchStatus {
     required String pharmacyId,
     required String productId,
     required String batchNo,
-    required DateTime expiryDate,
     required DateTime createdAt,
     required DateTime updatedAt,
+    DateTime? expiryDate,
+    @Default(false) bool isUnknownBatch,
     @Default(ExpiryStatus.safe)
     @ExpiryStatusConverter()
     ExpiryStatus expiryStatus,
@@ -109,12 +122,21 @@ extension BatchStatusX on BatchStatus {
   /// Whether any of this batch is left to dispense.
   bool get hasStock => qty > 0;
 
+  /// Whether the pack's expiry was recorded at all.
+  ///
+  /// The authoritative question, because [expiryStatus] cannot answer it - see the
+  /// class note on the `'unknown'` bucket folding into [ExpiryStatus.safe].
+  bool get hasKnownExpiry => expiryDate != null;
+
   /// Whether the batch is past its expiry date.
+  ///
+  /// From the server's own bucket, so it is decided against the database's today
+  /// rather than the device's clock.
   bool get isExpired => expiryStatus == ExpiryStatus.expired;
 
-  /// Whole days from now until [expiryDate]; negative once expired.
+  /// Whole days from now until [expiryDate], or `null` when none is recorded.
   ///
-  /// Computed locally from the date. The authoritative bucket is
-  /// [expiryStatus], which the database evaluates against its own today.
-  int get daysToExpiry => expiryDate.difference(DateTime.now()).inDays;
+  /// Computed locally from the date. The authoritative bucket is [expiryStatus],
+  /// which the database evaluates against its own today.
+  int? get daysToExpiry => expiryDate?.difference(DateTime.now()).inDays;
 }

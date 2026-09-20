@@ -80,6 +80,12 @@ class ScheduleTypeConverter extends JsonConverter<ScheduleType, String?> {
 }
 
 /// A sellable product (medicine) belonging to a pharmacy.
+///
+/// [gstPercent] is the product's own slab, the rate the server prices a line from
+/// (D-075). It is **nullable and has no default**, so `null` means "no slab has
+/// been recorded for this product yet" - it is not a rate of zero, and a recorded
+/// **zero wins** over any default. When it is null a pharmacy sale falls back to
+/// `pos_default_gst_percent()` (5%), and a package sale is refused outright.
 @freezed
 abstract class Product with _$Product {
   /// Creates an immutable [Product].
@@ -100,6 +106,7 @@ abstract class Product with _$Product {
     String? manufacturer,
     String? hsnCode,
     String? category,
+    double? gstPercent,
     @Default(ScheduleType.otc)
     @ScheduleTypeConverter()
     ScheduleType scheduleType,

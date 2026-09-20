@@ -112,6 +112,7 @@ class ProductsRepository {
     'manufacturer',
     'hsn_code',
     'category',
+    'gst_percent',
     'schedule_type',
     'pack_size',
     'unit',

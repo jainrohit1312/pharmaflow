@@ -66,6 +66,90 @@ class SaleStatusConverter extends JsonConverter<SaleStatus, String?> {
   String? toJson(SaleStatus object) => object.dbValue;
 }
 
+/// Which of the four kinds of sale a document is (D-067).
+///
+/// The type decides the rest of the document: how its rate is arrived at (`counter`
+/// and `ipd_admission` are retail-priced and tax-inclusive, a `package` line is
+/// cost plus the pharmacy's markup, a `transfer` is plain cost), whether a discount
+/// exists at all (only the retail two), and whether GST is charged (a transfer
+/// carries none).
+///
+/// `counter` and `ipd_admission` are the two the business calls a **pharmacy sale**
+/// - both subject to the 10% discount cap (D-071) and both carrying a hospital
+/// share (D-068). A package sale is the hospital buying, so neither applies to it.
+enum SaleType {
+  /// A walk-in, hospital or outside patient: the shelf price less any discount.
+  counter,
+
+  /// An admitted patient: the counter's rules plus the episode its credit posts to.
+  ipdAdmission,
+
+  /// The hospital buying for its own package patients, at cost plus a markup.
+  package,
+
+  /// Stock moving between locations: no patient, no account, no cash and no GST.
+  transfer,
+}
+
+/// Parses a Postgres `sale_type` literal into a [SaleType].
+///
+/// Anything unrecognised falls back to [SaleType.counter], which is what the
+/// column defaults to - the reading that matches every pre-Phase-7a row and the
+/// commonest sale a pharmacy makes.
+SaleType saleTypeFromDb(String? raw) => switch (raw?.trim().toLowerCase()) {
+  'ipd_admission' => SaleType.ipdAdmission,
+  'package' => SaleType.package,
+  'transfer' => SaleType.transfer,
+  _ => SaleType.counter,
+};
+
+/// Maps [SaleType] between its DB literal and its UI label, and answers the three
+/// questions the money layer asks of it.
+extension SaleTypeX on SaleType {
+  /// The literal stored in the `sale_type` column.
+  String get dbValue => switch (this) {
+    SaleType.counter => 'counter',
+    SaleType.ipdAdmission => 'ipd_admission',
+    SaleType.package => 'package',
+    SaleType.transfer => 'transfer',
+  };
+
+  /// The label shown in the UI.
+  String get label => switch (this) {
+    SaleType.counter => 'Counter',
+    SaleType.ipdAdmission => 'IPD',
+    SaleType.package => 'Package',
+    SaleType.transfer => 'Transfer',
+  };
+
+  /// Whether this is one of the two sales the business calls a pharmacy sale.
+  ///
+  /// The discount cap and a hospital's share hang off this, and D-068 is explicit
+  /// that a package sale and a transfer carry no share.
+  bool get isPharmacySale =>
+      this == SaleType.counter || this == SaleType.ipdAdmission;
+
+  /// Whether a line of this type may be discounted at all.
+  bool get hasDiscount => isPharmacySale;
+
+  /// Whether a line of this type charges GST. A transfer does not (D-067).
+  bool get chargesGst => this != SaleType.transfer;
+}
+
+/// Round-trips [SaleType] with the `sale_type` literal.
+class SaleTypeConverter extends JsonConverter<SaleType, String?> {
+  /// Creates the converter referenced by `@SaleTypeConverter()`.
+  const SaleTypeConverter();
+
+  /// Decodes `'counter'`, `'ipd_admission'`, `'package'` or `'transfer'`.
+  @override
+  SaleType fromJson(String? json) => saleTypeFromDb(json);
+
+  /// Emits the DB literal, e.g. `'ipd_admission'`.
+  @override
+  String? toJson(SaleType object) => object.dbValue;
+}
+
 /// How a sale was settled.
 ///
 /// `credit` is the one mode that means "not settled at the counter": the schema
@@ -152,6 +236,16 @@ class PaymentModeConverter extends JsonConverter<PaymentMode, String?> {
 }
 
 /// A sale: what went out of the door, and what it came to.
+///
+/// Since Phase 7a the document also carries the identity the type requires: the
+/// patient's name and mobile as **snapshots** (editing the patient master later
+/// never rewrites an old bill, which is why they sit here beside [customerId]
+/// rather than being joined), the prescriber, the hospital's own reference for an
+/// episode, the transfer's two locations, and the caller's idempotency key.
+///
+/// The money the columns hold is **tax-inclusive**: a line's `total_amount` is the
+/// price the customer paid and the tax is extracted from it (D-075), so
+/// [subTotal] is `grandTotal - taxTotal` rather than a value the tax was added to.
 @freezed
 abstract class Sale with _$Sale {
   /// Creates an immutable [Sale].
@@ -170,6 +264,7 @@ abstract class Sale with _$Sale {
     required DateTime updatedAt,
     @Default(SaleStatus.completed) @SaleStatusConverter() SaleStatus status,
     @Default(PaymentMode.cash) @PaymentModeConverter() PaymentMode paymentMode,
+    @Default(SaleType.counter) @SaleTypeConverter() SaleType saleType,
     @Default(0) double subTotal,
     @Default(0) double discountTotal,
     @Default(0) double taxTotal,
@@ -179,6 +274,19 @@ abstract class Sale with _$Sale {
     String? customerId,
     String? placeOfSupply,
     String? createdBy,
+    String? hospitalId,
+    String? admissionId,
+    String? patientName,
+    String? patientMobile,
+    String? patientAddress,
+    String? doctorId,
+    String? doctorName,
+    String? hospitalReference,
+    String? fromLocation,
+    String? toLocation,
+    String? transferReason,
+    String? transferNoteNo,
+    String? idempotencyKey,
   }) = _Sale;
 
   /// Decodes a snake_case Postgres/Supabase row into a [Sale].

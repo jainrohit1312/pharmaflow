@@ -65,7 +65,7 @@ void _ringUp(
   ProviderContainer container, {
   int qty = 2,
   double rate = 100,
-  double gstPercent = 12,
+  double gstPercent = 5,
   String batchId = 'batch-1',
 }) {
   container
@@ -80,10 +80,14 @@ void _ringUp(
 }
 
 /// The basket's current totals.
-SaleDocumentTotals _totals(ProviderContainer container) => SaleTotals.forLines(
-  container.read(posControllerProvider).lines,
-  split: TaxSplit.intraState,
-);
+SaleDocumentTotals _totals(ProviderContainer container) {
+  final cart = container.read(posControllerProvider);
+  return SaleTotals.forLines(
+    cart.lines,
+    split: TaxSplit.intraState,
+    saleType: cart.saleType,
+  );
+}
 
 /// The checkout controller.
 SaleCheckoutController _checkout(ProviderContainer container) =>
@@ -97,46 +101,47 @@ Future<Sale> _write(ProviderContainer container) =>
     );
 
 void main() {
-  test(
-    'writes the basket as one sale, and returns what the till stored',
-    () async {
-      final sales = FakeSalesRepository();
-      final container = _withStock(sales: sales).container;
-      _ringUp(container);
+  test('writes the basket as one sale, and returns what the till stored', () async {
+    final sales = FakeSalesRepository();
+    final container = _withStock(sales: sales).container;
+    _ringUp(container);
 
-      final saved = await _write(container);
+    final saved = await _write(container);
 
-      // One call, carrying what the counter showed.
-      final payload = sales.checkouts.single;
-      expect(payload.lines, hasLength(1));
-      final line = payload.lines.single;
-      expect(line.productId, 'id-Dolo 650');
-      expect(line.batchId, 'batch-1');
-      expect(line.qty, 2);
-      expect(line.rate, 100);
-      expect(line.discountAmount, 0);
-      expect(line.taxAmount, 24);
-      expect(line.cgstAmount, 12);
-      expect(line.sgstAmount, 12);
-      expect(line.igstAmount, 0);
-      expect(line.totalAmount, 224);
-      expect(line.scheduleType, ScheduleType.otc);
+    // One call, carrying what the counter showed.
+    final payload = sales.checkouts.single;
+    expect(payload.lines, hasLength(1));
+    final line = payload.lines.single;
+    expect(line.productId, 'id-Dolo 650');
+    expect(line.batchId, 'batch-1');
+    expect(line.qty, 2);
+    expect(line.rate, 100);
+    expect(line.discountAmount, 0);
+    // 2 x 100 is 200 charged, and at 5% that 200 contains 190.48 of value and
+    // 9.52 of tax, half each. (Before D-075 the same line read taxable 200 /
+    // tax 24 / total 224: the tax was added to the rate instead of extracted from
+    // it, and the slab was the old blanket 12%.)
+    expect(line.taxAmount, 9.52);
+    expect(line.cgstAmount, 4.76);
+    expect(line.sgstAmount, 4.76);
+    expect(line.igstAmount, 0);
+    expect(line.totalAmount, 200);
+    expect(line.scheduleType, ScheduleType.otc);
 
-      // The document totals are the till's business, not the client's: sending them
-      // would let a stored grand total disagree with the lines it describes.
-      final header = payload.toPayload();
-      expect(header.keys, isNot(contains('grand_total')));
-      expect(header.keys, isNot(contains('sub_total')));
+    // The document totals are the till's business, not the client's: sending them
+    // would let a stored grand total disagree with the lines it describes.
+    final header = payload.toPayload();
+    expect(header.keys, isNot(contains('grand_total')));
+    expect(header.keys, isNot(contains('sub_total')));
 
-      // And the document that came home agrees with its own lines.
-      expect(saved.grandTotal, 224);
-      expect(saved.subTotal, 200);
-      expect(saved.taxTotal, 24);
-      expect(saved.balanceDue, 0);
-      expect(saved.status, SaleStatus.completed);
-      expect(saved.paymentMode, PaymentMode.cash);
-    },
-  );
+    // And the document that came home agrees with its own lines.
+    expect(saved.grandTotal, 200);
+    expect(saved.subTotal, 190.48);
+    expect(saved.taxTotal, 9.52);
+    expect(saved.balanceDue, 0);
+    expect(saved.status, SaleStatus.completed);
+    expect(saved.paymentMode, PaymentMode.cash);
+  });
 
   test(
     'a counter sale with no tender typed records the bill as paid',
@@ -147,7 +152,7 @@ void main() {
 
       await _write(container);
 
-      expect(sales.checkouts.single.amountPaid, 224);
+      expect(sales.checkouts.single.amountPaid, 200);
     },
   );
 
@@ -266,7 +271,7 @@ void main() {
     expect(saved.status, SaleStatus.credit);
     expect(saved.customerId, 'customer-1');
     expect(saved.amountPaid, 0);
-    expect(saved.balanceDue, 224);
+    expect(saved.balanceDue, 200);
   });
 
   test('clamps an over-tender so no negative balance is stored', () async {
