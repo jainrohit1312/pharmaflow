@@ -3663,7 +3663,8 @@ control rather than a second-class path beside the mouse.
 
 **Date:** 2026-09-21
 
-**Status:** Active, **RECORDED — the migration is approved and not yet written** (Phase 7a, C3)
+**Status:** Active, **BUILT — migration `20260920000039_phase7a_sale_document.sql`** (Phase 7a, C3;
+written 2026-09-21, verified on the local pgvector harness, **not pushed**)
 
 **Decision:** C3's receipt is served by **one** additive migration, `00039`, adding
 `public.sale_document(p_sale_id uuid) returns jsonb` — the sale header, its lines **with each line's
@@ -3696,10 +3697,13 @@ two reads that could disagree. One function, one round trip, one tenant guard.
 
 **Consequences:**
 
-- **Unwritten at this entry.** The body is the owner's, verbatim; the single change is the added
-  `patient_code` key, which the owner's own instruction asked the chat to decide. It is to be written
-  as the **next migration in order**, verified locally with the project's throwaway-pgvector harness,
-  and **not pushed** without asking.
+- **Written 2026-09-21 as migration `00039`, and verified locally rather than pushed.** The body is
+  the owner's, verbatim; the single change is the added `patient_code` key, which the owner's own
+  instruction asked the chat to decide. Verified on the project's throwaway-pgvector harness: all
+  **39** migrations apply clean to a fresh database, the committed SQL suite is 16 files with zero
+  FAIL (the new `supabase/tests/phase7a_sale_document.sql` carries **23 assertions**, 0 FAIL), and
+  the pre-7a → 7a upgrade path passes 16/16. `supabase migration list` reads **39 local / 38
+  remote** — the one pending migration is this one, and it is not pushed without the owner's word.
 - **`checkout_sale` stays the only write path** and keeps its signature, so the compatibility seam
   (D-075) is untouched by this.
 - **The receipt's arithmetic is still `SaleTotals`' and the stored row's**, not recomputed: the
