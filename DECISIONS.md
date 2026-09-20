@@ -2993,17 +2993,29 @@ catalogue already applies to a GST slab (migration 00031) and D-068 applies to a
 **The four real values are still the owner's to supply** (open item 1 above is unchanged): until
 then the package flow exists, validates, and refuses.
 
-Two further facts from the build, both flagged rather than settled:
+Two further facts from the build. **Revised 2026-09-20 (second revision of this entry), because
+the first version of this block had the basis wrong:**
 
-- **The rate is resolved server-side as landed cost where recorded, else the batch's purchase
-  rate.** `product_batches.landed_cost_per_unit` was added in migration 00016 and opening-stock
-  batches (Phase 6.5a) have none, so a fallback is required for the catalogue that exists. **Which
-  of the two is the intended basis stays an open item** — it multiplies every package rate, and the
-  entry above already names the two candidates as different numbers.
-- **A package line needs its product's GST slab recorded, and is refused without one.** The entry
-  above records the tax treatment as unstated; the owner settled it for pharmacy sales only
-  (D-075). Rather than apply a B2C counter default to a B2B hospital supply, the RPC refuses the
-  line and names what is missing.
+- **The basis is the batch's PURCHASE RATE, and it is settled** (owner, 2026-09-20): *"Package
+  selling rate = Purchase rate × (1 + markup_percentage / 100)"* — 100 at 0% is 100, at 20% is 120,
+  at 15% is 115. This entry's own open question above ("which purchase rate") is therefore
+  **answered, and the landed cost is not the basis**: `product_batches.landed_cost_per_unit` is a
+  different number, the opening-stock catalogue has none, and a landed-cost basis would have been
+  the invented one. The RPC multiplies `product_batches.purchase_rate` and nothing else, and
+  `supabase/tests/phase7a_sale_types.sql` proves it with a batch whose landed cost (100) differs
+  from its purchase rate (80) — 20% gives 96, not 120. (The earlier version of this block resolved
+  the rate as landed cost "where recorded, else purchase rate", and a fallback between two candidate
+  numbers is exactly the guess the owner's brief forbids.)
+- **The markup is a free per-pharmacy percentage, chosen through the UI, and 0 is a value.** Not
+  fixed at 20, and not restricted to any list of predefined percentages: any percentage is honoured,
+  and the test covers 0%, 7.5% and 20%. `pharmacies.package_markup_percent` is nullable with **no
+  default**, so "nobody has configured it" stays distinct from a configured 0 — NULL refuses the
+  sale and names the setting, while a 0 prices at the purchase rate itself. Changing it is the
+  owner's alone, enforced by the existing `pharmacies_update_owner` policy and asserted in the same
+  test.
+- **A package line needs its product's GST slab recorded, and is refused without one.** This is the
+  one part of a package sale that remains genuinely unstated — the tax treatment of the supply — so
+  it is refused rather than priced at the counter's 5% default; tracked as N-15 in `PROGRESS.md`.
 
 ---
 
@@ -3481,4 +3493,58 @@ had: it defaulted the rate to MRP and then added tax on top, billing more than t
   slab, the 10% boundary, the MRP ceiling, the prescription rule, the package markup refusal and
   pricing, the transfer shape, idempotency, and the owner's worked example (800 charged − 100
   returned − 400 allocated = **300 outstanding**, with a second admission keeping its own).
+
+---
+
+## D-076 — An Allocation Is Limited by What Is Owed, Under a Lock, and Applying a Deposit Writes No Receipt
+
+**Date:** 2026-09-20
+
+**Status:** Active (built — Phase 7a; migrations `20260920000037`/`…000038`)
+
+**Decision:** Three rules, all server-side:
+
+- **An allocation may not exceed its target's outstanding.** The limit is computed inside the same
+  transaction, **under a `for update` lock on the target row** (the sale, or the admission). The
+  lock is what makes the check mean anything between two sessions: the second collection waits, and
+  by the time it aggregates, it sees the first one's committed allocation. Targets named in one call
+  are processed in a **deterministic order**, so two concurrent collections touching the same pair
+  cannot take the locks in opposite orders.
+- **Applying a deposit is not a second receipt.** `allocate_payment()` applies an existing receipt's
+  unallocated remainder and writes **only** a `payment_allocations` row — never a `payments` or
+  `ledger_entries` row — limited to what the receipt still holds.
+- **A patient master edit is a permission, not a visible control** (N-17(a)). The patient-identity
+  columns (`patient_code`, the demographics, the guardian fields, `notes`) are no longer writable by
+  `authenticated` directly — exactly the idiom migration 00017 used for `profiles`, table-level
+  UPDATE revoked and the wanted columns granted back — and are written only by `update_patient()`,
+  which requires the **owner or a pharmacist**. The columns the existing customers form owns
+  (`name`, `phone`, `email`, `address`, `gstin`, `opening_balance`, `loyalty_points`, `is_active`)
+  stay granted, so **no existing screen changes what it can do**.
+
+**Rationale:** the brief says "Concurrent collections cannot over-allocate a bill", "Applying a
+deposit is not a second receipt of money", and "Do not rely on disabled buttons as the security
+boundary". The first two are ledger correctness: an over-settled bill makes the account disagree
+with the money actually taken, and a deposit applied as a new receipt double-counts the cash book.
+The third is about where a rule lives — `customers` carried the standard tenant-wide template, so
+any member of the pharmacy could rewrite a patient's name and demographics through PostgREST, and a
+control the server does not enforce is a suggestion.
+
+**Consequences:**
+
+- **A refusal takes the whole collection with it.** The receipt is written before its allocations
+  are checked, so an over-limit allocation rolls the receipt back; that is asserted by looking for
+  the payment row by its idempotency key *after* the refusal, not by assuming it.
+- **The lock is per document, not per patient**, and a collection touching two documents takes two
+  locks. A deadlock would abort one transaction whole, so there is no partial write to reconcile.
+- **Money from one patient cannot settle another patient's admission**, and a supplier's receipt
+  cannot settle a customer's document: the target must belong to the payer.
+- **`allocate_payment()` is the missing half of the settlement flow** (§6): a counter holding a
+  deposit can now apply it without inventing a second receipt.
+- **What is still NOT gated, on purpose:** creating a patient (`save_patient`), which the brief
+  explicitly allows for any authorized sale — a cashier may register the minimum identity to bill,
+  and only the *edit* of an existing master is privileged.
+- Tests: `supabase/tests/phase7a_sale_types.sql` — over-allocation refused with no receipt left
+  behind, cross-patient allocation refused, deposit application moving 300 → 200 with the payment
+  count unchanged, a deposit that cannot over-apply, the owner/pharmacist/cashier role gate, the
+  owner-only markup setting, and the column privileges themselves.
 

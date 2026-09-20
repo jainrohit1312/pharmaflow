@@ -4,6 +4,13 @@
 -- Run:
 --   supabase db query --linked --file supabase/tests/phase7a_sale_types.sql
 --
+-- COUNTING
+--   The last line reads "<n> PASS / <m> FAIL of <k> assertions", where k counts assertion
+--   lines only and a self-check asserts that every logged line is a PASS or a FAIL. The
+--   older files in this directory count the summary line itself into their total, which is
+--   why theirs reads one higher than the checks they contain; the discrepancy is arithmetic,
+--   not a skipped check, and this file does not repeat it.
+--
 -- HOW TO READ THE RESULT
 --   The evidence comes back in the error message: every line is either "PASS: ..." or
 --   "FAIL: ...", and the last line counts them. A non-zero exit code is expected and
@@ -57,6 +64,20 @@
 --   16. Tenant isolation: another pharmacy's batch or patient is refused.
 --   17. Permissions: anon cannot execute the new RPCs; the internal code minter is not
 --       executable by authenticated at all.
+--   18. A patient master's identity columns are not directly writable by a client, and the
+--       columns the customers form owns still are - so no existing screen changes what it can
+--       do (N-17(a), migration 00038).
+--   19. A patient master edit is gated server-side: the owner and a pharmacist may, a cashier
+--       is refused whatever any screen shows, and a cashier cannot change the pharmacy's own
+--       package markup either (the pharmacies policy is owner-only).
+--   20. Allocations cannot over-settle a document, a refused collection leaves no receipt
+--       behind, one patient's money cannot settle another patient's admission, and applying a
+--       deposit settles a bill WITHOUT writing a second receipt (migration 00037).
+--   21. A retried submit with the SAME idempotency key but a CHANGED payload returns the
+--       original sale, keeps the original amount, and moves stock once.
+--   22. A return still credits the customer against the bill it came from.
+--   23. The assertion count is the assertions - and every logged line is a PASS or a FAIL, so
+--       a skipped or truncated check cannot hide behind the arithmetic.
 
 do $$
 declare
@@ -83,6 +104,9 @@ declare
   v_other_batch     uuid;
   v_other_patient   uuid;
   v_foreign_product uuid;
+  v_cashier         uuid;
+  v_pharmacist      uuid;
+  v_deposit         uuid;
   v_sale            public.sales;
   v_sale2           public.sales;
   v_return_id       uuid;
@@ -92,6 +116,11 @@ declare
   v_amount          numeric;
   v_amount2         numeric;
   v_rows            int;
+  v_qty_before      int;
+  v_qty_after       int;
+  v_count_a         int;
+  v_count_b         int;
+  v_patient_two     uuid;
   v_key             text;
   v_admission       public.admissions;
   v_admission2      public.admissions;
@@ -118,10 +147,14 @@ begin
   values (v_pharmacy, 'ZZTEST 7a five percent', 5)
   returning id into v_product;
 
+  -- This batch deliberately carries a LANDED COST (100) that differs from its PURCHASE RATE
+  -- (80): the package rule multiplies the purchase rate, and the two numbers being different
+  -- is what makes that assertion mean something rather than pass by coincidence.
   insert into public.product_batches (
-    pharmacy_id, product_id, batch_no, expiry_date, qty, purchase_rate, mrp, selling_rate
+    pharmacy_id, product_id, batch_no, expiry_date, qty, purchase_rate, mrp, selling_rate,
+    landed_cost_per_unit
   ) values (
-    v_pharmacy, v_product, 'ZZTEST-7A-B1', current_date + 365, 100, 80, 105, 0
+    v_pharmacy, v_product, 'ZZTEST-7A-B1', current_date + 365, 100, 80, 105, 0, 100
   ) returning id into v_batch;
 
   insert into public.products (pharmacy_id, name, gst_percent)
@@ -185,6 +218,52 @@ begin
   ) values (
     v_other_pharmacy, v_foreign_product, 'ZZTEST-7A-FOREIGN', current_date + 365, 10, 10, 20
   ) returning id into v_other_batch;
+
+  -- Two more people in the same pharmacy, for the role gates: a cashier may register a patient
+  -- for a sale but may not rewrite a master, a pharmacist may, and neither may change the
+  -- pharmacy's own settings.
+  v_cashier    := '00000000-0000-0000-0000-0000000000cc';
+  v_pharmacist := '00000000-0000-0000-0000-0000000000dd';
+
+  insert into auth.users (id, email)
+  values (v_cashier, 'zztest-7a-cashier@example.invalid')
+  on conflict (id) do nothing;
+
+  insert into auth.users (id, email)
+  values (v_pharmacist, 'zztest-7a-pharmacist@example.invalid')
+  on conflict (id) do nothing;
+
+  insert into public.profiles (id, full_name, role, pharmacy_id)
+  values (v_cashier, 'ZZTEST 7a cashier', 'cashier', v_pharmacy)
+  on conflict (id) do update
+    set role = excluded.role, pharmacy_id = excluded.pharmacy_id;
+
+  insert into public.profiles (id, full_name, role, pharmacy_id)
+  values (v_pharmacist, 'ZZTEST 7a pharmacist', 'pharmacist', v_pharmacy)
+  on conflict (id) do update
+    set role = excluded.role, pharmacy_id = excluded.pharmacy_id;
+
+  -- N-17(a), as privileges rather than as a hidden control: the patient master's identity
+  -- columns are not directly writable by a client, and the columns the customers form owns
+  -- still are (so no existing screen changes what it can do).
+  v_log := array_append(v_log, case
+    when not has_column_privilege('authenticated', 'public.customers', 'patient_code', 'UPDATE')
+      then 'PASS' else 'FAIL' end
+    || ': 18. patient_code is not directly writable by a client');
+
+  v_log := array_append(v_log, case
+    when not has_column_privilege('authenticated', 'public.customers', 'sex', 'UPDATE')
+     and not has_column_privilege('authenticated', 'public.customers', 'date_of_birth', 'UPDATE')
+     and not has_column_privilege('authenticated', 'public.customers', 'guardian_phone', 'UPDATE')
+      then 'PASS' else 'FAIL' end
+    || ': 18. the patient demographics are not directly writable by a client');
+
+  v_log := array_append(v_log, case
+    when has_column_privilege('authenticated', 'public.customers', 'name', 'UPDATE')
+     and has_column_privilege('authenticated', 'public.customers', 'phone', 'UPDATE')
+     and has_column_privilege('authenticated', 'public.customers', 'is_active', 'UPDATE')
+      then 'PASS' else 'FAIL' end
+    || ': 18. the columns the customers form owns are still writable (that screen is unchanged)');
 
   -- Permissions that do not need a tenant identity.
   select has_function_privilege('anon', p.oid, 'EXECUTE') into v_allowed
@@ -256,6 +335,7 @@ begin
     p_name => 'ZZTEST 7a patient two',
     p_mobile => '9876543210'
   );
+  v_patient_two := v_second.id;
   v_log := array_append(v_log, case
     when v_second.id <> v_patient.id then 'PASS' else 'FAIL' end
     || ': 3. a shared family mobile is a second patient, not a merge');
@@ -605,13 +685,15 @@ begin
   end;
   v_log := array_append(v_log, v_outcome);
 
-  -- A receipt with nothing allocated is a deposit, and leaves the balance alone.
+  -- A receipt with nothing allocated is a deposit, and leaves the balance alone. Its id is kept
+  -- for the allocation-integrity section, which applies it later.
   v_payment := public.collect_payment(
     p_party_type => 'customer',
     p_party_id => v_patient.id,
     p_amount => 500,
     p_mode => 'upi'
   );
+  v_deposit := v_payment.id;
 
   select a.outstanding, a.unallocated_deposits into v_amount, v_amount2
     from public.patient_account(v_patient.id) a;
@@ -710,6 +792,61 @@ begin
     when v_amount = 300.00 then 'PASS' else 'FAIL' end
     || ': 13. a package bill never increases the patient''s personal debt (got ' || v_amount || ')');
 
+  -- The confirmed rule, three ways. A configured 0% is a real 0% (never read as "missing", so
+  -- the sale is priced at the purchase rate itself); a custom percentage is honoured, because
+  -- this is a free numeric and not a list of four invented values; and the basis is the
+  -- batch's PURCHASE RATE - this batch's landed cost is 100, so 80 x 1.2 = 96 proves which
+  -- number is multiplied rather than passing by coincidence.
+  update public.pharmacies p set package_markup_percent = 0 where p.id = v_pharmacy;
+
+  v_sale2 := public.checkout_sale(jsonb_build_object(
+    'sale_type', 'package',
+    'customer_id', v_hospital_acct,
+    'patient_name', 'ZZTEST 7a package patient',
+    'patient_mobile', '9000000005',
+    'hospital_reference', 'ZZTEST-PKG-4',
+    'items', jsonb_build_array(jsonb_build_object(
+      'product_id', v_product, 'batch_id', v_batch, 'qty', 1
+    ))
+  ));
+  v_log := array_append(v_log, case
+    when v_sale2.grand_total = 80.00 and v_sale2.tax_total = 3.81 then 'PASS' else 'FAIL' end
+    || ': 13. a configured 0% markup prices at the purchase rate (got grand '
+    || v_sale2.grand_total || ' / tax ' || v_sale2.tax_total || ')');
+
+  update public.pharmacies p set package_markup_percent = 7.5 where p.id = v_pharmacy;
+
+  v_sale2 := public.checkout_sale(jsonb_build_object(
+    'sale_type', 'package',
+    'customer_id', v_hospital_acct,
+    'patient_name', 'ZZTEST 7a package patient',
+    'patient_mobile', '9000000005',
+    'hospital_reference', 'ZZTEST-PKG-5',
+    'items', jsonb_build_array(jsonb_build_object(
+      'product_id', v_product, 'batch_id', v_batch, 'qty', 1
+    ))
+  ));
+  v_log := array_append(v_log, case
+    when v_sale2.grand_total = 86.00 then 'PASS' else 'FAIL' end
+    || ': 13. a custom markup is honoured: 80 at 7.5% is 86 (got ' || v_sale2.grand_total || ')');
+
+  update public.pharmacies p set package_markup_percent = 20 where p.id = v_pharmacy;
+
+  v_sale2 := public.checkout_sale(jsonb_build_object(
+    'sale_type', 'package',
+    'customer_id', v_hospital_acct,
+    'patient_name', 'ZZTEST 7a package patient',
+    'patient_mobile', '9000000005',
+    'hospital_reference', 'ZZTEST-PKG-6',
+    'items', jsonb_build_array(jsonb_build_object(
+      'product_id', v_product, 'batch_id', v_batch, 'qty', 1
+    ))
+  ));
+  v_log := array_append(v_log, case
+    when v_sale2.grand_total = 96.00 then 'PASS' else 'FAIL' end
+    || ': 13. the basis is the PURCHASE rate (80 at 20% = 96), not this batch''s landed cost of 100 (that would be 120) (got '
+    || v_sale2.grand_total || ')');
+
   -- ========================================================== 14. the transfer
   v_sale2 := public.checkout_sale(jsonb_build_object(
     'sale_type', 'transfer',
@@ -795,11 +932,210 @@ begin
   end;
   v_log := array_append(v_log, v_outcome);
 
+  -- ============================ 17. a patient master edit is permission-controlled
+  -- N-17(a). The gate is on the server: the same call is refused for a cashier whatever any
+  -- screen happens to show, and it is refused by the RPC rather than by a column privilege
+  -- the RPC could be bypassed around.
+  v_second := public.update_patient(
+    p_patient_id => v_patient.id,
+    p_name => 'ZZTEST 7a patient one',
+    p_mobile => '9876543210',
+    p_age_years => 36,
+    p_sex => 'female',
+    p_notes => 'ZZTEST edited by the owner'
+  );
+  v_log := array_append(v_log, case
+    when v_second.age_years = 36 and v_second.notes = 'ZZTEST edited by the owner'
+      then 'PASS' else 'FAIL' end
+    || ': 17. the owner may edit a patient master');
+
+  v_log := array_append(v_log, case
+    when v_second.patient_code is not null then 'PASS' else 'FAIL' end
+    || ': 17. an edit leaves the patient code alone (identity belongs to the counter)');
+
+  perform set_config('request.jwt.claim.sub', v_cashier::text, true);
+
+  v_outcome := 'FAIL: 17. a cashier edited a patient master';
+  begin
+    perform public.update_patient(
+      p_patient_id => v_patient.id,
+      p_name => 'ZZTEST 7a cashier rename',
+      p_mobile => '9876543210'
+    );
+  exception when insufficient_privilege then
+    v_outcome := 'PASS: 17. a cashier''s patient edit is refused server-side';
+  end;
+  v_log := array_append(v_log, v_outcome);
+
+  -- The pharmacy's own settings are the owner's: a cashier may not set the package markup.
+  update public.pharmacies p set package_markup_percent = 99 where p.id = v_pharmacy;
+  select p.package_markup_percent into v_amount
+    from public.pharmacies p where p.id = v_pharmacy;
+  v_log := array_append(v_log, case when v_amount = 20.00 then 'PASS' else 'FAIL' end
+    || ': 17. a cashier cannot change the package markup setting (still ' || v_amount || ')');
+
+  perform set_config('request.jwt.claim.sub', v_pharmacist::text, true);
+
+  v_second := public.update_patient(
+    p_patient_id => v_patient.id,
+    p_name => 'ZZTEST 7a patient one',
+    p_mobile => '9876543210',
+    p_age_years => 37,
+    p_sex => 'female'
+  );
+  v_log := array_append(v_log, case when v_second.age_years = 37 then 'PASS' else 'FAIL' end
+    || ': 17. a pharmacist may edit a patient master');
+
+  perform set_config('request.jwt.claim.sub', v_user::text, true);
+
+  -- ======================== 20. an allocation cannot over-settle a document
+  -- Admission 1 stands at 300 outstanding at this point.
+  v_outcome := 'FAIL: 20. an allocation larger than the outstanding was accepted';
+  begin
+    perform public.collect_payment(
+      p_party_type => 'customer',
+      p_party_id => v_patient.id,
+      p_amount => 301,
+      p_mode => 'cash',
+      p_idempotency_key => 'zztest-7a-over',
+      p_allocations => jsonb_build_array(
+        jsonb_build_object('admission_id', v_admission.id, 'amount', 301)
+      )
+    );
+  exception when check_violation then
+    v_outcome := 'PASS: 20. allocating past the outstanding is refused';
+  end;
+  v_log := array_append(v_log, v_outcome);
+
+  -- The refusal took the half-written receipt with it: no payment row, no ledger row, no
+  -- allocation. This is the "a failure leaves no partial financial write" case.
+  select count(*) into v_rows
+    from public.payments p
+   where p.pharmacy_id = v_pharmacy and p.idempotency_key = 'zztest-7a-over';
+  v_log := array_append(v_log, case when v_rows = 0 then 'PASS' else 'FAIL' end
+    || ': 20. a refused collection leaves no receipt behind (expected 0 rows, got ' || v_rows || ')');
+
+  -- Money from one patient cannot settle another patient's admission.
+  v_payment := public.collect_payment(
+    p_party_type => 'customer',
+    p_party_id => v_patient_two,
+    p_amount => 100,
+    p_mode => 'cash'
+  );
+  v_outcome := 'FAIL: 20. one patient''s receipt settled another patient''s admission';
+  begin
+    perform public.allocate_payment(
+      v_payment.id,
+      jsonb_build_array(
+        jsonb_build_object('admission_id', v_admission.id, 'amount', 50)
+      )
+    );
+  exception when check_violation then
+    v_outcome := 'PASS: 20. a receipt cannot settle another patient''s admission';
+  end;
+  v_log := array_append(v_log, v_outcome);
+
+  -- Applying the deposit the counter already holds: the admission falls by 100 and NO second
+  -- receipt appears, which is the whole point of "applying a deposit is not a second receipt".
+  select count(*) into v_count_a
+    from public.payments p
+   where p.pharmacy_id = v_pharmacy and p.customer_id = v_patient.id;
+  select a.outstanding into v_amount from public.admission_account(v_admission.id) a;
+
+  perform public.allocate_payment(
+    v_deposit,
+    jsonb_build_array(jsonb_build_object('admission_id', v_admission.id, 'amount', 100))
+  );
+
+  select count(*) into v_count_b
+    from public.payments p
+   where p.pharmacy_id = v_pharmacy and p.customer_id = v_patient.id;
+  select a.outstanding into v_amount2 from public.admission_account(v_admission.id) a;
+
+  v_log := array_append(v_log, case
+    when v_amount = 300.00 and v_amount2 = 200.00 then 'PASS' else 'FAIL' end
+    || ': 20. applying a deposit settles 100 of the admission (300 -> ' || v_amount2 || ')');
+
+  v_log := array_append(v_log, case when v_count_b = v_count_a then 'PASS' else 'FAIL' end
+    || ': 20. applying a deposit writes no second receipt (payments '
+    || v_count_a || ' -> ' || v_count_b || ')');
+
+  v_outcome := 'FAIL: 20. a deposit applied more than it held';
+  begin
+    perform public.allocate_payment(
+      v_deposit,
+      jsonb_build_array(jsonb_build_object('admission_id', v_admission.id, 'amount', 500))
+    );
+  exception when check_violation then
+    v_outcome := 'PASS: 20. a deposit cannot apply more than it still holds';
+  end;
+  v_log := array_append(v_log, v_outcome);
+
+  -- ======================== 21. a retried submit whose payload changed
+  v_key := 'zztest-7a-key2-' || gen_random_uuid()::text;
+  select b.qty into v_count_a from public.product_batches b where b.id = v_batch;
+
+  v_sale := public.checkout_sale(jsonb_build_object(
+    'sale_type', 'counter',
+    'customer_id', v_patient.id,
+    'idempotency_key', v_key,
+    'items', jsonb_build_array(jsonb_build_object(
+      'product_id', v_product, 'batch_id', v_batch, 'qty', 1, 'rate', 105
+    ))
+  ));
+
+  -- The same key with a different basket. The original sale comes back, so a retry that forgot
+  -- what it sent cannot invent a second transaction - and the stock moves once.
+  v_sale2 := public.checkout_sale(jsonb_build_object(
+    'sale_type', 'counter',
+    'customer_id', v_patient.id,
+    'idempotency_key', v_key,
+    'items', jsonb_build_array(jsonb_build_object(
+      'product_id', v_product, 'batch_id', v_batch, 'qty', 3, 'rate', 105
+    ))
+  ));
+
+  select b.qty into v_count_b from public.product_batches b where b.id = v_batch;
+
+  v_log := array_append(v_log, case when v_sale2.id = v_sale.id then 'PASS' else 'FAIL' end
+    || ': 21. the same key with a changed payload returns the ORIGINAL sale');
+
+  v_log := array_append(v_log, case
+    when v_sale2.grand_total = v_sale.grand_total then 'PASS' else 'FAIL' end
+    || ': 21. the original amount stands, not the changed one (got ' || v_sale2.grand_total || ')');
+
+  v_log := array_append(v_log, case when v_count_a - v_count_b = 1 then 'PASS' else 'FAIL' end
+    || ': 21. the retry moved stock once (expected 1 unit, got ' || (v_count_a - v_count_b) || ')');
+
+  -- ======================== 22. a return reverses against the bill it came from
+  -- The returns SCREEN is Phase 3's and is not rebuilt by this phase; what is pinned here is
+  -- that a return against a typed sale still posts its credit to the customer's ledger.
+  select count(*) into v_rows
+    from public.ledger_entries l
+   where l.pharmacy_id = v_pharmacy
+     and l.reference_type = 'sale_return'
+     and l.reference_id = v_return_id
+     and l.credit = 100.00;
+  v_log := array_append(v_log, case when v_rows = 1 then 'PASS' else 'FAIL' end
+    || ': 22. a return credits the customer 100 against the bill it came from');
+
   -- ================================================================ summary
+  -- The count is the ASSERTIONS, not the log's length: the summary line itself is appended to
+  -- the same array, which is what made the previous version of this file read "54 assertions"
+  -- for 53 checks. The self-check below is what proves nothing is hidden by that arithmetic -
+  -- a line that is neither a PASS nor a FAIL would fail it.
+  v_log := array_append(v_log, case
+    when (select count(*) from unnest(v_log) l
+           where coalesce(l, '') not like 'PASS%'
+             and coalesce(l, '') not like 'FAIL%') = 0
+      then 'PASS' else 'FAIL' end
+    || ': 0. every logged line is a PASS or a FAIL (nothing skipped, nothing truncated)');
+
   v_log := array_append(v_log, 'SUMMARY: '
     || (select count(*) from unnest(v_log) l where l like 'PASS%') || ' PASS / '
     || (select count(*) from unnest(v_log) l where l like 'FAIL%') || ' FAIL of '
-    || (array_length(v_log, 1) + 1) || ' assertions');
+    || (select count(*) from unnest(v_log) l
+         where l like 'PASS%' or l like 'FAIL%') || ' assertions');
 
   raise exception E'PHASE7A SALE TYPES TEST\n%', array_to_string(v_log, chr(10));
 end $$;

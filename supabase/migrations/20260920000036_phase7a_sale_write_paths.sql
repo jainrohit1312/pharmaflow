@@ -426,14 +426,16 @@ begin
     end if;
 
     -- The rate, per type. Package and transfer rates are the server's figures (D-067/D-070):
-    -- purchase cost plus a configured markup, or plain purchase cost. A retail rate is the
-    -- caller's, defaulted from the batch, and may not exceed MRP.
+    -- purchase rate plus the pharmacy's configured markup, or plain purchase rate. A retail
+    -- rate is the caller's, defaulted from the batch, and may not exceed MRP.
     if v_type = 'package' then
-      v_rate := round(
-        coalesce(nullif(v_batch.landed_cost_per_unit, 0), v_batch.purchase_rate)
-        * (1 + v_markup / 100),
-        2
-      );
+      -- The confirmed rule (owner, 2026-09-20): purchase rate x (1 + markup/100). It is the
+      -- BATCH'S PURCHASE RATE, deliberately - not the landed cost. Landed cost (00016) is a
+      -- different number, it is absent for the whole opening-stock catalogue, and a fallback
+      -- to it would have been an invented basis. `v_markup` may be 0: a configured zero is a
+      -- real deal (the owner's own "0% is a value, not an absence", D-068) and multiplies to
+      -- the purchase rate itself.
+      v_rate := round(v_batch.purchase_rate * (1 + v_markup / 100), 2);
     elsif v_type = 'transfer' then
       v_rate := coalesce(v_batch.purchase_rate, 0);
     else

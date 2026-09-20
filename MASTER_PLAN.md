@@ -223,19 +223,21 @@ Phase 7b         →  hospital profit sharing
 Phase 7c         →  the reports
 ```
 
-**Built so far (2026-09-20) — Phase 7a's durable layer, and only that.** Four additive migrations
-(`20260920000033`…`…000036`) and `supabase/tests/phase7a_sale_types.sql` (53 assertions, 0 FAIL)
+**Built so far (2026-09-20) — Phase 7a's durable layer, and only that.** Six additive migrations
+(`20260920000033`…`…000038`) and `supabase/tests/phase7a_sale_types.sql` (75 assertions, 0 FAIL)
 carry: the `sale_type` enum and the `sales` columns (**eleven** of the twelve below — see D-067 on
 the deferred approval FK); `admissions` and the patient fields on `customers` with a server-generated
 patient code (**D-074**); the GST basis for a pharmacy sale, tax-inclusive with the product's own
-slab winning and one named 5% default (**D-075**); `payment_allocations` plus `collect_payment()`
-and the two balance readers; `hospitals` + `pharmacies.hospital_id` + `doctors` (pulled forward from
-§2 and §D-072); and `checkout_sale()` rewritten to price and validate per type — with a documented
-compatibility seam so a payload that names no `sale_type` behaves exactly as it did before.
+slab winning and one named 5% default (**D-075**); `payment_allocations` plus `collect_payment()`,
+`allocate_payment()` and the two balance readers, with allocations limited to what is owed **under a
+row lock** (**D-076**); a server-gated patient-master edit (**D-076**, resolving N-17(a));
+`hospitals` + `pharmacies.hospital_id` + `doctors` (pulled forward from §2 and §D-072); and
+`checkout_sale()` rewritten to price and validate per type — with a documented compatibility seam so
+a payload that names no `sale_type` behaves exactly as it did before.
 **Nothing is pushed to the hosted project, and no Flutter file changed**: the POS flow, the widgets
 and the keyboard contract are **not started**. **Not built, unchanged from the text below:**
 `hospital_profit_sharing`, every share and settlement RPC (§2 — 7b), the reports (§5 — 7c),
-`approval_requests` (6.5c), and the four markup percentages (§7 item 1).
+`approval_requests` (6.5c), and — of §7's open items — only the package line's **tax** treatment.
 
 **HARD DEPENDENCY: Phase 7a depends on Phase 6.5c's approval infrastructure.** No soft
 reference and no client-invented id — `sales.discount_above_limit_request_id` is a **real
@@ -385,12 +387,14 @@ it comes back "no GST on B2C", the tax columns carry zeros and the formula is un
    **refuses**, and the column is now nullable with **no default** — the brief says *"do not silently
    guess unresolved settings"*, which is the same rule the GST slab and a 0% share already follow
    (D-070). The four real values are still the owner's to supply, and item 1 stands unchanged.
-5. **What a package sale multiplies, and what it charges tax on** — both still unstated, and both
-   multiply or apply to every package line. The rate is resolved as the batch's **landed cost**
-   where one is recorded and its **purchase rate** otherwise (the opening-stock catalogue has no
-   landed cost, so a fallback is required to keep the flow working); D-070 records the two
-   candidates as different numbers. A package line with **no recorded slab is refused** rather than
-   taxed at the counter's 5% default — a refusal, not an answer (N-15).
+5. ~~**What a package sale multiplies**~~ **RESOLVED (owner, 2026-09-20): the batch's PURCHASE
+   RATE** — `rate = purchase rate × (1 + markup/100)`, where the markup is a **free per-pharmacy
+   percentage chosen through the UI**, not fixed at 20 and not one of a list of four, with **0 a
+   valid configured value** rather than "missing". It is deliberately **not** the landed cost.
+   Built in `checkout_sale()` and asserted against a batch whose landed cost (100) differs from its
+   purchase rate (80) — 20% gives 96, not 120 (D-070). **Still open: what a package line charges
+   tax on** — the one part of this feature that remains genuinely unstated, so a package line whose
+   product has no recorded slab is **refused** rather than taxed at the counter's 5% default (N-15).
 
 **Estimated Context:** not yet estimated — Phase 7 has no chunk breakdown yet.
 

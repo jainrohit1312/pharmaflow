@@ -113,6 +113,14 @@ begin
   -- and not a waste risk (nothing left to waste).
   insert into public.product_batches (pharmacy_id, product_id, batch_no, expiry_date, qty)
   values (v_pharmacy, v_low, 'A-EMPTY', current_date + 2, 0) returning id into v_b_empty;
+  -- No expiry at all. Legitimate since migration 00031 - the source did not record one, and
+  -- "unknown" is not "safe". `v_noexpiry`/`v_b_none` have been declared in this file since the
+  -- day it was written and never used, because while `expiry_date` was NOT NULL this fixture
+  -- could not exist; 00031 made it possible, so the coverage it was meant for lives here.
+  insert into public.products (pharmacy_id, name, min_stock_level)
+  values (v_pharmacy, 'ZZTEST Alerts Undated', 0) returning id into v_noexpiry;
+  insert into public.product_batches (pharmacy_id, product_id, batch_no, expiry_date, qty)
+  values (v_pharmacy, v_noexpiry, 'A-UNDATED', null, 6) returning id into v_b_none;
   insert into public.product_batches (pharmacy_id, product_id, batch_no, expiry_date, qty)
   values (v_other, v_other_low, 'B-1', current_date + 1, 5) returning id into v_b_other_tenant;
 
@@ -220,20 +228,44 @@ begin
       || ': 3. a batch with nothing left in it is not a waste risk'
   );
 
-  -- The function guards `expiry_date is not null`, and the schema makes that
-  -- impossible to violate - recorded here so the guard is known to be a mirror of
-  -- the column rather than a case anybody needs to test a second time.
+  -- `expiring_batches` guards `expiry_date is not null`. Until migration 00031 that guard could
+  -- never fire: the column was NOT NULL, so no batch could reach the alert without a date, and
+  -- this assertion recorded the guard as a mirror of the schema rather than as behaviour. 00031
+  -- deliberately made the column nullable - the opening-stock import has 145 rows whose source
+  -- recorded no expiry, and the schema has to be able to hold "unknown" - which turned the guard
+  -- into something load-bearing. The assertion now tests what the guard protects, which is the
+  -- only version of it with any value: an undated batch is a legal row, and it is NOT reported
+  -- as expiring, because there is no date for it to be inside a horizon of.
   select count(*) into v_n
     from information_schema.columns
    where table_schema = 'public'
      and table_name = 'product_batches'
      and column_name = 'expiry_date'
-     and is_nullable = 'NO';
+     and is_nullable = 'YES';
   v_log := array_append(
     v_log,
     case when v_n = 1 then 'PASS' else 'FAIL' end
-      || ': 3. expiry_date is NOT NULL in the schema, so no batch can reach the alert without one (found '
-      || v_n || ')'
+      || ': 3. expiry_date is nullable, so an unknown expiry is representable (migration 00031)'
+  );
+
+  v_log := array_append(
+    v_log,
+    case when not exists (
+      select 1 from jsonb_array_elements(v_result) r where r->>'batch_id' = v_b_none::text
+    ) then 'PASS' else 'FAIL' end
+      || ': 3. a batch with NO expiry is not reported as expiring in a 90-day horizon'
+  );
+
+  -- ...and the view behind the same idea labels it, rather than calling it safe: a row nobody
+  -- can date must not read as having more than ninety days of shelf life.
+  select b.expiry_status into v_identity
+    from public.batch_status b
+   where b.id = v_b_none;
+  v_log := array_append(
+    v_log,
+    case when v_identity = 'unknown' then 'PASS' else 'FAIL' end
+      || ': 3. batch_status reports an undated batch as ''unknown'', not ''safe'' (got '
+      || coalesce(v_identity, 'null') || ')'
   );
 
   v_log := array_append(
