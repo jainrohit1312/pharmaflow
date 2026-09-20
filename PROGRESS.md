@@ -468,6 +468,33 @@ runs it, and a test for each layer.
   payment, ledger entry, sale or stock adjustment is written, and that the batches hold exactly
   the imported quantity.
 
+### Bug fix — the web picker threw the chosen file away [DONE]
+
+Reported from the owner's browser test: the dialog opened, `PharmaFlow_Opening_Stock.csv` was
+selected, and nothing happened — no request, no error, no state change, no spinner. The four
+reported hypotheses were all about the app's own handling of the answer (`file_picker_web`'s
+`withData`, an empty catch, a screen that does not rebuild, a blob URL read without data); none of
+them is what the code does, and none of them is the cause.
+
+**Root cause (in the package, one step below the app):** `FilePickerWeb`'s input session registers
+a `window` `focus` listener and, **500 ms after any focus event, completes a pick that is still in
+progress with `null`** — the value the picker uses for "the user changed their mind". A file that
+*was* selected is discarded, and the controller mapped that `null` to "back to the offer", which is
+why the screen looked exactly as it had before anything was chosen. Upstream #1833 and #1202 are
+the same mechanism with the same symptom. `file_picker` 13.0.0 removed `cancelUploadOnWindowBlur`
+from the public `pickFile()` (#2202/#2203), and the `WebOptions` the facade re-exports declares no
+fields at all — so the heuristic could not be switched off through `file_picker` alone.
+
+**Fix:** D-073 — the flag is reached through one conditional import, and `file_picker_web` is
+promoted from a transitive dependency to a direct one at the version already resolved (no pin
+moves). The same round of work rebuilt the screen as six explicit steps with a failure card that
+names the step, made the byte decode and the file-name check pure functions so the cases that had
+no test now have one, and carried the failing row number on `OpeningStockCsvException` rather than
+reading it back out of the message. Module: 91 tests. Suite: 758 (+29). Gates: `flutter analyze`,
+`dart run custom_lint`, `flutter test`, the five `deno check` entry points and
+`deno test supabase/functions` (181) all pass, and the web branch was checked on the artifact with
+`flutter build web --source-maps` rather than argued.
+
 ---
 
 ## Chat 4 Progress — Phase 6, chunk 3: the Vercel config, the re-read button and I-3 [DONE — PHASE 6 OPEN]

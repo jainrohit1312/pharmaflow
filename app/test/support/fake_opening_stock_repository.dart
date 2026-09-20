@@ -6,6 +6,8 @@
 /// boring answer: nothing refused, nothing already imported.
 library;
 
+import 'dart:async';
+
 import 'package:app/features/import/opening_stock/data/opening_stock_csv.dart';
 import 'package:app/features/import/opening_stock/data/opening_stock_models.dart';
 import 'package:app/features/import/opening_stock/data/opening_stock_repository.dart';
@@ -241,6 +243,14 @@ class FakeOpeningStockRepository implements OpeningStockRepository {
   /// When set, reading the job throws it until the test clears it.
   Exception? jobErrorToThrow;
 
+  /// When set, every preview waits for it before it answers.
+  ///
+  /// The one hold in this fake, and it is here for the screen's own sake: a test
+  /// that has to look at the processing step has to look *while* the server is
+  /// working, and a future the test completes itself is the only honest way to
+  /// stop the answer arriving before the assertion.
+  Completer<void>? previewGate;
+
   /// Every payload the preview was handed, in order.
   final List<List<OpeningStockCsvRow>> previewed = <List<OpeningStockCsvRow>>[];
 
@@ -256,6 +266,10 @@ class FakeOpeningStockRepository implements OpeningStockRepository {
   @override
   Future<OpeningStockPreview> preview(List<OpeningStockCsvRow> rows) async {
     previewed.add(rows);
+    final gate = previewGate;
+    if (gate != null) {
+      await gate.future;
+    }
     final error = previewErrorToThrow;
     if (error != null) {
       throw error;

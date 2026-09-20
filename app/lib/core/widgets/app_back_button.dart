@@ -16,6 +16,7 @@ class AppBackButton extends StatelessWidget {
     required this.location,
     super.key,
     this.tooltip = 'Back',
+    this.enabled = true,
   });
 
   /// Where the button navigates to.
@@ -24,10 +25,18 @@ class AppBackButton extends StatelessWidget {
   /// Tooltip and screen-reader label.
   final String tooltip;
 
+  /// Whether the button can be pressed.
+  ///
+  /// False renders it greyed and inert. For a screen with a step that must
+  /// finish - an import being written, a file being sent - leaving is not a
+  /// choice it can honour, so the affordance is disabled rather than removed:
+  /// the button the user knows is there is the one that comes back.
+  final bool enabled;
+
   @override
   Widget build(BuildContext context) => IconButton(
     icon: const Icon(Icons.arrow_back),
     tooltip: tooltip,
-    onPressed: () => context.go(location),
+    onPressed: enabled ? () => context.go(location) : null,
   );
 }

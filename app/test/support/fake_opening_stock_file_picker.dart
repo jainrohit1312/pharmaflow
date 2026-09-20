@@ -6,6 +6,8 @@
 /// asserted on.
 library;
 
+import 'dart:convert';
+
 import 'package:app/features/import/opening_stock/data/opening_stock_audit_csv.dart';
 import 'package:app/features/import/opening_stock/data/opening_stock_file_picker.dart';
 
@@ -50,13 +52,20 @@ class FakeOpeningStockFilePicker implements OpeningStockFilePicker {
 }
 
 /// A picked CSV named like the owner's export.
+///
+/// The size is the UTF-8 length of the content rather than its character count,
+/// because that is what the platform reports and what the screen shows.
 PickedOpeningStockFile pickedOpeningStockCsv({
   String fileName = 'PharmaFlow_Opening_Stock.csv',
   String? content,
-}) => PickedOpeningStockFile(
-  fileName: fileName,
-  content: content ?? openingStockCsv(twoRowCsvBody),
-);
+}) {
+  final text = content ?? openingStockCsv(twoRowCsvBody);
+  return PickedOpeningStockFile(
+    fileName: fileName,
+    content: text,
+    byteLength: utf8.encode(text).length,
+  );
+}
 
 /// An [OpeningStockCsvSaver] that keeps what it was asked to save.
 class FakeOpeningStockCsvSaver implements OpeningStockCsvSaver {

@@ -53,6 +53,12 @@ dependencies:
   image_picker: ^1.1.2
   permission_handler: ^11.3.1
   file_picker: ^13.1.0
+  # Not a spare copy of file_picker's web implementation: `file_picker` 13.0.0
+  # removed the ability to turn off its web picker's window-focus cancellation
+  # (the WebOptions it exports declares no fields), so the opening stock picker
+  # has to name the web options class itself. Reached from exactly one
+  # conditional import, so a non-web build never compiles it (D-073).
+  file_picker_web: ^4.0.0
 
 dev_dependencies:
   flutter_test:

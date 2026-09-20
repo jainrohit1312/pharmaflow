@@ -6,6 +6,11 @@
 /// rows cannot all be imported is refused as a whole, with the offending lines
 /// listed, so an import is never half-done.
 ///
+/// Six steps, and the owner is never between them: the file is *confirmed* -
+/// named, sized, and counted over its first rows - before anything is sent, the
+/// upload says which of its three steps it is on, and a failure names the step it
+/// happened in rather than returning to a screen that looks untouched.
+///
 /// Owner-only, and by construction rather than by hiding: the RPCs behind it
 /// refuse anyone else (see `preview_opening_stock`), and the way in is a Settings
 /// entry that only an owner is shown.
@@ -18,13 +23,14 @@ import 'package:app/core/widgets/app_back_button.dart';
 import 'package:app/core/widgets/app_button.dart';
 import 'package:app/core/widgets/app_scaffold.dart';
 import 'package:app/core/widgets/confirm_dialog.dart';
-import 'package:app/core/widgets/error_view.dart';
 import 'package:app/core/widgets/loading_view.dart';
 import 'package:app/core/widgets/section_card.dart';
 import 'package:app/core/widgets/status_badge.dart';
 import 'package:app/features/import/opening_stock/application/opening_stock_controller.dart';
 import 'package:app/features/import/opening_stock/data/opening_stock_models.dart';
 import 'package:app/features/import/opening_stock/presentation/widgets/import_error_row.dart';
+import 'package:app/features/import/opening_stock/presentation/widgets/import_failure_card.dart';
+import 'package:app/features/import/opening_stock/presentation/widgets/import_progress_card.dart';
 import 'package:app/features/import/opening_stock/presentation/widgets/import_summary_card.dart';
 import 'package:app/features/import/opening_stock/presentation/widgets/preview_table.dart';
 import 'package:flutter/material.dart';
@@ -50,14 +56,22 @@ class OpeningStockImportScreen extends ConsumerWidget {
 
     return AppScaffold(
       title: 'Opening stock import',
-      leading: const AppBackButton(location: Routes.settings),
+      // Disabled, not removed, while a step is in flight: leaving mid-upload
+      // would abandon work the screen cannot pick up again, and a button that
+      // comes back where it was reads better than one that vanishes.
+      leading: AppBackButton(location: Routes.settings, enabled: !state.isBusy),
       body: switch (state.stage) {
-        OpeningStockStage.idle => _Offer(onPick: controller.pickFile),
-        OpeningStockStage.reading => const LoadingView(
-          message: 'Reading the file…',
+        OpeningStockStage.idle => _Offer(
+          isPicking: state.isPicking,
+          onPick: controller.pickFile,
         ),
-        OpeningStockStage.previewing => const LoadingView(
-          message: 'Checking every row against the catalogue…',
+        OpeningStockStage.confirmed => _FileConfirmed(
+          state: state,
+          controller: controller,
+        ),
+        OpeningStockStage.processing => ImportProgressCard(
+          phase: state.phase,
+          fileName: state.fileName,
         ),
         OpeningStockStage.preview => _Preview(
           state: state,
@@ -70,11 +84,10 @@ class OpeningStockImportScreen extends ConsumerWidget {
           state: state,
           controller: controller,
         ),
-        OpeningStockStage.error => ErrorView(
-          message: describeError(
-            state.error ?? 'That import could not be read.',
-          ),
-          onRetry: controller.reset,
+        OpeningStockStage.error => ImportFailureCard(
+          failure: state.shownFailure,
+          onRetry: controller.retry,
+          onChooseAnother: controller.reset,
         ),
       },
     );
@@ -83,9 +96,16 @@ class OpeningStockImportScreen extends ConsumerWidget {
 
 /// The first thing shown: what this does and what file it wants.
 class _Offer extends StatelessWidget {
-  const _Offer({required this.onPick});
+  const _Offer({required this.onPick, required this.isPicking});
 
   final Future<void> Function() onPick;
+
+  /// Whether the dialog is open or a chosen file is being read.
+  ///
+  /// The button spins for it. The dialog is on top of the screen, so the spinner
+  /// is mostly about the moment after it closes - a file being read shows that
+  /// something is happening instead of leaving the offer looking untouched.
+  final bool isPicking;
 
   @override
   Widget build(BuildContext context) {
@@ -118,8 +138,75 @@ class _Offer extends StatelessWidget {
               AppButton.primary(
                 label: 'Choose the CSV file',
                 icon: Icons.upload_file,
+                isLoading: isPicking,
                 onPressed: onPick,
               ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// The chosen file, before anything is sent anywhere.
+class _FileConfirmed extends StatelessWidget {
+  const _FileConfirmed({required this.state, required this.controller});
+
+  final OpeningStockState state;
+  final OpeningStockController controller;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final bytes = state.fileSizeBytes;
+    final rows = state.estimatedRowCount;
+
+    return ListView(
+      padding: const EdgeInsets.all(16),
+      children: <Widget>[
+        SectionCard(
+          title: 'The file you chose',
+          trailing: const StatusBadge(
+            label: 'Not sent yet',
+            tone: BadgeTone.info,
+            icon: Icons.check_circle_outline,
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              Wrap(
+                spacing: 24,
+                runSpacing: 12,
+                children: <Widget>[
+                  _Figure(label: 'File', value: state.fileName ?? 'unknown'),
+                  _Figure(
+                    label: 'Size',
+                    value: bytes == null
+                        ? 'unknown'
+                        : Formatters.fileSize(bytes),
+                  ),
+                  _Figure(
+                    label: 'Rows detected',
+                    value: _rowCountLabel(rows, state.estimateTruncated),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 16),
+              Text(
+                'Nothing has been sent to the server yet. Uploading reads the '
+                'whole file and has every row classified; you will see what the '
+                'import would do before anything is written.',
+                style: theme.textTheme.bodyMedium,
+              ),
+              const SizedBox(height: 20),
+              AppButton.primary(
+                label: 'Upload & Preview',
+                icon: Icons.cloud_upload_outlined,
+                onPressed: controller.uploadAndPreview,
+              ),
+              const SizedBox(height: 8),
+              AppButton.text(label: 'Cancel', onPressed: controller.reset),
             ],
           ),
         ),
@@ -195,7 +282,7 @@ class _Preview extends StatelessWidget {
           ),
           const SizedBox(height: 4),
           AppButton.text(
-            label: 'Choose a different file',
+            label: 'Back to file selection',
             onPressed: controller.reset,
           ),
         ],
@@ -247,7 +334,7 @@ class _Success extends StatelessWidget {
     }
 
     final savedTo = state.savedTo;
-    final saveError = state.error;
+    final saveError = state.saveError;
 
     return ListView(
       padding: const EdgeInsets.all(16),
@@ -332,7 +419,7 @@ class _Success extends StatelessWidget {
   }
 }
 
-/// One labelled figure in the success card.
+/// One labelled figure in a card.
 class _Figure extends StatelessWidget {
   const _Figure({required this.label, required this.value});
 
@@ -358,4 +445,12 @@ class _Figure extends StatelessWidget {
       ],
     );
   }
+}
+
+/// The count as the first pass can honestly state it.
+String _rowCountLabel(int? rows, bool truncated) {
+  if (rows == null) {
+    return 'unknown';
+  }
+  return truncated ? 'at least $rows' : '$rows';
 }

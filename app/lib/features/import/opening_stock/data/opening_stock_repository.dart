@@ -11,6 +11,8 @@
 /// The tenant is never sent: the functions take it from `get_my_pharmacy_id()`.
 library;
 
+import 'dart:async';
+
 import 'package:app/core/errors/app_exception.dart';
 import 'package:app/data/datasources/postgrest_error_mapper.dart';
 import 'package:app/data/datasources/supabase_client.dart';
@@ -133,8 +135,20 @@ class OpeningStockRepository {
   }
 
   /// An unexpected throw, re-thrown as-is when the app already classified it.
-  AppException _unexpected(Object error, String message) =>
-      error is AppException
-      ? error
-      : ServerException(message: message, cause: error);
+  ///
+  /// A request that timed out is named as a network failure rather than as a
+  /// server one: nothing came back, so the server never said anything about the
+  /// file, and the screen reads the two differently - "the file could not be
+  /// sent" is advice about the connection, "the server could not check the file"
+  /// is advice about the file.
+  AppException _unexpected(Object error, String message) => switch (error) {
+    final AppException classified => classified,
+    final TimeoutException timedOut => NetworkException(
+      message:
+          'The server did not answer in time, so the file has not been checked. '
+          'Check the connection and try again.',
+      cause: timedOut,
+    ),
+    _ => ServerException(message: message, cause: error),
+  };
 }

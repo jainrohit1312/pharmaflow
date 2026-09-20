@@ -91,10 +91,18 @@ class OpeningStockCsvRow {
 /// owner can act on it.
 class OpeningStockCsvException implements Exception {
   /// Creates a parse failure with the sentence to show the user.
-  const OpeningStockCsvException(this.message);
+  const OpeningStockCsvException(this.message, {this.rowNumber});
 
   /// What is wrong with the file, in a sentence.
   final String message;
+
+  /// The data row at fault, when one row is at fault rather than the file.
+  ///
+  /// Carried apart from [message] as well as inside it, because the screen shows
+  /// the line as a label beside the sentence rather than reading a number back
+  /// out of prose. It is the same count [OpeningStockCsvRow.rowNumber] uses, so
+  /// a line named here is the line named in a refusal and in the audit trail.
+  final int? rowNumber;
 
   @override
   String toString() => message;
@@ -106,8 +114,68 @@ class OpeningStockCsvException implements Exception {
 /// the trailing newline every spreadsheet export ends with - so 314 rows read as
 /// 314 rows rather than 315, and an empty file is a failure rather than a
 /// one-row import of nothing.
-List<OpeningStockCsvRow> parseOpeningStockCsv(String content) {
-  final records = _readRecords(content);
+List<OpeningStockCsvRow> parseOpeningStockCsv(String content) =>
+    _parse(content);
+
+/// How many data rows [estimateOpeningStockRows] counts.
+///
+/// A round hundred because the number is read once, at a glance, to answer "is
+/// this the file I meant?" - and because a first pass that stops there costs a
+/// bounded slice of even a ten-thousand-row export.
+const int openingStockEstimateRecordLimit = 100;
+
+/// What a first, partial pass over a file counted.
+class OpeningStockEstimate {
+  /// Creates an estimate.
+  const OpeningStockEstimate({required this.rowCount, required this.truncated});
+
+  /// The data rows counted.
+  final int rowCount;
+
+  /// Whether the pass stopped at [openingStockEstimateRecordLimit] rows, so the
+  /// file holds *at least* [rowCount] rather than exactly it.
+  ///
+  /// The screen says "at least 100" for a truncated count rather than "100", and
+  /// the real number arrives with the server's preview, which classifies every
+  /// row in the file rather than the first slice of it.
+  final bool truncated;
+}
+
+/// Counts the data rows in the first records of [content].
+///
+/// This is the first pass the screen shows while the owner is deciding whether
+/// to upload at all: it counts at most [recordLimit] rows and reports whether
+/// there were more, so a large export is not read twice - the full read happens
+/// when the owner presses upload.
+///
+/// It validates what it reads exactly as the full parse does, because a wrong
+/// header or a five-column record is visible in the first records and telling
+/// the owner *before* they press upload is the whole point of reading them.
+OpeningStockEstimate estimateOpeningStockRows(
+  String content, {
+  int recordLimit = openingStockEstimateRecordLimit,
+}) {
+  // Two records more than it counts: the header, the rows being counted, and one
+  // more to know whether there is another. Without that last one a file of
+  // exactly `recordLimit` rows would count as "at least" that many, which reads
+  // as a bigger file than it is.
+  final rows = _parse(content, recordLimit: recordLimit + 2);
+  final overLimit = rows.length > recordLimit;
+
+  return OpeningStockEstimate(
+    rowCount: overLimit ? recordLimit : rows.length,
+    truncated: overLimit,
+  );
+}
+
+/// Parses [content], reading at most [recordLimit] records of it.
+///
+/// With a limit the reader stops on a record boundary and answers with what it
+/// read, so the caller holds whole records and never a half-scanned one. The
+/// unterminated-quote check is skipped when it stops early: the file's own
+/// ending was not read, so there is nothing to say about it.
+List<OpeningStockCsvRow> _parse(String content, {int? recordLimit}) {
+  final records = _readRecords(content, recordLimit: recordLimit);
 
   if (records.isEmpty) {
     throw const OpeningStockCsvException('That file is empty.');
@@ -132,6 +200,7 @@ List<OpeningStockCsvRow> parseOpeningStockCsv(String content) {
       throw OpeningStockCsvException(
         'Row $rowNumber has ${cells.length} columns, not '
         '${openingStockCsvHeader.length}.',
+        rowNumber: rowNumber,
       );
     }
 
@@ -174,7 +243,12 @@ bool _isExpectedHeader(List<String> header) {
 /// themselves are not part of the value. A carriage return outside quotes is
 /// ignored so a CRLF export reads the same as an LF one. Blank records are
 /// dropped.
-List<List<String>> _readRecords(String content) {
+///
+/// With [recordLimit] the reader answers as soon as it holds that many records
+/// rather than reading to the end, which is what lets [estimateOpeningStockRows]
+/// look at a large export without reading all of it. It stops on a record
+/// boundary, so every record it answers with is one the file actually ended.
+List<List<String>> _readRecords(String content, {int? recordLimit}) {
   final text = content.startsWith('\uFEFF') ? content.substring(1) : content;
 
   final records = <List<String>>[];
@@ -217,6 +291,9 @@ List<List<String>> _readRecords(String content) {
       cell.clear();
     } else if (character == '\n') {
       endRecord();
+      if (recordLimit != null && records.length >= recordLimit) {
+        return records;
+      }
     } else if (character != '\r') {
       // A carriage return is ignored outside quotes: the newline that follows a
       // CRLF line ending ends the record.

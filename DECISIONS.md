@@ -3162,3 +3162,79 @@ file and upload it again, and the second thing they do is upload it again by acc
 - **Re-running is free and safe:** the same content answers with the first job's id and writes
   nothing, which `supabase/tests/opening_stock_import.sql` asserts four ways (replayed, reordered,
   re-trimmed, renamed).
+
+---
+
+## D-073 — The Web Picker's Window-Focus Cancel Is Turned Off, Not Worked Around
+
+**Date:** 2026-09-20
+
+**Status:** Active (fixes the defect the owner's browser test found in Phase 6.5a's import)
+
+**Decision:** On the web the opening stock picker is called with
+`FilePickerWebOptions(cancelUploadOnWindowBlur: false)`, reached through one conditional import
+(`app/lib/features/import/opening_stock/data/opening_stock_file_picker.dart`); every other platform
+passes the base `WebOptions` and is unchanged. Four things are part of the decision:
+
+- **`file_picker_web` becomes a direct dependency, at the version already resolved** (`^4.0.0`).
+  Nothing in `pubspec.lock` changes except the entry's own `dependency:` marker, and D-007's four
+  protected pins (`riverpod_lint`, `custom_lint`, `freezed`, the SDK) are untouched.
+- **A `null` from the picker means "the user changed their mind" and nothing else.** The app may
+  not make a null carry a second meaning; anything that goes wrong reading a file raises a sentence
+  instead.
+- **The upload reports the two boundaries it can see, and marks the send done when the payload is
+  handed over** - not on a timer, and never as a percentage.
+- **The file is read twice, deliberately:** a first pass of a hundred rows when the file is chosen
+  (what the owner confirms), and the full read when they upload it (what the import is).
+
+**Rationale:** the browser test reported that choosing the CSV did nothing at all - the dialog
+opened, the file was selected, and the screen looked exactly as it had before. The four candidate
+causes were all checkable and all wrong, and the fifth was the actual one. `file_picker` 13.1.0's
+`pickFile()` has no `withData` parameter (13.0.0 removed it, and the web implementation reads the
+file's bytes by default), `PlatformFile.path` is never used, no catch is empty, and the controller's
+`ref.watch` does rebuild. What happens is that `FilePickerWeb`'s input session registers a `window`
+`focus` listener and, **500 ms after any focus event, completes a pick that is still in progress
+with `null`** - "the user changed their mind" - discarding a file the user did select. The app then
+mapped that null to "back to the offer", which is why nothing was on screen to say so.
+
+**Consequences:**
+
+- **The flag that turns it off only exists on the package's own subclass.** `file_picker` 13.0.0
+  removed `cancelUploadOnWindowBlur` from the public `pickFile()`/`pickFiles()` (upstream #2202,
+  #2203); the `WebOptions` the facade re-exports declares no fields at all
+  (`file_picker_platform_interface-4.0.0/lib/src/file_picker_options/web_options.dart`), and
+  `FilePickerWeb` falls back to its defaults for anything that is not its own class
+  (`file_picker_web-4.0.0/lib/src/file_picker_web.dart`). So the setting is unreachable without
+  naming `FilePickerWebOptions`, which is what the direct dependency and the conditional import are
+  for. If the facade ever re-exposes the flag, both can go.
+- **This is a known failure mode upstream, not a new one.** #1833 ("File picker cancels upload when
+  browser extensions intervene") is the same mechanism, #1834 added the flag for it, #1961/#1962
+  made it public, and #1202 is the same user-visible symptom from the same 500 ms. The default of
+  `true` is what `FilePickerWebOptions` ships with.
+- **The exact moment Chrome dispatches a `window` `focus` event on Windows was not observed
+  directly** - a native file dialog cannot be driven from a test, and Playwright's file-chooser
+  interception never opens one, so the focus transitions that matter do not happen under it. What
+  was checked is the code path, the upstream reports, and the compile. The fix does not depend on
+  resolving that question, because it removes the listener rather than racing it: with
+  `cancelUploadOnWindowBlur: false` no timer is armed, whenever the event arrives.
+- **The web-only file is compiled for the web only, and that was checked on the artifact.** With
+  `cancelUploadOnWindowBlur` removed from the facade, the failure mode of getting the conditional
+  import wrong is a web build that quietly hands the picker the base options - the bug still there,
+  every test still green. So it is not left to argument: `flutter build web --source-maps` puts
+  `opening_stock_picker_options_web.dart` in `build/web/main.dart.js.map` and leaves
+  `opening_stock_picker_options.dart` out of it, which is the web branch taken and the other
+  dropped. The other direction is asserted from the Dart VM by
+  `app/test/features/import/opening_stock/opening_stock_file_picker_test.dart`, so `flutter test`
+  does check that half.
+- **The runtime assertion of the same thing does not run in the gate.** 
+  `app/test/features/import/opening_stock/opening_stock_picker_options_web_test.dart` is marked
+  `@TestOn('browser')`, so `flutter test` does not collect it and needs
+  `flutter test --platform chrome <that file>`. On this machine that command reached the browser
+  compiler - an early run reported a Dart compile error from the browser side, and the error was in
+  the test rather than the toolchain - but a full run did not complete: two attempts sat at
+  `loading ...` for ten and fifteen minutes without finishing. Adding the line to the gate list is a
+  change to `HANDOFF_PROTOCOL.md` and the `Makefile`, and it is deliberately **not** made here.
+- **A picker that never answers now shows a spinner rather than looking untouched.** The offer's
+  button is busy while the dialog is open and while the chosen file is being read, and every step
+  that can fail lands on the failure card with the step named.
+

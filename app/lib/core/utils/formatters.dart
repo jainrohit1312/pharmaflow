@@ -38,6 +38,15 @@ abstract final class Formatters {
   static String? dateDdMmYyyyOrNull(DateTime? d) =>
       d == null ? null : _ddMmYyyy.format(d);
 
+  /// Formats a file's [bytes] as KB, e.g. `1,204.5 KB`.
+  ///
+  /// KB and not a byte count or a megabyte count: the file being measured is a
+  /// spreadsheet export of a catalogue, where the useful question is "is this the
+  /// file I meant?", and a four-figure number with one decimal answers it at a
+  /// glance in either direction.
+  static String fileSize(int bytes) =>
+      '${(bytes / 1024).toStringAsFixed(1)} KB';
+
   /// Formats [date] as the `YYYY-MM-DD` a Postgres `date` column expects.
   ///
   /// Used for query parameters and inserts, not for display: PostgREST compares a

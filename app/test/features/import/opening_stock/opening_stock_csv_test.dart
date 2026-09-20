@@ -267,4 +267,99 @@ void main() {
     expect(rows, hasLength(1));
     expect(rows.single.itemName, 'A');
   });
+
+  group('the first pass over a file', () {
+    test('counts a short file exactly', () {
+      final estimate = estimateOpeningStockRows(_csvOf(2));
+
+      expect(estimate.rowCount, 2);
+      expect(estimate.truncated, isFalse);
+    });
+
+    test('counts a file of exactly the limit without calling it "at least"', () {
+      final estimate = estimateOpeningStockRows(
+        _csvOf(openingStockEstimateRecordLimit),
+      );
+
+      // The boundary that makes the plain count usable: a file of a hundred rows
+      // is a hundred rows, not "at least 100".
+      expect(estimate.rowCount, 100);
+      expect(estimate.truncated, isFalse);
+    });
+
+    test('stops at the limit and says the file holds more', () {
+      final estimate = estimateOpeningStockRows(
+        _csvOf(openingStockEstimateRecordLimit + 1),
+      );
+
+      expect(estimate.rowCount, 100);
+      expect(estimate.truncated, isTrue);
+    });
+
+    test('reads its own slice and no more of a long file', () {
+      final broken = <String>[
+        _csvOf(200),
+        'Broken,BATCH,2030-03-31,1,1.00',
+      ].join('\n');
+
+      // The fault is past the slice, so the first pass never sees it...
+      expect(estimateOpeningStockRows(broken).rowCount, 100);
+      // ...and the full read, which does, refuses the file on it.
+      expect(
+        () => parseOpeningStockCsv(broken),
+        throwsA(
+          isA<OpeningStockCsvException>().having(
+            (error) => error.rowNumber,
+            'rowNumber',
+            201,
+          ),
+        ),
+      );
+    });
+
+    test('refuses a wrong header before anything is uploaded', () {
+      expect(
+        () => estimateOpeningStockRows('name,batch,qty\nA,B,1\n'),
+        throwsA(
+          isA<OpeningStockCsvException>().having(
+            (error) => error.message,
+            'message',
+            contains('expected columns'),
+          ),
+        ),
+      );
+    });
+
+    test('refuses an empty file', () {
+      expect(
+        () => estimateOpeningStockRows(''),
+        throwsA(isA<OpeningStockCsvException>()),
+      );
+    });
+
+    test('names the row it read when one of them has the wrong columns', () {
+      final broken = <String>[
+        header,
+        'A,B,,1,1.00,2.00',
+        'C,D,,1,1.00,2.00',
+        'E,D,,1',
+      ].join('\n');
+
+      expect(
+        () => estimateOpeningStockRows(broken),
+        throwsA(
+          isA<OpeningStockCsvException>()
+              .having((error) => error.rowNumber, 'rowNumber', 3)
+              .having((error) => error.message, 'message', contains('Row 3')),
+        ),
+      );
+    });
+  });
 }
+
+/// [count] ordinary data rows under the real header.
+String _csvOf(int count) => <String>[
+  header,
+  for (var index = 1; index <= count; index++)
+    'Item $index,BATCH$index,2030-03-31,1,1.00,2.00',
+].join('\n');
