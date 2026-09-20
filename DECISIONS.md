@@ -3548,3 +3548,164 @@ control the server does not enforce is a suggestion.
   count unchanged, a deposit that cannot over-apply, the owner/pharmacist/cashier role gate, the
   owner-only markup setting, and the column privileges themselves.
 
+---
+
+## D-077 — The Counter's List Is One Keyed Provider, and a Strip Tab Is That Key
+
+**Date:** 2026-09-21
+
+**Status:** Active (Phase 7a, C2 — built; commits `1ef2234`, `d8b6335`, `ed4e177`)
+
+**Decision:** The counter shows exactly one list at a time, and *which* list is a value:
+`PosListKey(term, recent, category)` keys **one** `posList` provider that answers four sources —
+
+- a **typed term**, which searches the catalogue and **wins over the strip**, because typing is an
+  explicit act rather than a filter on a browse;
+- **Recent**: the distinct products sold most recently, newest first;
+- **a category**, filtered on the product's own `category` column;
+- **All**: the catalogue from the top.
+
+The strip's tabs **are** those keys (`pos_strip.dart`: a tab is a `PosListKey` with no term), so
+what the strip offers and what the list reads cannot drift apart, and the search field, the strip and
+the keyboard handler all read the same key instead of re-deriving the choice in three places. A
+search offers **five** rows and a browse list **ten**.
+
+**Rationale:** the alternative is either one provider per source plus a three-way switch copied at
+every call site, or a tab type and a key type that are two descriptions of one choice. Both are the
+same decision written more than once, and this list is read by three callers that must agree — the
+field that types into it, the strip that chooses it, and the key handler that asks how many rows it
+has. **Freezed** supplies the key's `==`, which the provider family needs: the linter refuses a
+hand-written operator on a class it cannot see is immutable, `@immutable` would need a `meta` import
+this app does not take, and the repository's own convention is Freezed for value models.
+
+**Consequences:**
+
+- **The strip is built from data, not from a list written into the app** (the owner's F3):
+  `ProductsRepository.categories` reads the catalogue's distinct non-NULL `category` values. **Every
+  imported product has `category` NULL**, so the strip today is exactly Recent and All — which is the
+  honest state of this catalogue, and a tab appears the moment a product carries a category with no
+  code change.
+- **The distinct is computed client-side over a bounded scan** (`ProductsRepository.categoryScanLimit`,
+  1000 rows), because PostgREST has no `distinct` and this task may not add an RPC. A catalogue past
+  that bound could hide a category — recorded as an open item, not assumed away; the fix is a
+  server-side distinct in one migration when a catalogue is that large.
+- **Recent is the opening tab**, because re-selling what was just sold is the commonest action at a
+  counter. The default lives in one place (`PosStrip.recent`) so the screen's state and the chips
+  cannot disagree about it.
+- **Recent is two reads** (`SalesRepository.recentlySoldProductIds`): the last few sales **minus the
+  cancelled ones**, then their lines, distinct by product. `sales` carries no product, so the lines
+  are the only place one is named; the scan looks back further than the ten products it returns,
+  because the same product sold ten times is ten sales and one product. The rows are then fetched by
+  id and **put back into the sold order**, which is the one thing a product row cannot carry.
+- **The list is closed after every add** (and by Escape), and a strip tab reopens it. That is not
+  decoration: it is what makes a second Enter a no-op, and therefore half of what stops a
+  double-add.
+- **`posSearchResults(term)` is gone**, replaced by `posList(key)`; the provider's tests were
+  re-expressed onto the key rather than deleted.
+
+---
+
+## D-078 — The Counter's Keyboard Contract: Enter Adds and Never Checks Out
+
+**Date:** 2026-09-21
+
+**Status:** Active (Phase 7a, C2 — built)
+
+**Decision:** Five rules, every one of them asserted from the Dart VM (so `flutter test` runs them,
+unlike a browser-only file), because a counter whose operator never leaves the keyboard is only safe
+if the keys mean one thing each:
+
+- **Enter never checks out.** The sale is written by the button and by nothing else, so a keystroke
+  at the counter cannot take money.
+- **The arrows move the highlight, Enter adds the highlighted row, and Escape closes the list
+  without touching the basket.** Escape steps back out of the search; it never clears a basket a
+  cashier is mid-way through.
+- **Tab walks the quantities.** Every line's quantity sorts **before every line's details** in
+  explicit `FocusTraversalOrder`s under a `FocusTraversalGroup` with an `OrderedTraversalPolicy`, so
+  Tab moves from one line's quantity to the next line's quantity rather than into that line's rate,
+  discount and slab — the counter's mental model, not the widget tree's.
+- **Delete removes the line the caret is on** — and only when the caret is on the line rather than in
+  a field of it, because a text field consumes Delete as an edit before the line is ever asked. That
+  is what makes one key mean "change this number" in a field and "take this line out" on the line.
+- **A second Enter or tap is not a second add or submission.** Adding clears the term and closes the
+  list, so a rapid second Enter finds nothing to add; and `_checkout` reads the **live** controller
+  state, so a second tap arriving before the disabled-button rebuild is the same submission rather
+  than a second sale.
+
+The counter's icon controls carry an explicit `BoxConstraints(minWidth: 44, minHeight: 44)`, because
+Material's own `IconButton` default is 40 — a mouse's number, not a thumb's — and the whole screen is
+laid out at 360×800.
+
+**Rationale:** the two "cannot" rules are the ones that cost money if they are wrong — a doubled line
+and a doubled bill — and both are the kind of defect that only appears under a fast double press,
+which is exactly what a counter does. The rest are what makes the keyboard the till's primary
+control rather than a second-class path beside the mouse.
+
+**Consequences:**
+
+- **The details are on demand, and that is what makes the Tab order meaningful.** A line shows the
+  name, the batch and expiry, the quantity and the total; the rate, discount and slab are one tap
+  away. With them always on screen, Tab would land in them.
+- **The order is the contract, so it is asserted, not assumed**: the Tab test opens the first line's
+  details on purpose, so a Tab that followed the widget tree would fail it.
+- **A test that proves the double-submit guard needs a holdable write.** With an instant fake the
+  first submission is already answered before the second tap lands, so the race does not exist and
+  the test would pass without the guard; the sales fake gained a `checkoutGate` for exactly that
+  reason.
+- **Focus is restored after a selection, after the batch chooser's dialog, and after a refusal**, so
+  the keyboard contract survives an error as well as a selection.
+- **The batch chooser is still reachable** — the row's own affordance opens it — which is what makes
+  "no chooser in the common case" a claim about the default rather than the removal of a feature.
+
+---
+
+## D-079 — A Receipt Is One Read, and `sale_document` Returns the Patient's Code
+
+**Date:** 2026-09-21
+
+**Status:** Active, **RECORDED — the migration is approved and not yet written** (Phase 7a, C3)
+
+**Decision:** C3's receipt is served by **one** additive migration, `00039`, adding
+`public.sale_document(p_sale_id uuid) returns jsonb` — the sale header, its lines **with each line's
+`batch_no`, `expiry_date` and `is_unknown_batch`**, and the **patient's `patient_code`**.
+`checkout_sale` is not touched. The owner approved the function's body **verbatim** on 2026-09-20.
+
+- **Why a new function rather than a wider one.** `checkout_sale(p_payload jsonb) returns public.sales`
+  (00036) is the sale's *write* path and returns a **composite** row, which cannot be extended in
+  place. The lines live in `sale_items`, which records `batch_id` **alone** — so the per-line batch
+  number and expiry a Drug-Rules receipt has to print are not on the sale at all. Two options were
+  put to the owner and this is the chosen one: an additive read, rather than a PostgREST read-back
+  the client would have to stitch together.
+- **The owner's one open question was where the patient's code comes from**, since `sales` has no such
+  column. **It is joined**, on `sales.customer_id`, so a receipt is **one round trip** and prints the
+  code the row held, rather than a second read that could race the master or fail on its own. For a
+  counter or an IPD sale that customer *is* the patient (D-074); for a **package** sale it is the
+  hospital's account, whose patient code is legitimately absent — the patient on a package bill is the
+  sale's own name-and-mobile snapshot and has no patient row of their own.
+- **RLS still enforces the tenant.** The function is `security invoker`, so the caller's own policies
+  apply on top of its `pharmacy_id = get_my_pharmacy_id()` guard: guessing another pharmacy's sale id
+  answers nothing rather than someone else's document. The grant goes to `authenticated` and is
+  revoked from `anon, public`, the idiom migration 00018 settled.
+- **A pre-7a sale prints no code rather than a wrong one.** `customers.patient_code` is NULL for every
+  row registered before Phase 7a until `save_patient()` first touches it (D-074), and the receipt must
+  print `—` there, exactly as an unknown batch prints `—` rather than `OPENING-…`.
+
+**Rationale:** a printed bill is a document, and the values on it have to be the server's, not the
+screen's — the receipt cannot be printed from client-side cart state, and it cannot be assembled from
+two reads that could disagree. One function, one round trip, one tenant guard.
+
+**Consequences:**
+
+- **Unwritten at this entry.** The body is the owner's, verbatim; the single change is the added
+  `patient_code` key, which the owner's own instruction asked the chat to decide. It is to be written
+  as the **next migration in order**, verified locally with the project's throwaway-pgvector harness,
+  and **not pushed** without asking.
+- **`checkout_sale` stays the only write path** and keeps its signature, so the compatibility seam
+  (D-075) is untouched by this.
+- **The receipt's arithmetic is still `SaleTotals`' and the stored row's**, not recomputed: the
+  function returns the row and its lines; it computes no money.
+- The carrier for the per-line expiry on the client is `sale_items` joined to `product_batches` **via
+  this function** — the client never joins the two tables itself, so the batch a line came out of
+  cannot be mis-joined in Dart.
+
+

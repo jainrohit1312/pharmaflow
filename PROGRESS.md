@@ -19,19 +19,26 @@
   reads as `counter` with no invented patient, and no customer has been assigned a code.
   **The hosted SQL suite: 14 of 15 files green; 7 assertions fail in three Phase 5 files, all
   proven pre-existing** — see N-18.
-- **Flutter implemented: PARTLY — C1a and C1b are done (2026-09-20, three commits).** The sale
-  money layer now computes on the server's tax-inclusive basis (D-075) and the models carry the four
-  sale types, the patient identity and the nullable batch expiry; the counter's write is
-  patient-first and typed, with an idempotency key that survives a retry and dies on an edit; and
-  the screens exist — a patient lookup over the recent list and a code/mobile/name search, a
+- **Flutter implemented: YES for C1 and C2 — C3 is what remains (2026-09-20, six commits).** The
+  sale money layer now computes on the server's tax-inclusive basis (D-075) and the models carry the
+  four sale types, the patient identity and the nullable batch expiry; the counter's write is
+  patient-first and typed, with an idempotency key that survives a retry and dies on an edit; the
+  screens exist — a patient lookup over the recent list and a code/mobile/name search, a
   registration sheet with the duplicate-mobile question, the four-type selector, and the prescriber,
-  admission and transfer fields each type asks for. Measured: **`flutter test` → 898 passing, 0
-  failures** (from 758), at commit `fe8bd3a`. **Not built: the POS UX refactor (C2)** — the
-  auto-add search dropdown, the compact cart lines, the keyboard contract (Enter/Tab/Esc) and the
-  360×800 Android layout — **and C3**, the payment confirmation, the 80mm receipt with batch and
-  expiry (**blocked on migration 00039**, `sale_document`, whose signature the owner approved) and
-  the balance views. The receipt also needs the patient's **code**, which is not a column on
-  `sales`: `sale_document` has to return it or the client has to read the customer row.
+  admission and transfer fields each type asks for; and **the POS UX refactor (C2) is done** — an
+  auto-focused search whose dropdown shows the batch FEFO would take (its number, expiry as `MM/yy`,
+  stock and MRP) so Enter adds a line **without a chooser**, a **Recent / catalogue-categories /
+  All** strip built from data (F3), compact cart lines with the quantity and the total always on
+  screen and the rate/discount/slab on demand, and the keyboard contract: Enter adds and never
+  checks out, Tab walks the quantities line to line, Delete removes the line the caret is on,
+  Escape closes the list without touching the basket, and a rapid second Enter or tap cannot
+  double-add or double-submit. Measured: **`flutter test` → 926 passing, 0 failures** (from 758 at
+  the start of Phase 7a's Flutter work), at commit `ed4e177`. **Not built: C3** — the payment
+  confirmation, the 80mm receipt with batch and expiry (**blocked on migration 00039**,
+  `sale_document`, whose body the owner approved verbatim and which is **still unwritten**) and the
+  balance views. The receipt also needs the patient's **code**, which is not a column on `sales`:
+  the decision recorded for C3 is that `sale_document` returns it from a join on
+  `sales.customer_id`, so a receipt is one round trip (see `context/chat3q-opening-prompt.md`).
 
 **Hosted data, observed while verifying (2026-09-20):** ~315 products and ~314 batches, stock value
 at cost ₹6,04,704.48, one sale in the table, no hospitals, doctors, admissions or allocations yet,
@@ -45,20 +52,21 @@ said 314 rows, 61,360 units, ₹6,04,832.90 at cost) — so the Phase 6.5a parag
 tests is never collected — see the browser-only-tests note). This file has carried **729** since
 chunk 3, so that figure is stale; the authoritative number is whatever `flutter test` prints, which
 this slice did not re-run because it changed **no Dart file** (SQL, docs and one SQL test only).
-**Re-measured 2026-09-20 after Phase 7a's Flutter slices: 758 at the start, 898 now, 0 failures** —
-the count is the gate's own output each time, not a running total.
+**Re-measured 2026-09-20 after Phase 7a's Flutter slices: 758 at the start, 898 after C1b, 926
+after C2, 0 failures** — the count is the gate's own output each time, not a running total.
 
 **Last Updated:** 2026-09-20
-**Current Phase:** **PHASE 7a — the Flutter side is two thirds done.** The durable layer is on hosted
-(above); the app's C1a (money basis, models, the nullable-expiry fix) and C1b (the patient-first
-write and its screens) are committed locally as `925630c`, `c8fa615` and `fe8bd3a`, each with its
-own full gate run. **Next: C2, the POS UX refactor** (the auto-add search dropdown, compact cart
-lines, the Enter/Tab/Esc contract, the category strip, 360×800), then **C3** (payment confirmation,
-the 80mm receipt — which needs migration `00039` `sale_document`, approved but unwritten — and the
-balance views). See `context/chat3o-summary.md` and `context/chat3p-opening-prompt.md`.
+**Current Phase:** **PHASE 7a — C1 and C2 are done; C3 is what remains.** The durable layer is on
+hosted (above); the app's C1a (money basis, models, the nullable-expiry fix), C1b (the patient-first
+write and its screens) and **C2 (the POS UX refactor: the search dropdown, the compact cart lines,
+the strip and the keyboard contract)** are committed locally as `925630c`, `c8fa615`, `fe8bd3a`,
+`1ef2234`, `d8b6335` and `ed4e177`, each with its own full gate run, **none pushed**. **Next: C3** —
+the payment confirmation, the 80mm receipt (which needs migration `00039` `sale_document`, approved
+but **unwritten**, and its per-line batch/expiry come from it) and the balance views. See
+`context/chat3p-summary.md` and `context/chat3q-opening-prompt.md`.
 **Before that:** **PHASE 6.5a DONE** (2026-09-20 — the opening stock import, D-065/D-066; see
 below). **PHASE 6 IN PROGRESS** (chunk 3 of n, done; `context/chat3n-summary.md`). Phase 5 is complete. Phase 6 chunk 1 closed everything needing no account (W-1, A-1, I-1, N-5, T-3/T-4/T-5/T-6, the printer and bill-screen coverage, R-1, `docs/`); chunk 2 shipped the **Android APK** and settled **N-7**/**N-8**; **chunk 3 wrote the Vercel deploy** (`app/vercel.json` + `docs/DEPLOY_VERCEL.md` — configured and **not run**) and **exposed the re-read** the N-8 fix made safe (D-062), and then **implemented I-3** in a commit of its own (D-064) once it turned out the chunk-2 message had claimed it against no diff at all. Next: **import the repo into Vercel and run the first deploy** (the account exists; the project does not), then the credentials behind D-046/D-052/N-1, N-9's re-measurement, and the manual's screenshot pass (`context/chat3o-opening-prompt.md`)
-**Overall Status:** Phases 0-5 done and gated; Phase 6 chunks 1-3 done and gated; **Phase 7a's durable layer is on hosted and its Flutter side is two thirds built and gated** — Phase 5 closed with its database substrate, **five deployed Edge Functions**, a bill that reads and saves end to end, a matcher that suggests and learns, a backfilled catalogue with a measured similarity floor, its alert sources, the notification function and inbox, and a chatbot a person can type into. Phase 6 added one migration since Phase 5 closed (the alias key, N-5), the Android sideload APK (D-061), a Vercel build config for the web app, the bill re-read with its three-read limit (D-062), and the purchase picker's three-way search (I-3, D-064) — **898 Flutter tests, 181 Deno tests**
+**Overall Status:** Phases 0-5 done and gated; Phase 6 chunks 1-3 done and gated; **Phase 7a's durable layer is on hosted and its Flutter side's C1 and C2 are built and gated** — Phase 5 closed with its database substrate, **five deployed Edge Functions**, a bill that reads and saves end to end, a matcher that suggests and learns, a backfilled catalogue with a measured similarity floor, its alert sources, the notification function and inbox, and a chatbot a person can type into. Phase 6 added one migration since Phase 5 closed (the alias key, N-5), the Android sideload APK (D-061), a Vercel build config for the web app, the bill re-read with its three-read limit (D-062), and the purchase picker's three-way search (I-3, D-064) — **926 Flutter tests, 181 Deno tests**
 
 **Phase 6.5a — the opening stock import — is DONE (2026-09-20).** The one-time Marg
 migration the owner has been preparing: 314 rows, one product and one batch each, written by
@@ -89,7 +97,7 @@ imported**: the owner runs it from `/settings/import/opening-stock`.
 | 6.5a | Opening stock import (the Marg import) | COMPLETE | 2026-09-20 | 2026-09-20 |
 | 6.5b | The receiver app | not started | - | - |
 | 6.5c | The approval RBAC (with an `action_type` enum and a `payload` jsonb) | not started | - | - |
-| 7a | The four sale types + patient/admission identity (patient-first billing) | **durable layer ON HOSTED; Flutter side C1a + C1b done locally** (`925630c`, `c8fa615`, `fe8bd3a`); C2 and C3 remain | 2026-09-20 | - |
+| 7a | The four sale types + patient/admission identity (patient-first billing) | **durable layer ON HOSTED; Flutter C1 and C2 done locally** (`925630c`, `c8fa615`, `fe8bd3a`, `1ef2234`, `d8b6335`, `ed4e177`); C3 remains | 2026-09-20 | - |
 
 ---
 
@@ -271,7 +279,18 @@ design time.
   details → medicines → payment, with a patient lookup over the recent list and a
   code/mobile/name search, a registration sheet whose duplicate-mobile question never
   deduplicates silently, and the prescriber/admission/transfer fields each type asks for.
-  **Not yet: C2's keyboard-first POS UX and C3's receipt and balances.**
+- **The counter's POS UX (Phase 7a's C2)**: `features/sales/application/pos_search.dart` (one
+  `posList` provider keyed by a Freezed `PosListKey`, answering the search, Recent, a category or
+  All, each hit carrying the batches Enter would dispense from), `presentation/widgets/
+  pos_search_results.dart` (the row: batch, expiry as `MM/yy`, stock, MRP, and the affordance that
+  still opens the batch chooser), `pos_cart_line.dart` (name, batch and expiry, quantity and line
+  total always on screen; rate/discount/GST on demand; explicit focus orders so **Tab walks the
+  quantities** and **Delete removes the line the caret is on**), `pos_strip.dart` (Recent, the
+  catalogue's own distinct categories, All - a tab *is* a `PosListKey`), and the supporting reads
+  `SalesRepository.recentlySoldProductIds` and `ProductsRepository.categories`/`batchesForProducts`.
+  The keyboard contract is asserted from the VM: Enter adds and never checks out, Escape closes
+  without clearing, and a held-open write proves a second tap cannot double-submit.
+  **Not yet: C3's receipt and balances.**
 - The Phase 5 surfaces: the bill reader (`features/purchase_ocr/`, which now also
   suggests catalogue products per line, records what the human confirmed, survives a
   re-read, and offers one on demand — three reads per bill, D-062), the verify-and-save
