@@ -8,15 +8,19 @@ library;
 import 'package:app/core/router/routes.dart';
 import 'package:app/core/utils/formatters.dart';
 import 'package:app/core/widgets/expiry_badge.dart';
+import 'package:app/data/models/admission.dart';
 import 'package:app/data/models/batch_status.dart';
 import 'package:app/data/models/customer.dart';
+import 'package:app/data/models/doctor.dart';
 import 'package:app/data/models/product.dart';
 import 'package:app/data/models/sale.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import '../../../support/fake_customers_repository.dart';
+import '../../../support/fake_doctors_repository.dart';
 import '../../../support/fake_inventory_repository.dart';
+import '../../../support/fake_patients_repository.dart';
 import '../../../support/fake_products_repository.dart';
 import '../../../support/fake_sales_repository.dart';
 import '../../../support/sales_test_app.dart';
@@ -53,14 +57,11 @@ Customer _patient() => buildCustomer(
   phone: '9876543210',
 );
 
-/// Chooses [_patient] from the counter's patient picker.
+/// Chooses [_patient] from the counter's patient step.
 ///
-/// Until the patient step lands the picker is the dropdown under Payment, and
-/// choosing from it is what pins the row - the counter cannot take payment for a
-/// bill that names nobody. The dropdown is the tap target; its hint text is not one.
+/// The step opens on the recent patients, so the patient is one tap away - which is
+/// the point of showing them rather than an empty box.
 Future<void> _choosePatient(WidgetTester tester) async {
-  await tester.tap(find.byType(DropdownButtonFormField<String>));
-  await tester.pumpAndSettle();
   await tester.tap(find.text('ZZTEST patient').last);
   await tester.pumpAndSettle();
 }
@@ -315,5 +316,165 @@ void main() {
       reason:
           'the sentence names what is missing rather than only that something is',
     );
+  });
+
+  group('the sale type', () {
+    testWidgets('offers all four, and says what each one means', (
+      tester,
+    ) async {
+      await pumpSalesApp(
+        tester,
+        repository: FakeSalesRepository(),
+        initialLocation: Routes.pos,
+      );
+
+      for (final label in <String>['Counter', 'IPD', 'Package', 'Transfer']) {
+        expect(find.text(label), findsOneWidget, reason: label);
+      }
+      expect(find.textContaining('the patient is required'), findsOneWidget);
+    });
+
+    testWidgets('an IPD sale asks for the admission and the treating doctor', (
+      tester,
+    ) async {
+      final patients = FakePatientsRepository(
+        patients: <Customer>[_patient()],
+        admissions: <Admission>[buildAdmission(treatingDoctorName: 'Dr Rao')],
+      );
+      await pumpSalesApp(
+        tester,
+        repository: FakeSalesRepository(),
+        patients: patients,
+        initialLocation: Routes.pos,
+      );
+
+      await tester.tap(find.text('IPD'));
+      await tester.pumpAndSettle();
+      await _choosePatient(tester);
+
+      expect(find.text('Hospital admission number'), findsOneWidget);
+      expect(
+        find.textContaining('IPD-7'),
+        findsWidgets,
+        reason:
+            "the patient's own episodes are offered, not just an empty field",
+      );
+
+      // Choosing the episode is what fills the hospital's reference in.
+      await tester.tap(find.textContaining('IPD-7').first);
+      await tester.pumpAndSettle();
+      expect(find.text('Billing admission IPD-7'), findsOneWidget);
+    });
+
+    testWidgets('a transfer asks where the stock is going, and why', (
+      tester,
+    ) async {
+      await pumpSalesApp(
+        tester,
+        repository: FakeSalesRepository(),
+        initialLocation: Routes.pos,
+      );
+
+      await tester.tap(find.text('Transfer'));
+      await tester.pumpAndSettle();
+
+      for (final label in <String>['From', 'To', 'Reason']) {
+        expect(find.text(label), findsOneWidget, reason: label);
+      }
+      expect(
+        find.text('Patient'),
+        findsNothing,
+        reason:
+            'a transfer names no patient, so the step goes away with the type',
+      );
+      expect(find.textContaining('no payment and no GST'), findsOneWidget);
+    });
+
+    testWidgets('a package sale asks for the account and the patient', (
+      tester,
+    ) async {
+      await pumpSalesApp(
+        tester,
+        repository: FakeSalesRepository(),
+        customers: <Customer>[
+          buildCustomer(
+            'Rohit Kidney & Stone Hospital (Account)',
+            id: 'account-1',
+          ),
+        ],
+        initialLocation: Routes.pos,
+      );
+
+      await tester.tap(find.text('Package'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Hospital account'), findsOneWidget);
+      expect(find.text('Package / case reference'), findsOneWidget);
+      expect(
+        find.text('Prescriber'),
+        findsNothing,
+        reason: 'the hospital is the buyer, so there is no prescriber to name',
+      );
+    });
+  });
+
+  group('the prescriber', () {
+    testWidgets('records a name the master does not have', (tester) async {
+      final sales = FakeSalesRepository();
+      final products = FakeProductsRepository(products: const <Product>[])
+        ..batchQuantities['batch-1'] = 10;
+      await pumpSalesApp(
+        tester,
+        repository: sales,
+        products: products,
+        searchResults: <Product>[buildProduct('Dolo 650')],
+        batches: <BatchStatus>[_batch()],
+        patients: FakePatientsRepository(patients: <Customer>[_patient()]),
+        initialLocation: Routes.pos,
+      );
+      await _addLine(tester);
+      await _choosePatient(tester);
+
+      await _type(tester, 'Prescriber', 'Dr Nobody');
+      await tester.tap(find.widgetWithText(ElevatedButton, 'Take payment'));
+      await tester.pumpAndSettle();
+
+      expect(sales.checkouts.single.doctorName, 'Dr Nobody');
+      expect(
+        sales.checkouts.single.doctorId,
+        isNull,
+        reason: 'a name the master has never heard of is still the bill\u2019s',
+      );
+    });
+
+    testWidgets('records the master row when one is tapped', (tester) async {
+      final sales = FakeSalesRepository();
+      final products = FakeProductsRepository(products: const <Product>[])
+        ..batchQuantities['batch-1'] = 10;
+      await pumpSalesApp(
+        tester,
+        repository: sales,
+        products: products,
+        searchResults: <Product>[buildProduct('Dolo 650')],
+        batches: <BatchStatus>[_batch()],
+        patients: FakePatientsRepository(patients: <Customer>[_patient()]),
+        doctors: FakeDoctorsRepository(
+          doctors: <Doctor>[
+            buildDoctor('Dr Rao', specialization: 'Nephrology'),
+          ],
+        ),
+        initialLocation: Routes.pos,
+      );
+      await _addLine(tester);
+      await _choosePatient(tester);
+
+      await tester.tap(find.text('Dr Rao · Nephrology'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(ElevatedButton, 'Take payment'));
+      await tester.pumpAndSettle();
+
+      expect(sales.checkouts.single.doctorId, 'id-Dr Rao');
+      expect(sales.checkouts.single.doctorName, 'Dr Rao');
+    });
   });
 }

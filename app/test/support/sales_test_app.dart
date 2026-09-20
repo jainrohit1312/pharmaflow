@@ -9,11 +9,15 @@ import 'package:app/data/models/customer.dart';
 import 'package:app/data/models/product.dart';
 import 'package:app/features/auth/application/pharmacy_scope.dart';
 import 'package:app/features/customers/application/customer_options.dart';
+import 'package:app/features/customers/application/patient_lookup.dart';
+import 'package:app/features/customers/data/patients_repository.dart';
 import 'package:app/features/products/application/product_search.dart';
 import 'package:app/features/products/data/products_repository.dart';
 import 'package:app/features/purchase/data/purchase_totals.dart';
+import 'package:app/features/sales/application/doctor_options.dart';
 import 'package:app/features/sales/application/sale_tax_split.dart';
 import 'package:app/features/sales/application/sellable_batches_controller.dart';
+import 'package:app/features/sales/data/doctors_repository.dart';
 import 'package:app/features/sales/data/sales_repository.dart';
 import 'package:app/features/sales/presentation/pos_screen.dart';
 import 'package:app/features/sales/presentation/sales_screen.dart';
@@ -22,6 +26,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 
+import 'fake_doctors_repository.dart';
+import 'fake_patients_repository.dart';
 import 'fake_products_repository.dart';
 import 'fake_sales_repository.dart';
 
@@ -59,14 +65,17 @@ GoRouter salesTestRouter({String initialLocation = Routes.sales}) => GoRouter(
 /// children inside its viewport, so an assertion about something below the fold
 /// would find nothing at all rather than something merely off-screen.
 ///
-/// The counter reads four things that belong to other features - the product
-/// search, the sellable batches of a product, the customers a bill may be put on,
-/// and the tax split - so all four are stubbed here rather than left to reach a
-/// real repository.
+/// The counter reads things that belong to other features - the product search, the
+/// sellable batches of a product, the patients and the accounts a bill may be put on,
+/// the prescribers, and the tax split - so all of them are stubbed here rather than
+/// left to reach a real repository. The patient and prescriber stubs answer through
+/// their fakes, so a test drives the same filtering a real read would.
 Future<GoRouter> pumpSalesApp(
   WidgetTester tester, {
   required FakeSalesRepository repository,
   FakeProductsRepository? products,
+  FakePatientsRepository? patients,
+  FakeDoctorsRepository? doctors,
   List<Product> searchResults = const <Product>[],
   List<BatchStatus> batches = const <BatchStatus>[],
   List<Customer> customers = const <Customer>[],
@@ -81,6 +90,10 @@ Future<GoRouter> pumpSalesApp(
   final router = salesTestRouter(initialLocation: initialLocation);
   addTearDown(router.dispose);
 
+  final patientRepository =
+      patients ?? FakePatientsRepository(patients: customers);
+  final doctorRepository = doctors ?? FakeDoctorsRepository();
+
   await tester.pumpWidget(
     ProviderScope(
       // The list is left untyped on purpose: `Override` is declared in
@@ -92,6 +105,21 @@ Future<GoRouter> pumpSalesApp(
         productSearchProvider.overrideWith((ref, term) async => searchResults),
         sellableBatchesProvider.overrideWith((ref, productId) async => batches),
         customerOptionsProvider.overrideWith((ref) async => customers),
+        patientsRepositoryProvider.overrideWithValue(patientRepository),
+        doctorsRepositoryProvider.overrideWithValue(doctorRepository),
+        patientSearchProvider.overrideWith(
+          (ref, term) => patientRepository.search(term: term),
+        ),
+        recentPatientsProvider.overrideWith(
+          (ref) => patientRepository.recent(pharmacyId: 'ph-1'),
+        ),
+        patientAdmissionsProvider.overrideWith(
+          (ref, patientId) =>
+              patientRepository.admissionsFor(patientId: patientId),
+        ),
+        doctorOptionsProvider.overrideWith(
+          (ref) => doctorRepository.list(pharmacyId: 'ph-1'),
+        ),
         saleTaxSplitProvider.overrideWith(
           (ref, placeOfSupply) => TaxSplit.intraState,
         ),

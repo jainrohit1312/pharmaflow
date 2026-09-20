@@ -8,23 +8,23 @@ import 'package:app/core/utils/formatters.dart';
 import 'package:app/core/utils/validators.dart';
 import 'package:app/core/widgets/app_back_button.dart';
 import 'package:app/core/widgets/app_button.dart';
-import 'package:app/core/widgets/app_dropdown_field.dart';
 import 'package:app/core/widgets/app_scaffold.dart';
 import 'package:app/core/widgets/app_search_field.dart';
 import 'package:app/core/widgets/app_text_field.dart';
 import 'package:app/core/widgets/section_card.dart';
-import 'package:app/data/models/customer.dart';
 import 'package:app/data/models/product.dart';
 import 'package:app/data/models/sale.dart';
 import 'package:app/data/models/sale_cart_line.dart';
-import 'package:app/features/customers/application/customer_options.dart';
 import 'package:app/features/products/application/product_search.dart';
 import 'package:app/features/purchase/data/purchase_totals.dart';
 import 'package:app/features/sales/application/pos_controller.dart';
 import 'package:app/features/sales/application/sale_checkout_controller.dart';
 import 'package:app/features/sales/application/sale_tax_split.dart';
 import 'package:app/features/sales/data/sale_totals.dart';
+import 'package:app/features/sales/presentation/patients/patient_step.dart';
 import 'package:app/features/sales/presentation/widgets/batch_chooser_sheet.dart';
+import 'package:app/features/sales/presentation/widgets/sale_identity_fields.dart';
+import 'package:app/features/sales/presentation/widgets/sale_type_selector.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -75,10 +75,6 @@ class _PosScreenState extends ConsumerState<PosScreen> {
     final cart = ref.watch(posControllerProvider);
     final pos = ref.read(posControllerProvider.notifier);
     final isSaving = ref.watch(saleCheckoutControllerProvider).isLoading;
-    // A failed customer read costs the picker its options, not the counter its
-    // basket, so it is read leniently.
-    final customers =
-        ref.watch(customerOptionsProvider).value ?? const <Customer>[];
     final split =
         ref.watch(saleTaxSplitProvider(cart.placeOfSupply)).value ??
         TaxSplit.intraState;
@@ -113,6 +109,39 @@ class _PosScreenState extends ConsumerState<PosScreen> {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: <Widget>[
+          // The order of the screen is the order of the transaction: who the bill is
+          // for, what kind of sale it is, the details that type asks for, then the
+          // medicines and the money. The first three are not decoration - the server
+          // refuses a sale whose identity and type are missing (D-067, D-074).
+          //
+          // A transfer names nobody, so the patient step goes away with the type
+          // rather than asking for something the payload will not carry.
+          if (cart.saleType != SaleType.transfer) ...<Widget>[
+            SectionCard(
+              title: 'Patient',
+              child: PatientStep(cart: cart),
+            ),
+            const SizedBox(height: 16),
+          ],
+          SectionCard(
+            title: 'Sale type',
+            child: SaleTypeSelector(
+              value: cart.saleType,
+              // A cost-priced basis cannot be chosen under a rung-up basket, which
+              // `setSaleType` refuses; the control says the same thing by going
+              // quiet, so a tap cannot produce an error nobody can act on.
+              enabled: cart.isEmpty || cart.saleType.isPharmacySale,
+              onChanged: pos.setSaleType,
+            ),
+          ),
+          const SizedBox(height: 16),
+          SectionCard(
+            title: cart.saleType == SaleType.transfer
+                ? 'Transfer'
+                : 'Prescription & hospital',
+            child: SaleIdentityFields(cart: cart),
+          ),
+          const SizedBox(height: 16),
           AppSearchField(
             hint: 'Search by name, generic or barcode',
             onChanged: _search,
@@ -177,19 +206,6 @@ class _PosScreenState extends ConsumerState<PosScreen> {
               title: 'Payment',
               child: Column(
                 children: <Widget>[
-                  AppDropdownField<String>(
-                    label: 'Patient',
-                    hint: 'Choose one - a pharmacy sale needs a patient',
-                    prefixIcon: Icons.person_outline,
-                    value: cart.customerId,
-                    values: _customerIds(customers, cart.customerId),
-                    labelOf: (id) => _customerName(customers, id),
-                    allowNone: true,
-                    onChanged: (id) => pos.setPatient(
-                      id == null ? null : _customerOf(customers, id),
-                    ),
-                  ),
-                  const SizedBox(height: 12),
                   Wrap(
                     spacing: 8,
                     runSpacing: 8,
@@ -610,44 +626,6 @@ class _AmountRow extends StatelessWidget {
       ),
     );
   }
-}
-
-/// The ids a customer dropdown may offer: every customer, plus the one already
-/// chosen even when it is not in the page that loaded.
-List<String> _customerIds(List<Customer> customers, String? selected) {
-  final ids = <String>[
-    for (final customer in customers)
-      if (customer.isActive || customer.id == selected) customer.id,
-  ];
-  if (selected != null && !ids.contains(selected)) {
-    ids.insert(0, selected);
-  }
-  return ids;
-}
-
-/// The name of [id], or a placeholder when the list has not loaded.
-String _customerName(List<Customer> customers, String id) {
-  for (final customer in customers) {
-    if (customer.id == id) {
-      return customer.name;
-    }
-  }
-  return 'Currently selected customer';
-}
-
-/// The customer row [id] names, or `null` when the list does not hold it.
-///
-/// The picker reports an id, and the cart needs the row: a pharmacy sale prints the
-/// patient's name and mobile as snapshots of it, so pinning a patient is pinning
-/// all three (D-074). A row the page did not load cannot be resolved, and the
-/// requirement will say the patient has no name on file rather than inventing one.
-Customer? _customerOf(List<Customer> customers, String id) {
-  for (final customer in customers) {
-    if (customer.id == id) {
-      return customer;
-    }
-  }
-  return null;
 }
 
 /// Formats [value] for a text field, leaving off a trailing `.0`.
