@@ -183,6 +183,72 @@ class SalesRepository {
     }
   }
 
+  /// How many recent sales the "recent products" read looks back over.
+  ///
+  /// More than the ten products the counter wants, on purpose: the same product sold
+  /// ten times running is ten sales and one product, so the scan has to look past
+  /// those ten to find ten distinct products.
+  static const int recentSaleScanLimit = 40;
+
+  /// The distinct products sold most recently by [pharmacyId], newest first.
+  ///
+  /// Two reads - the last few sales, then their lines - because `sales` carries no
+  /// product and its lines are the only place one is named. A cancelled sale is
+  /// skipped: it was never sold.
+  Future<List<String>> recentlySoldProductIds({
+    required String pharmacyId,
+    int limit = 10,
+  }) async {
+    try {
+      final recentSales = await _client
+          .from('sales')
+          .select('id')
+          .eq('pharmacy_id', pharmacyId)
+          .neq('status', 'cancelled')
+          .order('sale_date', ascending: false)
+          .limit(recentSaleScanLimit);
+      if (recentSales.isEmpty) {
+        return const <String>[];
+      }
+
+      final items = await _client
+          .from('sale_items')
+          .select('product_id, created_at')
+          .eq('pharmacy_id', pharmacyId)
+          .inFilter(
+            'sale_id',
+            recentSales
+                .map((row) => row['id'] as String)
+                .toList(growable: false),
+          )
+          .order('created_at', ascending: false);
+
+      final seen = <String>{};
+      final ordered = <String>[];
+      for (final row in items) {
+        final productId = row['product_id'] as String?;
+        if (productId == null || !seen.add(productId)) {
+          continue;
+        }
+        ordered.add(productId);
+        if (ordered.length == limit) {
+          break;
+        }
+      }
+      return ordered;
+    } on sb.PostgrestException catch (error) {
+      throw mapPostgrestException(
+        error,
+        fallbackMessage: 'Unable to load the recent sales.',
+      );
+    } on Object catch (error) {
+      throw ServerException(
+        message: 'Unable to load the recent sales.',
+        cause: error,
+      );
+    }
+  }
+
   /// Writes a sale and its lines, and returns the stored document.
   ///
   /// [checkout] carries the line money, computed by `SaleTotals` - the same

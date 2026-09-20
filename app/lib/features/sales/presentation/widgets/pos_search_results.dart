@@ -16,19 +16,19 @@ import 'package:app/features/sales/application/pos_search.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-/// What the counter types, and what came back for it.
+/// What the counter is showing, and the rows for it.
 class PosSearchResults extends ConsumerWidget {
   /// Creates the dropdown.
   const PosSearchResults({
-    required this.term,
+    required this.listKey,
     required this.highlighted,
     required this.onAdd,
     required this.onChooseBatch,
     super.key,
   });
 
-  /// The term the results are for.
-  final String term;
+  /// Which list to show: the search, Recent, a category or All.
+  final PosListKey listKey;
 
   /// Which row Enter would add, as an index into the results.
   final int highlighted;
@@ -41,18 +41,18 @@ class PosSearchResults extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final results = ref.watch(posSearchResultsProvider(term));
+    final results = ref.watch(posListProvider(listKey));
     final theme = Theme.of(context);
 
     return results.when(
       data: (hits) => hits.isEmpty
           ? Text(
-              // An empty term is the counter opening on an empty catalogue, which
-              // is not a failed search - "no product matches" would blame a term
-              // nobody typed.
-              term.isEmpty
-                  ? 'Nothing in the catalogue to sell yet.'
-                  : 'No product matches "$term".',
+              // An empty term is the counter opening on an empty list, which is not
+              // a failed search - "no product matches" would blame a term nobody
+              // typed.
+              listKey.term.isEmpty
+                  ? _emptyMessage(listKey)
+                  : 'No product matches "${listKey.term}".',
               style: theme.textTheme.bodySmall,
             )
           : _List(
@@ -68,6 +68,17 @@ class PosSearchResults extends ConsumerWidget {
       error: (error, _) =>
           Text(describeError(error), style: theme.textTheme.bodySmall),
     );
+  }
+
+  /// What an empty list says, which depends on why it is empty.
+  static String _emptyMessage(PosListKey key) {
+    if (key.recent) {
+      return 'Nothing sold yet. Search by name, or pick All or a category.';
+    }
+    if (key.category != null) {
+      return 'Nothing in "${key.category}".';
+    }
+    return 'Nothing in the catalogue to sell yet.';
   }
 }
 

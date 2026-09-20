@@ -11,6 +11,8 @@
 /// means anything if the deliberate case still works.
 library;
 
+import 'dart:async';
+
 import 'package:app/core/router/routes.dart';
 import 'package:app/core/utils/formatters.dart';
 import 'package:app/core/widgets/app_search_field.dart';
@@ -487,6 +489,41 @@ void main() {
     expect(find.text('Dolo 650'), findsNothing);
   });
 
+  testWidgets('a rapid double tap takes payment once, not twice', (
+    tester,
+  ) async {
+    // The write is held open, which is the window a second tap arrives in: with an
+    // instant fake the first submission is already answered by the time the second
+    // tap lands, and the race being tested would not exist.
+    final sales = FakeSalesRepository()..checkoutGate = Completer<void>();
+    final products = FakeProductsRepository(products: const <Product>[])
+      ..batchQuantities['batch-1'] = 10;
+    await pumpSalesApp(
+      tester,
+      repository: sales,
+      products: products,
+      searchResults: <Product>[buildProduct('Dolo 650')],
+      batches: <BatchStatus>[_batch()],
+      customers: <Customer>[_patient()],
+      initialLocation: Routes.pos,
+    );
+    await _addLine(tester);
+    await _choosePatient(tester);
+
+    final button = find.widgetWithText(ElevatedButton, 'Take payment');
+    await tester.tap(button);
+    await tester.tap(button, warnIfMissed: false);
+    sales.checkoutGate!.complete();
+    await tester.pumpAndSettle();
+
+    expect(
+      sales.checkouts,
+      hasLength(1),
+      reason:
+          'a second tap while the first is in flight is the same submission',
+    );
+  });
+
   testWidgets('refuses to take payment for a bill with no patient', (
     tester,
   ) async {
@@ -665,6 +702,88 @@ void main() {
           reason: '$label is a tap target',
         );
       }
+    });
+  });
+
+  group('the strip', () {
+    testWidgets('opens on Recent, and a tab brings the list back', (
+      tester,
+    ) async {
+      await pumpSalesApp(
+        tester,
+        repository: FakeSalesRepository(),
+        searchResults: <Product>[buildProduct('Dolo 650')],
+        batches: <BatchStatus>[_batch()],
+        initialLocation: Routes.pos,
+      );
+
+      // Recent first, All last, and nothing between them while the catalogue
+      // records no category.
+      expect(
+        tester
+            .widget<ChoiceChip>(find.widgetWithText(ChoiceChip, 'Recent'))
+            .selected,
+        isTrue,
+      );
+      expect(find.widgetWithText(ChoiceChip, 'All'), findsOneWidget);
+
+      await _addLine(tester);
+      // An add closes the list - which is what stops a second Enter doubling the
+      // line - so the product appears once, as the basket line.
+      expect(find.text('Dolo 650'), findsOneWidget);
+
+      await tester.tap(find.widgetWithText(ChoiceChip, 'All'));
+      await tester.pumpAndSettle();
+
+      expect(
+        tester
+            .widget<ChoiceChip>(find.widgetWithText(ChoiceChip, 'All'))
+            .selected,
+        isTrue,
+      );
+      expect(
+        find.text('Dolo 650'),
+        findsNWidgets(2),
+        reason: 'the line, and the list the tab just reopened',
+      );
+    });
+
+    testWidgets('a category the catalogue records becomes a tab', (
+      tester,
+    ) async {
+      await pumpSalesApp(
+        tester,
+        repository: FakeSalesRepository(),
+        searchResults: <Product>[buildProduct('Dolo 650')],
+        batches: <BatchStatus>[_batch()],
+        // The strip is built from data rather than from a list written into the
+        // app, so these two chips exist only because the catalogue says so.
+        categories: <String>['Antibiotics', 'Fever'],
+        initialLocation: Routes.pos,
+      );
+
+      expect(find.widgetWithText(ChoiceChip, 'Antibiotics'), findsOneWidget);
+      expect(find.widgetWithText(ChoiceChip, 'Fever'), findsOneWidget);
+    });
+
+    testWidgets('a failed categories read costs the middle tabs, not the sale', (
+      tester,
+    ) async {
+      // The read is lenient on purpose: a pharmacy whose catalogue read fails still
+      // has to sell something, and Recent and All are what it has.
+      await pumpSalesApp(
+        tester,
+        repository: FakeSalesRepository(),
+        searchResults: <Product>[buildProduct('Dolo 650')],
+        batches: <BatchStatus>[_batch()],
+        failCategories: true,
+        initialLocation: Routes.pos,
+      );
+
+      expect(find.widgetWithText(ChoiceChip, 'Recent'), findsOneWidget);
+      expect(find.widgetWithText(ChoiceChip, 'All'), findsOneWidget);
+      // And the list it drives still answers, which is the half that matters.
+      expect(find.text('Dolo 650'), findsOneWidget);
     });
   });
 

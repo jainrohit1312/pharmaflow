@@ -14,6 +14,7 @@ import 'package:app/core/widgets/app_text_field.dart';
 import 'package:app/core/widgets/section_card.dart';
 import 'package:app/data/models/product.dart';
 import 'package:app/data/models/sale.dart';
+import 'package:app/features/products/application/product_categories.dart';
 import 'package:app/features/purchase/data/purchase_totals.dart';
 import 'package:app/features/sales/application/pos_controller.dart';
 import 'package:app/features/sales/application/pos_search.dart';
@@ -24,6 +25,7 @@ import 'package:app/features/sales/presentation/patients/patient_step.dart';
 import 'package:app/features/sales/presentation/widgets/batch_chooser_sheet.dart';
 import 'package:app/features/sales/presentation/widgets/pos_cart_line.dart';
 import 'package:app/features/sales/presentation/widgets/pos_search_results.dart';
+import 'package:app/features/sales/presentation/widgets/pos_strip.dart';
 import 'package:app/features/sales/presentation/widgets/sale_identity_fields.dart';
 import 'package:app/features/sales/presentation/widgets/sale_type_selector.dart';
 import 'package:flutter/material.dart';
@@ -59,11 +61,23 @@ class _PosScreenState extends ConsumerState<PosScreen> {
   /// Which row of the dropdown Enter would add, as an index into the results.
   int _highlighted = 0;
 
+  /// Which strip tab the counter has chosen, when no term has been typed.
+  ///
+  /// Recent, because re-selling what was just sold is the commonest action at a
+  /// counter - and a tab is a list key, so this is the same value the list reads.
+  PosListKey _strip = PosStrip.recent;
+
   /// Whether Escape has closed the dropdown for the current term.
   ///
   /// Reset by the next keystroke, so Escape dismisses the list without ending the
   /// search.
   bool _searchClosed = false;
+
+  /// What the counter's list is showing: the search when a term is typed - a term
+  /// wins over the strip, because typing is an explicit act - and the strip's own
+  /// tab otherwise.
+  PosListKey get _listKey =>
+      PosListKey(term: _term, recent: _strip.recent, category: _strip.category);
 
   @override
   void dispose() {
@@ -95,16 +109,14 @@ class _PosScreenState extends ConsumerState<PosScreen> {
 
   /// How many rows the dropdown is actually showing, or 0 when it is not.
   ///
-  /// Not simply the results' length: the dropdown is hidden while the field is
-  /// empty **and** something is already rung up, and Enter must not add a product
-  /// the counter cannot see. This is the guard that makes "Enter never adds
-  /// something invisible" true.
+  /// Not simply the results' length: the list is hidden once Escape has closed it
+  /// and after every add, and Enter must not add a product the counter cannot see.
+  /// This is the guard that makes "Enter never adds something invisible" true.
   int get _shownResults {
-    if (_searchClosed ||
-        (_term.isEmpty && ref.read(posControllerProvider).isNotEmpty)) {
+    if (_searchClosed) {
       return 0;
     }
-    return ref.read(posSearchResultsProvider(_term)).value?.length ?? 0;
+    return ref.read(posListProvider(_listKey)).value?.length ?? 0;
   }
 
   /// The counter's keyboard contract for the keys the field itself does not use.
@@ -159,8 +171,7 @@ class _PosScreenState extends ConsumerState<PosScreen> {
       return;
     }
     final hits =
-        ref.read(posSearchResultsProvider(_term)).value ??
-        const <PosSearchHit>[];
+        ref.read(posListProvider(_listKey)).value ?? const <PosSearchHit>[];
     if (_highlighted < 0 || _highlighted >= hits.length) {
       return;
     }
@@ -206,6 +217,10 @@ class _PosScreenState extends ConsumerState<PosScreen> {
     final cart = ref.watch(posControllerProvider);
     final pos = ref.read(posControllerProvider.notifier);
     final isSaving = ref.watch(saleCheckoutControllerProvider).isLoading;
+    // Read leniently: a failed categories read costs the strip its middle tabs, not
+    // the counter its sale - the same choice the package picker makes about accounts.
+    final categories =
+        ref.watch(productCategoriesProvider).value ?? const <String>[];
     final split =
         ref.watch(saleTaxSplitProvider(cart.placeOfSupply)).value ??
         TaxSplit.intraState;
@@ -229,6 +244,10 @@ class _PosScreenState extends ConsumerState<PosScreen> {
         return;
       }
       _report(describeError(error));
+      // A refusal leaves the counter where it was working: the caret goes back to
+      // the field it will type into next, so the keyboard contract survives an
+      // error as well as a selection.
+      _searchFocus.requestFocus();
     });
 
     return AppScaffold(
@@ -273,10 +292,18 @@ class _PosScreenState extends ConsumerState<PosScreen> {
             child: SaleIdentityFields(cart: cart),
           ),
           const SizedBox(height: 16),
-          // The counter's working surface: type or scan, press Enter, next line.
-          // The field takes the caret on load, and the Focus above it is where the
-          // keys the field does not use are caught (arrows, Enter, Escape) - it is
-          // not focusable itself, so the caret stays in the field.
+          // The counter's working surface: pick a tab or type, press Enter, next
+          // line. The strip decides what the list shows while the field is empty,
+          // and the field takes the caret on load.
+          PosStrip(
+            choice: _strip,
+            categories: categories,
+            onChanged: _chooseStrip,
+          ),
+          const SizedBox(height: 8),
+          // The Focus is where the keys the field does not use are caught (arrows,
+          // Enter, Escape); it is not focusable itself, so the caret stays in the
+          // field.
           Focus(
             canRequestFocus: false,
             onKeyEvent: _onSearchKey,
@@ -292,10 +319,10 @@ class _PosScreenState extends ConsumerState<PosScreen> {
               onSubmitted: (_) => _addHighlighted(),
             ),
           ),
-          if (!_searchClosed && (_term.isNotEmpty || cart.isEmpty)) ...<Widget>[
+          if (!_searchClosed) ...<Widget>[
             const SizedBox(height: 8),
             PosSearchResults(
-              term: _term,
+              listKey: _listKey,
               highlighted: _highlighted,
               onAdd: _addHit,
               onChooseBatch: _chooseBatch,
@@ -424,6 +451,17 @@ class _PosScreenState extends ConsumerState<PosScreen> {
     );
   }
 
+  /// Switches the strip's tab, and reopens the list with it.
+  void _chooseStrip(PosListKey choice) {
+    setState(() {
+      _strip = choice;
+      // Choosing a tab is a request to see that list, so a list that Escape or an
+      // add closed comes back - and the highlight goes back to the first row.
+      _searchClosed = false;
+      _highlighted = 0;
+    });
+  }
+
   /// Opens the batch chooser for [product] and adds what was picked.
   ///
   /// The deliberate path rather than the default one: Enter takes the FEFO batch,
@@ -442,6 +480,13 @@ class _PosScreenState extends ConsumerState<PosScreen> {
 
   /// Writes the sale and opens its invoice.
   Future<void> _checkout(PosCart cart, TaxSplit split) async {
+    // A second tap (or key) while the first is still being written is the same
+    // submission, not another sale. The button is already disabled while a write is
+    // in flight, but a rebuild happens a frame after the tap does - so the live
+    // state decides this rather than the state this build drew from.
+    if (ref.read(saleCheckoutControllerProvider).isLoading) {
+      return;
+    }
     try {
       final saved = await ref
           .read(saleCheckoutControllerProvider.notifier)

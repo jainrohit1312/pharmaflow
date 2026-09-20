@@ -11,6 +11,7 @@ import 'package:app/features/auth/application/pharmacy_scope.dart';
 import 'package:app/features/customers/application/customer_options.dart';
 import 'package:app/features/customers/application/patient_lookup.dart';
 import 'package:app/features/customers/data/patients_repository.dart';
+import 'package:app/features/products/application/product_categories.dart';
 import 'package:app/features/products/data/products_repository.dart';
 import 'package:app/features/purchase/data/purchase_totals.dart';
 import 'package:app/features/sales/application/doctor_options.dart';
@@ -78,6 +79,8 @@ Future<GoRouter> pumpSalesApp(
   FakeDoctorsRepository? doctors,
   List<Product> searchResults = const <Product>[],
   List<BatchStatus> batches = const <BatchStatus>[],
+  List<String> categories = const <String>[],
+  bool failCategories = false,
   List<Customer> customers = const <Customer>[],
   String initialLocation = Routes.sales,
   Size size = const Size(1200, 4000),
@@ -102,16 +105,23 @@ Future<GoRouter> pumpSalesApp(
       overrides: [
         salesRepositoryProvider.overrideWithValue(repository),
         requirePharmacyIdProvider.overrideWith((ref) => 'ph-1'),
-        posSearchResultsProvider.overrideWith(
-          // Every hit carries the whole batch fixture list: these tests use one
-          // product and one batch, and a hit's product id need not match the
-          // batch's - the flat override is the point, the same way the batch
-          // chooser's `sellableBatchesProvider` override works.
-          (ref, term) async => <PosSearchHit>[
+        posListProvider.overrideWith(
+          // Every key answers the same fixtures: these tests use one product and one
+          // batch, and a hit's product id need not match the batch's - the flat
+          // override is the point, the same way the batch chooser's
+          // `sellableBatchesProvider` override works. A test that needs a tab to
+          // answer differently drives the repository instead.
+          (ref, key) async => <PosSearchHit>[
             for (final product in searchResults)
               PosSearchHit(product: product, batches: batches),
           ],
         ),
+        productCategoriesProvider.overrideWith((ref) async {
+          if (failCategories) {
+            throw StateError('the fake was told to fail');
+          }
+          return categories;
+        }),
         sellableBatchesProvider.overrideWith((ref, productId) async => batches),
         customerOptionsProvider.overrideWith((ref) async => customers),
         patientsRepositoryProvider.overrideWithValue(patientRepository),

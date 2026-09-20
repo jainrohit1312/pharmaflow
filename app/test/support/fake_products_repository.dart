@@ -24,6 +24,7 @@ Product buildProduct(
   ScheduleType scheduleType = ScheduleType.otc,
   bool isActive = true,
   double? gstPercent,
+  String? category,
 }) => Product(
   id: id ?? 'id-$name',
   pharmacyId: 'ph-1',
@@ -31,6 +32,7 @@ Product buildProduct(
   scheduleType: scheduleType,
   isActive: isActive,
   gstPercent: gstPercent,
+  category: category,
   createdAt: DateTime(2026),
   updatedAt: DateTime(2026),
 );
@@ -95,11 +97,30 @@ class FakeProductsRepository implements ProductsRepository {
           product.scheduleType == query.scheduleType;
       final matchesActive =
           query.isActive == null || product.isActive == query.isActive;
-      return matchesTerm && matchesSchedule && matchesActive;
+      final matchesCategory =
+          query.category == null || product.category == query.category;
+      final ids = query.ids;
+      final matchesIds = ids == null || ids.contains(product.id);
+      return matchesTerm &&
+          matchesSchedule &&
+          matchesActive &&
+          matchesCategory &&
+          matchesIds;
     });
 
     return matching.skip(offset).take(limit).toList(growable: false);
   }
+
+  /// The categories [categories] answers with.
+  ///
+  /// Set by a test that wants the counter's strip to have a middle tab: the real
+  /// read works them out from the catalogue's `category` column, which the fixtures
+  /// mostly leave NULL (as the imported catalogue does).
+  List<String> categoriesAnswer = const <String>[];
+
+  @override
+  Future<List<String>> categories({required String pharmacyId}) async =>
+      categoriesAnswer;
 
   @override
   Future<Map<String, String>> namesFor({

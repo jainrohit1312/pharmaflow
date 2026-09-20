@@ -26,7 +26,13 @@ ProductsRepository productsRepository(Ref ref) =>
 /// is always a new value rather than an in-place edit that Riverpod could miss.
 class ProductsQuery {
   /// Creates a query; the defaults mean "everything, unsorted".
-  const ProductsQuery({this.search = '', this.scheduleType, this.isActive});
+  const ProductsQuery({
+    this.search = '',
+    this.scheduleType,
+    this.isActive,
+    this.category,
+    this.ids,
+  });
 
   /// Free-text term matched against name, generic name and barcode.
   final String search;
@@ -37,23 +43,50 @@ class ProductsQuery {
   /// Restrict to active or inactive products; `null` means both.
   final bool? isActive;
 
+  /// Restrict to one category, by exact match; `null` means every category.
+  ///
+  /// The counter's category strip reads the catalogue's own distinct categories
+  /// and offers one per tab, so this is the filter behind a tab rather than a
+  /// list of categories written into the app (the owner's F3). The imported
+  /// catalogue has `category` NULL throughout, so today the strip has no category
+  /// tab at all - and this is what makes one appear when data does.
+  final String? category;
+
+  /// Restrict to these product ids, in no particular order; `null` means any.
+  ///
+  /// For the one caller that holds an ordered list of ids it wants rows for - the
+  /// counter's Recent strip, whose order is "most recently sold" and therefore
+  /// cannot be expressed as a column.
+  final List<String>? ids;
+
   /// Whether anything is actually being filtered out.
   ///
   /// Lets a screen distinguish "the catalogue is empty" from "your search
   /// matched nothing", which need different copy and different actions.
   bool get isFiltered =>
-      search.isNotEmpty || scheduleType != null || isActive != null;
+      search.isNotEmpty ||
+      scheduleType != null ||
+      isActive != null ||
+      category != null ||
+      ids != null;
 
   /// A copy with the search term replaced.
   ProductsQuery withSearch(String value) => ProductsQuery(
     search: value,
     scheduleType: scheduleType,
     isActive: isActive,
+    category: category,
+    ids: ids,
   );
 
   /// A copy with the schedule filter replaced (`null` clears it).
-  ProductsQuery withSchedule(ScheduleType? value) =>
-      ProductsQuery(search: search, scheduleType: value, isActive: isActive);
+  ProductsQuery withSchedule(ScheduleType? value) => ProductsQuery(
+    search: search,
+    scheduleType: value,
+    isActive: isActive,
+    category: category,
+    ids: ids,
+  );
 
   /// A copy with the active filter replaced (`null` clears it).
   ///
@@ -64,6 +97,17 @@ class ProductsQuery {
     search: search,
     scheduleType: scheduleType,
     isActive: value,
+    category: category,
+    ids: ids,
+  );
+
+  /// A copy with the category filter replaced (`null` clears it).
+  ProductsQuery withCategory(String? value) => ProductsQuery(
+    search: search,
+    scheduleType: scheduleType,
+    isActive: isActive,
+    category: value,
+    ids: ids,
   );
 }
 
@@ -154,6 +198,20 @@ class ProductsRepository {
       final isActive = query.isActive;
       if (isActive != null) {
         request = request.eq('is_active', isActive);
+      }
+      final category = query.category;
+      if (category != null) {
+        request = request.eq('category', category);
+      }
+      final ids = query.ids;
+      if (ids != null) {
+        // An empty id list is a query for nothing, and asking PostgREST for it
+        // would be asking for every row: the caller guards it, and this makes the
+        // guard visible rather than load-bearing.
+        if (ids.isEmpty) {
+          return const <Product>[];
+        }
+        request = request.inFilter('id', ids);
       }
 
       final rows = await request
@@ -309,6 +367,51 @@ class ProductsRepository {
     } on Object catch (error) {
       throw ServerException(
         message: 'Unable to load the batches for that product.',
+        cause: error,
+      );
+    }
+  }
+
+  /// How many rows the category scan reads before it stops.
+  ///
+  /// `category` is a free-text column, and PostgREST has no `distinct`, so the
+  /// distinct set is worked out here from one narrow column over the catalogue. A
+  /// catalogue larger than this may not show every category it holds - at that size
+  /// the tab strip needs a server-side distinct, which is an RPC and a migration.
+  static const int categoryScanLimit = 1000;
+
+  /// The distinct categories the catalogue records, sorted.
+  ///
+  /// Read from the products themselves rather than from a list written into the
+  /// app, which is what makes a tab appear the moment a product carries the
+  /// category (the owner's F3). Every imported product has `category` NULL, so
+  /// this answers an empty list today.
+  Future<List<String>> categories({required String pharmacyId}) async {
+    try {
+      final rows = await _client
+          .from('products')
+          .select('category')
+          .eq('pharmacy_id', pharmacyId)
+          .not('category', 'is', null)
+          .order('category')
+          .limit(categoryScanLimit);
+
+      final distinct = <String>{};
+      for (final row in rows) {
+        final value = (row['category'] as String?)?.trim();
+        if (value != null && value.isNotEmpty) {
+          distinct.add(value);
+        }
+      }
+      return distinct.toList()..sort();
+    } on sb.PostgrestException catch (error) {
+      throw mapPostgrestException(
+        error,
+        fallbackMessage: 'Unable to load the catalogue\u2019s categories.',
+      );
+    } on Object catch (error) {
+      throw ServerException(
+        message: 'Unable to load the catalogue\u2019s categories.',
         cause: error,
       );
     }

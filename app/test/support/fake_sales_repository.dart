@@ -126,6 +126,24 @@ class FakeSalesRepository implements SalesRepository {
   /// is the state T-5 is about.
   Completer<void>? listGate;
 
+  /// The products [recentlySoldProductIds] answers with, in sold order.
+  ///
+  /// Set by a test that wants the counter's Recent strip to have something in it;
+  /// the real read works them out from the recent sales and their lines.
+  List<String> recentProductIds = const <String>[];
+
+  /// When set, `checkout` waits for it before answering.
+  ///
+  /// Holds a write open, which is the only way to look at the window between a tap
+  /// and its answer - the window a second tap arrives in.
+  Completer<void>? checkoutGate;
+
+  @override
+  Future<List<String>> recentlySoldProductIds({
+    required String pharmacyId,
+    int limit = 10,
+  }) async => recentProductIds.take(limit).toList(growable: false);
+
   @override
   Future<List<Sale>> list({
     required String pharmacyId,
@@ -214,6 +232,10 @@ class FakeSalesRepository implements SalesRepository {
     final error = errorToThrow;
     if (error != null) {
       throw error;
+    }
+    final gate = checkoutGate;
+    if (gate != null) {
+      await gate.future;
     }
 
     checkouts.add(checkout);
