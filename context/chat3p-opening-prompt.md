@@ -67,14 +67,41 @@ allocations).
 ## WHAT THE OWNER ALREADY DECIDED (do not re-litigate)
 
 - **The receipt's per-line batch/expiry source:** option (b) — a **new additive migration `00039`**
-  with `sale_document(p_sale_id uuid) returns jsonb`, `language sql stable security invoker`,
-  returning `{sale: <the sales row>, lines: [{item, batch_no, expiry_date, is_unknown_batch}]}`
-  ordered by `created_at`, granted to `authenticated`. **`checkout_sale` is not to be touched.** The
-  exact body the owner approved is in this chat's approval message; write it, verify it locally
-  with the project's pgvector harness (see the SQL-suite memory/rules in `PROGRESS.md`), and do
-  **not** push it without asking.
+  with `sale_document(p_sale_id uuid) returns jsonb`. **`checkout_sale` is not to be touched** (it
+  returns the `sales` row and a composite return type cannot carry lines). The owner approved this
+  body **verbatim** on 2026-09-20; it is reproduced here because the chat that approved it is gone:
+
+  ```sql
+  create or replace function public.sale_document(p_sale_id uuid)
+  returns jsonb
+  language sql stable security invoker
+  as $$
+    select jsonb_build_object(
+      'sale', to_jsonb(s.*),
+      'lines', coalesce((
+        select jsonb_agg(jsonb_build_object(
+          'item', to_jsonb(si.*),
+          'batch_no', pb.batch_no,
+          'expiry_date', pb.expiry_date,
+          'is_unknown_batch', pb.is_unknown_batch
+        ) order by si.created_at)
+        from sale_items si
+        left join product_batches pb on pb.id = si.batch_id
+        where si.sale_id = s.id
+      ), '[]'::jsonb)
+    )
+    from sales s
+    where s.id = p_sale_id
+      and s.pharmacy_id = get_my_pharmacy_id();
+  $$;
+  ```
+
+  Grant execute to `authenticated`; RLS still enforces the tenant. Write it as the next migration in
+  order, verify it locally with the project's throwaway-pgvector harness (the recipe is in
+  `PROGRESS.md` and the SQL-suite notes), and do **not** push it without asking.
 - **The receipt also needs `customers.patient_code`**, which is not a column on `sales`: decide
-  whether `sale_document` returns it or the client reads the customer row, and say why.
+  whether `sale_document` returns it (an extra join, one round trip) or the client reads the
+  customer row, and say why.
 - **A package sale's debtor is one `customers` row per hospital** ("… (Account)"), chosen by the
   operator; the patient's name and mobile are required on the bill for traceability.
 - **Discounts are capped at 10% by refusal** — no approval UI is to be invented (6.5c does not
