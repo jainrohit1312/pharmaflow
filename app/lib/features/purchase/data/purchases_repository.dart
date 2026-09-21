@@ -9,6 +9,7 @@ import 'package:app/data/datasources/supabase_client.dart';
 import 'package:app/data/models/purchase.dart';
 import 'package:app/data/models/purchase_draft.dart';
 import 'package:app/data/models/purchase_item.dart';
+import 'package:app/features/purchase/data/purchase_payload.dart';
 import 'package:app/features/purchase/data/purchase_totals.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart' as sb;
@@ -264,6 +265,11 @@ class PurchasesRepository {
   ///
   /// A draft has no batches on purpose: batches are what a *receipt* creates, and
   /// nothing about stock should move before goods arrive (D-013).
+  ///
+  /// **A member of staff's draft does not exist as a draft yet.** The server stages it
+  /// as `pendingApproval` and asks the owner, so the document this returns carries that
+  /// status rather than the `draft` that was requested - see [savePurchase]. The owner's
+  /// own save is written exactly as asked, because he is not gated.
   Future<Purchase> create({
     required String pharmacyId,
     required PurchaseDraft header,
@@ -275,45 +281,16 @@ class PurchasesRepository {
       throw ValidationException(message: invalid);
     }
 
-    try {
-      final headerRow = await _client
-          .from('purchases')
-          .insert(<String, dynamic>{
-            'pharmacy_id': pharmacyId,
-            ..._headerFields(header),
-            ..._totalsPayload(
-              PurchaseTotals.forLines(lines, split: split),
-              status: PurchaseStatus.draft,
-            ),
-          })
-          .select()
-          .single();
-      final purchaseId = headerRow['id'] as String;
-
-      await _replaceLines(
-        pharmacyId: pharmacyId,
-        purchaseId: purchaseId,
+    return savePurchase(
+      PurchasePayload.save(
+        draft: header,
         lines: lines,
         split: split,
-      );
-
-      return Purchase.fromJson(headerRow);
-    } on sb.PostgrestException catch (error) {
-      throw mapPostgrestException(
-        error,
-        fallbackMessage: 'Unable to save that purchase.',
-        uniqueViolationMessage:
-            'That supplier already has a purchase with that invoice number.',
-      );
-    } on Object catch (error) {
-      if (error is AppException) {
-        rethrow;
-      }
-      throw ServerException(
-        message: 'Unable to save that purchase.',
-        cause: error,
-      );
-    }
+        totals: PurchaseTotals.forLines(lines, split: split),
+        status: PurchaseStatus.draft,
+      ),
+      failureMessage: 'Unable to save that purchase.',
+    );
   }
 
   /// Rewrites a purchase's header and lines while it is still editable.
@@ -356,45 +333,17 @@ class PurchasesRepository {
       items: stored,
     );
 
-    try {
-      final headerRow = await _client
-          .from('purchases')
-          .update(<String, dynamic>{
-            ..._headerFields(header),
-            ..._totalsPayload(
-              PurchaseTotals.forLines(lines, split: split),
-              status: status,
-            ),
-          })
-          .eq('pharmacy_id', pharmacyId)
-          .eq('id', purchaseId)
-          .select()
-          .single();
-
-      await _replaceLines(
-        pharmacyId: pharmacyId,
+    return savePurchase(
+      PurchasePayload.save(
         purchaseId: purchaseId,
+        draft: header,
         lines: lines,
         split: split,
-      );
-
-      return Purchase.fromJson(headerRow);
-    } on sb.PostgrestException catch (error) {
-      throw mapPostgrestException(
-        error,
-        fallbackMessage: 'Unable to save that purchase.',
-        uniqueViolationMessage:
-            'That supplier already has a purchase with that invoice number.',
-      );
-    } on Object catch (error) {
-      if (error is AppException) {
-        rethrow;
-      }
-      throw ServerException(
-        message: 'Unable to save that purchase.',
-        cause: error,
-      );
-    }
+        totals: PurchaseTotals.forLines(lines, split: split),
+        status: status,
+      ),
+      failureMessage: 'Unable to save that purchase.',
+    );
   }
 
   /// Moves a document between the statuses that post nothing.
@@ -402,6 +351,13 @@ class PurchasesRepository {
   /// Only `draft`, `ordered` and `cancelled` may be reached this way: `received`
   /// is not a status change, it is the receipt itself, and it has to write
   /// batches and lines in the same breath - see [receive].
+  ///
+  /// **A cancellation is not an edit.** The server moves the status and touches
+  /// nothing else, so nothing but the id is sent - and for a member of staff the
+  /// document does not move at all until the owner answers: the cancellation is a
+  /// question (`purchase_delete`), not a change waiting to be confirmed. Every other
+  /// move is a save of the document as it stands with a new status, because the
+  /// gated thing is "any modification" and a status is part of what a document says.
   Future<Purchase> setStatus({
     required String pharmacyId,
     required String purchaseId,
@@ -413,31 +369,35 @@ class PurchasesRepository {
       );
     }
 
-    try {
-      final row = await _client
-          .from('purchases')
-          .update(<String, dynamic>{'status': status.dbValue})
-          .eq('pharmacy_id', pharmacyId)
-          .eq('id', purchaseId)
-          .select()
-          .single();
-      return Purchase.fromJson(row);
-    } on sb.PostgrestException catch (error) {
-      throw mapPostgrestException(
-        error,
-        fallbackMessage: 'Unable to change the status of that purchase.',
-      );
-    } on Object catch (error) {
-      throw ServerException(
-        message: 'Unable to change the status of that purchase.',
-        cause: error,
+    if (status == PurchaseStatus.cancelled) {
+      return savePurchase(
+        PurchasePayload.cancel(purchaseId: purchaseId),
+        failureMessage: 'Unable to change the status of that purchase.',
       );
     }
+
+    final existing = await _requireEditable(
+      pharmacyId: pharmacyId,
+      purchaseId: purchaseId,
+    );
+    final stored = await itemsFor(
+      pharmacyId: pharmacyId,
+      purchaseId: purchaseId,
+    );
+
+    return savePurchase(
+      PurchasePayload.saveStored(
+        purchase: existing,
+        items: stored,
+        status: status,
+      ),
+      failureMessage: 'Unable to change the status of that purchase.',
+    );
   }
 
   /// Books a purchase in: creates its batches, writes its lines, then receives it.
   ///
-  /// **The order is the whole point, and the database enforces it:**
+  /// **The order is the whole point, and the server is what enforces it now:**
   ///
   /// 1. `product_batches` rows first, keyed on
   ///    `(pharmacy_id, product_id, batch_no)`, **without `qty`**. The stock
@@ -453,6 +413,13 @@ class PurchasesRepository {
   ///    a failure before it leaves a document which can simply be received
   ///    again, rather than a half-posted one.
   ///
+  /// This used to be three round trips from here, in that order. It is one now -
+  /// `save_purchase()` does the three steps in one transaction - which is strictly
+  /// safer: a failure between them can no longer leave a document with batches and no
+  /// lines. **What a member of staff gets back is a `pendingApproval` document**, and
+  /// that is the point of the chunk: the batches exist, the lines exist, and nothing
+  /// posts until the owner approves.
+  ///
   /// [split] decides whether the tax goes to CGST+SGST or IGST; the caller reads
   /// the pharmacy's and supplier's states to choose.
   Future<Purchase> receive({
@@ -466,52 +433,55 @@ class PurchasesRepository {
     if (invalid != null) {
       throw ValidationException(message: invalid);
     }
-    await _requireEditable(pharmacyId: pharmacyId, purchaseId: purchaseId);
+    final existing = await _requireEditable(
+      pharmacyId: pharmacyId,
+      purchaseId: purchaseId,
+    );
 
-    try {
-      // 1. Batches, without qty (see the doc comment).
-      final batchPayloads = lines
-          .map((line) => line.toBatchJson(pharmacyId: pharmacyId))
-          .toList(growable: false);
-      final batchRows = await _client
-          .from('product_batches')
-          .upsert(batchPayloads, onConflict: 'pharmacy_id,product_id,batch_no')
-          .select('id, product_id, batch_no');
-      final batchIds = <String, String>{
-        for (final row in batchRows)
-          _batchKey(row['product_id'] as String, row['batch_no'] as String):
-              row['id'] as String,
-      };
-
-      // 2. Lines, replaced wholesale and now pointing at their batches.
-      await _replaceLines(
-        pharmacyId: pharmacyId,
+    // The document as it stands is the one being booked in, so its own stored header
+    // fields travel rather than a re-derivation of them.
+    return savePurchase(
+      PurchasePayload.save(
         purchaseId: purchaseId,
+        draft: PurchaseDraft(
+          supplierId: existing.supplierId,
+          invoiceNo: header.invoiceNo,
+          invoiceDate: header.invoiceDate,
+          notes: header.notes,
+        ),
         lines: lines,
         split: split,
-        batchIds: batchIds,
-      );
+        totals: PurchaseTotals.forLines(lines, split: split),
+        status: PurchaseStatus.received,
+      ),
+      failureMessage: 'Unable to receive that purchase.',
+    );
+  }
 
-      // 3. Receipt: totals and status in one statement, because the ledger
-      //    trigger reads grand_total from the row it is handed.
-      final row = await _client
-          .from('purchases')
-          .update(<String, dynamic>{
-            ..._headerFields(header),
-            ..._totalsPayload(
-              PurchaseTotals.forLines(lines, split: split),
-              status: PurchaseStatus.received,
-            ),
-          })
-          .eq('pharmacy_id', pharmacyId)
-          .eq('id', purchaseId)
-          .select()
-          .single();
-      return Purchase.fromJson(row);
+  /// Sends one save to the server, and answers with the document it stored.
+  ///
+  /// The single write path this repository has for a purchase. Everything about
+  /// **who** may write what is decided server-side, in `save_purchase()`: the owner
+  /// gets the status he asked for, anybody else gets a staged `pendingApproval`
+  /// document and one request in the owner's list. Nothing here pre-checks the role,
+  /// because a role check in a client is a suggestion and the tables have no
+  /// INSERT/UPDATE/DELETE grant to hide behind.
+  ///
+  /// Public so the payload's shape is asserted against the call that carries it.
+  Future<Purchase> savePurchase(
+    Map<String, dynamic> payload, {
+    required String failureMessage,
+  }) async {
+    try {
+      final row = await _client.rpc<dynamic>(
+        'save_purchase',
+        params: <String, dynamic>{'p_payload': payload},
+      );
+      return Purchase.fromJson(row as Map<String, dynamic>);
     } on sb.PostgrestException catch (error) {
       throw mapPostgrestException(
         error,
-        fallbackMessage: 'Unable to receive that purchase.',
+        fallbackMessage: failureMessage,
         uniqueViolationMessage:
             'That supplier already has a purchase with that invoice number.',
       );
@@ -519,10 +489,7 @@ class PurchasesRepository {
       if (error is AppException) {
         rethrow;
       }
-      throw ServerException(
-        message: 'Unable to receive that purchase.',
-        cause: error,
-      );
+      throw ServerException(message: failureMessage, cause: error);
     }
   }
 
@@ -719,71 +686,4 @@ class PurchasesRepository {
     }
     return existing;
   }
-
-  /// Deletes the document's lines and writes [lines] in their place.
-  ///
-  /// Replace rather than diff: a GRN can change a line's batch, quantity and
-  /// rates, and a partial update would leave the document's totals describing a
-  /// line set that no longer exists. Safe only while the document is editable,
-  /// which the callers check first.
-  Future<void> _replaceLines({
-    required String pharmacyId,
-    required String purchaseId,
-    required List<PurchaseLineDraft> lines,
-    required TaxSplit split,
-    Map<String, String> batchIds = const <String, String>{},
-  }) async {
-    await _client
-        .from('purchase_items')
-        .delete()
-        .eq('pharmacy_id', pharmacyId)
-        .eq('purchase_id', purchaseId);
-
-    final payloads = <Map<String, dynamic>>[];
-    for (final line in lines) {
-      final totals = PurchaseTotals.forLine(line, split: split);
-      // A draft line has no batch yet, so its batch_id stays null. Only a
-      // receipt has an entry in `batchIds`, keyed by product and batch number.
-      final productId = line.productId;
-      final batchNo = line.batchNo?.trim();
-      final batchId = productId == null || batchNo == null || batchNo.isEmpty
-          ? null
-          : batchIds[_batchKey(productId, batchNo)];
-
-      payloads.add(<String, dynamic>{
-        ...line.toItemJson(
-          pharmacyId: pharmacyId,
-          purchaseId: purchaseId,
-          batchId: batchId,
-        ),
-        'cgst_amount': totals.cgst,
-        'sgst_amount': totals.sgst,
-        'igst_amount': totals.igst,
-        'tax_amount': totals.tax,
-        'total_amount': totals.total,
-      });
-    }
-
-    await _client.from('purchase_items').insert(payloads);
-  }
-
-  /// The header columns a form owns.
-  Map<String, dynamic> _headerFields(PurchaseDraft header) => <String, dynamic>{
-    'supplier_id': header.supplierId,
-    'invoice_no': header.invoiceNo.trim(),
-    'invoice_date': Formatters.dateIso(header.invoiceDate),
-    'notes': header.notes,
-  };
-
-  /// The stored totals plus the status they belong to.
-  Map<String, dynamic> _totalsPayload(
-    PurchaseDocumentTotals totals, {
-    required PurchaseStatus status,
-  }) => <String, dynamic>{
-    'sub_total': totals.subTotal,
-    'discount_total': totals.discountTotal,
-    'tax_total': totals.taxTotal,
-    'grand_total': totals.grandTotal,
-    'status': status.dbValue,
-  };
 }

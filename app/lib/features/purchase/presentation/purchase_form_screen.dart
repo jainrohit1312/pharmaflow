@@ -14,14 +14,18 @@ import 'package:app/core/widgets/app_text_field.dart';
 import 'package:app/core/widgets/error_view.dart';
 import 'package:app/core/widgets/loading_view.dart';
 import 'package:app/core/widgets/section_card.dart';
+import 'package:app/data/models/profile.dart';
 import 'package:app/data/models/purchase.dart';
 import 'package:app/data/models/purchase_draft.dart';
 import 'package:app/data/models/purchase_item.dart';
 import 'package:app/data/models/supplier.dart';
+import 'package:app/features/auth/application/pharmacy_scope.dart';
 import 'package:app/features/purchase/application/purchase_form_controller.dart';
 import 'package:app/features/purchase/application/purchase_tax_split.dart';
 import 'package:app/features/purchase/application/purchases_list_controller.dart';
 import 'package:app/features/purchase/data/purchase_totals.dart';
+import 'package:app/features/purchase/data/purchases_repository.dart';
+import 'package:app/features/purchase/presentation/widgets/owner_approval_notice.dart';
 import 'package:app/features/purchase/presentation/widgets/purchase_line_editor.dart';
 import 'package:app/features/purchase/presentation/widgets/purchase_locked_view.dart';
 import 'package:app/features/purchase/presentation/widgets/purchase_totals_preview.dart';
@@ -262,20 +266,31 @@ class _PurchaseFormState extends ConsumerState<_PurchaseForm> {
               header: header,
               lines: lines,
             );
-      if (markOrdered && saved.status == PurchaseStatus.draft) {
+      // `isEditable` rather than `draft`: a member of staff's save comes back STAGED -
+      // `pendingApproval` - so asking for the move on a draft alone would silently drop
+      // "save & mark ordered". Moving it is a second save, which the server converges
+      // into the one ask already waiting rather than raising a second question.
+      if (markOrdered && saved.status.isEditable) {
         await controller.setStatus(
           purchaseId: saved.id,
           status: PurchaseStatus.ordered,
         );
       }
-      // The repository decided this, so ask it what happened rather than
-      // guessing: an `ordered` document comes back as a draft exactly when the
-      // edit changed its lines (D-019), and a status reset the user did not ask
-      // for has to be said out loud.
+      // D-019's rule, read from the same pure function the write applies (and that the
+      // fake repository calls). It cannot be read off the row that comes back any more:
+      // for a member of staff that row carries the staged status rather than the one the
+      // save asked for, which is the difference the approval rail exists to draw.
+      final requested = existing == null
+          ? PurchaseStatus.draft
+          : PurchasesRepository.statusAfterEdit(
+              current: existing.status,
+              lines: lines,
+              items: widget.existing?.items ?? const <PurchaseItem>[],
+            );
       final reverted =
           existing != null &&
           existing.status == PurchaseStatus.ordered &&
-          saved.status == PurchaseStatus.draft;
+          requested == PurchaseStatus.draft;
       if (!mounted) {
         return;
       }
@@ -294,6 +309,12 @@ class _PurchaseFormState extends ConsumerState<_PurchaseForm> {
           'review and re-confirm.',
         );
       }
+      // Before the `go`, for the same reason, and after the revert message so a
+      // document that both reverted and went to the owner says both things rather
+      // than only the last one.
+      final isOwner =
+          ref.read(profileStateProvider).value?.role.isOwner ?? false;
+      reportSentToOwner(context, document: saved, isOwner: isOwner);
       context.go(Routes.purchaseDetail(saved.id));
     } on Object catch (error, stackTrace) {
       // The controller has already put the failure in its state, which the

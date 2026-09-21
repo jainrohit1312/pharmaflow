@@ -14,15 +14,18 @@ import 'package:app/core/widgets/app_text_field.dart';
 import 'package:app/core/widgets/error_view.dart';
 import 'package:app/core/widgets/loading_view.dart';
 import 'package:app/core/widgets/section_card.dart';
+import 'package:app/data/models/profile.dart';
 import 'package:app/data/models/purchase.dart';
 import 'package:app/data/models/purchase_draft.dart';
 import 'package:app/data/models/purchase_item.dart';
 import 'package:app/data/models/supplier.dart';
+import 'package:app/features/auth/application/pharmacy_scope.dart';
 import 'package:app/features/purchase/application/grn_controller.dart';
 import 'package:app/features/purchase/application/purchase_form_controller.dart';
 import 'package:app/features/purchase/application/purchase_tax_split.dart';
 import 'package:app/features/purchase/application/purchases_list_controller.dart';
 import 'package:app/features/purchase/data/purchase_totals.dart';
+import 'package:app/features/purchase/presentation/widgets/owner_approval_notice.dart';
 import 'package:app/features/purchase/presentation/widgets/purchase_line_editor.dart';
 import 'package:app/features/purchase/presentation/widgets/purchase_locked_view.dart';
 import 'package:app/features/purchase/presentation/widgets/purchase_totals_preview.dart';
@@ -271,6 +274,12 @@ class _GrnFormState extends ConsumerState<_GrnForm> {
       ref
         ..invalidate(purchasesListControllerProvider)
         ..invalidate(purchaseWithLinesProvider(received.id));
+      // Said before the `go`: a member of staff's receipt has posted NOTHING, and a
+      // silence after "Receive goods" would read as goods in stock. The messenger
+      // belongs to the app, so the sentence survives the navigation.
+      final isOwner =
+          ref.read(profileStateProvider).value?.role.isOwner ?? false;
+      reportSentToOwner(context, document: received, isOwner: isOwner);
       context.go(Routes.purchaseDetail(received.id));
     } on Object catch (error, stackTrace) {
       // The controllers have already put the failure in their state, which the

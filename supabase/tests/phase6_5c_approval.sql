@@ -225,17 +225,23 @@ begin
 
   -- An action type with no executor must not be askable: the alternative is a row in the owner's
   -- list that approving would silently do nothing about.
+  --
+  -- The example was `purchase` until Phase 6.5c chunk 3 built it, which is why it is a
+  -- `purchase_return` now: the assertion is about the RULE - an unimplemented action type is
+  -- refused, in words naming it - and the rule is unchanged, so the example moves to one whose
+  -- chunk has not landed yet rather than the assertion being dropped. That `purchase` itself is
+  -- now askable is asserted where it is implemented, in phase6_5c_purchases.sql.
   v_msg := null;
   begin
     v_request := public.request_approval(
-      p_action_type => 'purchase',
-      p_title => 'ZZTEST 43 purchase'
+      p_action_type => 'purchase_return',
+      p_title => 'ZZTEST 43 purchase return'
     );
   exception when feature_not_supported then
     v_msg := sqlerrm;
   end;
   v_log := array_append(v_log, case
-    when v_msg = 'the approval for purchase is not available yet' then 'PASS' else 'FAIL' end
+    when v_msg = 'the approval for purchase_return is not available yet' then 'PASS' else 'FAIL' end
     || ': 3. an action type this build cannot execute is refused, named (got '
     || coalesce(v_msg, 'NULL') || ')');
 

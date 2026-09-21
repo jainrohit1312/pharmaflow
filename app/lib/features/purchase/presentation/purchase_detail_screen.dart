@@ -13,11 +13,15 @@ import 'package:app/core/widgets/error_view.dart';
 import 'package:app/core/widgets/loading_view.dart';
 import 'package:app/core/widgets/section_card.dart';
 import 'package:app/core/widgets/status_badge.dart';
+import 'package:app/data/models/profile.dart';
 import 'package:app/data/models/purchase.dart';
 import 'package:app/data/models/purchase_item.dart';
 import 'package:app/data/models/supplier.dart';
+import 'package:app/features/approvals/application/approvals_controller.dart';
+import 'package:app/features/auth/application/pharmacy_scope.dart';
 import 'package:app/features/purchase/application/purchase_form_controller.dart';
 import 'package:app/features/purchase/application/purchases_list_controller.dart';
+import 'package:app/features/purchase/presentation/widgets/owner_approval_notice.dart';
 import 'package:app/features/purchase/presentation/widgets/purchase_status_badge.dart';
 import 'package:app/features/suppliers/application/supplier_options.dart';
 import 'package:flutter/material.dart';
@@ -126,6 +130,10 @@ class PurchaseDetailScreen extends ConsumerWidget {
             ),
           ),
           const SizedBox(height: 16),
+          if (purchase.status.isPendingApproval) ...<Widget>[
+            _WaitingForOwner(purchaseId: purchaseId),
+            const SizedBox(height: 16),
+          ],
           _StoredTotalsCard(purchase: purchase, items: working.items),
           const SizedBox(height: 16),
           SectionCard(
@@ -155,13 +163,19 @@ class PurchaseDetailScreen extends ConsumerWidget {
   }
 
   /// Moves the document to a status that posts nothing.
+  ///
+  /// Both moves are a write like any other, so for a member of staff both are questions
+  /// for the owner - the difference being that "mark as ordered" stages the document and a
+  /// cancellation leaves it exactly where it is. [reportSentToOwner] says which happened,
+  /// in the sentence that matches: a staged document has posted nothing, and a
+  /// cancellation has moved nothing.
   Future<void> _changeStatus(
     BuildContext context,
     WidgetRef ref,
     PurchaseStatus status,
   ) async {
     try {
-      await ref
+      final saved = await ref
           .read(purchaseFormControllerProvider.notifier)
           .setStatus(purchaseId: purchaseId, status: status);
       if (!context.mounted) {
@@ -169,7 +183,23 @@ class PurchaseDetailScreen extends ConsumerWidget {
       }
       ref
         ..invalidate(purchasesListControllerProvider)
-        ..invalidate(purchaseWithLinesProvider(purchaseId));
+        ..invalidate(purchaseWithLinesProvider(purchaseId))
+        // The waiting card reads the ask, and this write may have raised, refreshed or
+        // answered one - so it is re-read rather than left showing the previous state.
+        ..invalidate(
+          approvalForTargetProvider(
+            targetTable: 'purchases',
+            targetId: purchaseId,
+          ),
+        );
+      final isOwner =
+          ref.read(profileStateProvider).value?.role.isOwner ?? false;
+      reportSentToOwner(
+        context,
+        document: saved,
+        isOwner: isOwner,
+        isCancellation: status == PurchaseStatus.cancelled,
+      );
     } on Object catch (error, stackTrace) {
       appLogger.w(
         'Changing the purchase status failed',
@@ -210,6 +240,73 @@ const AppBackButton _backToPurchases = AppBackButton(
   location: Routes.purchase,
   tooltip: 'Back to purchases',
 );
+
+/// What a document that is waiting for the owner is waiting for.
+///
+/// Reads the undecided request about this document, so the screen says what the owner is
+/// being asked rather than only that something is. Two things it deliberately does not
+/// do: it does not promise a decision (the request may be answered, or - for another
+/// member of staff's ask - not even visible to this caller), and it does not imply that
+/// anything has posted. The one sentence it always shows is the consequence that matters
+/// to the counter: a pending GRN's medicines are **not in stock and cannot be sold**
+/// until he approves, which is the operational cost of the policy he chose.
+class _WaitingForOwner extends ConsumerWidget {
+  const _WaitingForOwner({required this.purchaseId});
+
+  /// The document being waited on.
+  final String purchaseId;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final theme = Theme.of(context);
+    final request = ref
+        .watch(
+          approvalForTargetProvider(
+            targetTable: 'purchases',
+            targetId: purchaseId,
+          ),
+        )
+        .value;
+
+    return SectionCard(
+      title: 'Waiting for the owner',
+      trailing: const StatusBadge(
+        label: 'Nothing posted yet',
+        tone: BadgeTone.warning,
+        icon: Icons.hourglass_top_outlined,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          if (request != null) ...<Widget>[
+            Text(request.title, style: theme.textTheme.titleSmall),
+            if (request.summary case final summary?) ...<Widget>[
+              const SizedBox(height: 4),
+              Text(summary, style: theme.textTheme.bodyMedium),
+            ],
+            const SizedBox(height: 8),
+            Text(
+              'Asked ${Formatters.dateTimeDdMmmYyyyHm(request.requestedAt)}',
+              style: theme.textTheme.bodySmall,
+            ),
+            const SizedBox(height: 12),
+          ],
+          Text(
+            'Nothing has been posted for this document: the goods are not in stock '
+            'and no supplier payable exists until the owner approves it. ',
+            style: theme.textTheme.bodyMedium,
+          ),
+          const SizedBox(height: 12),
+          AppButton.outlined(
+            label: 'Open approvals',
+            icon: Icons.approval_outlined,
+            onPressed: () => context.go(Routes.approvals),
+          ),
+        ],
+      ),
+    );
+  }
+}
 
 /// The document's own totals, read straight off the stored columns.
 ///
@@ -256,8 +353,14 @@ class _StoredTotalsCard extends StatelessWidget {
           const SizedBox(height: 4),
           Align(
             alignment: Alignment.centerLeft,
+            // What the figure *is* depends on where the document got to: a waiting one
+            // has a grand total and no payable, and saying otherwise on its own screen
+            // would be the one claim this phase keeps having to avoid.
             child: Text(
-              'This is the payable the ledger holds against the supplier.',
+              purchase.status.isPendingApproval
+                  ? 'Nothing owes this yet — the ledger holds it against the '
+                        'supplier only once the owner approves the document.'
+                  : 'This is the payable the ledger holds against the supplier.',
               style: theme.textTheme.bodySmall,
             ),
           ),
@@ -304,6 +407,21 @@ class _StatusSection extends StatelessWidget {
     final theme = Theme.of(context);
 
     if (!isEditable) {
+      // A cancelled document reached this section too, and telling its reader that its
+      // stock is booked in and its grand total is owed would be a plain falsehood - so
+      // the two ends are stated separately rather than both described as a receipt.
+      if (purchase.status == PurchaseStatus.cancelled) {
+        return SectionCard(
+          title: 'Stock & ledger',
+          child: Text(
+            'Cancelled, so nothing was posted: no stock moved and no supplier '
+            'payable exists. The document stays in your records and keeps its '
+            'number.',
+            style: theme.textTheme.bodyMedium,
+          ),
+        );
+      }
+
       return SectionCard(
         title: 'Stock & ledger',
         child: Text(
@@ -323,11 +441,7 @@ class _StatusSection extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
           Text(
-            canBeReceived
-                ? 'Nothing has been posted yet. Receiving the goods books the '
-                      'stock into batches and raises the supplier payable.'
-                : 'Fill in each line on the receipt — product, quantity, batch '
-                      'number and expiry — before the goods can be booked in.',
+            _nextStep(purchase: purchase, canBeReceived: canBeReceived),
             style: theme.textTheme.bodyMedium,
           ),
           const SizedBox(height: 16),
@@ -354,6 +468,22 @@ class _StatusSection extends StatelessWidget {
       ),
     );
   }
+}
+
+/// What the next step on an editable document is, in the state it is actually in.
+String _nextStep({required Purchase purchase, required bool canBeReceived}) {
+  if (purchase.status.isPendingApproval) {
+    return 'This document is waiting for the owner, and nothing has been posted '
+        'for it. It can still be edited — saving it again asks him about what it '
+        'says now rather than raising a second question — and until he approves, '
+        'its medicines are not in stock and cannot be sold.';
+  }
+
+  return canBeReceived
+      ? 'Nothing has been posted yet. Receiving the goods books the stock into '
+            'batches and raises the supplier payable.'
+      : 'Fill in each line on the receipt — product, quantity, batch number and '
+            'expiry — before the goods can be booked in.';
 }
 
 /// One line as the document stores it.

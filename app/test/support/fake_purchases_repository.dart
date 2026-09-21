@@ -5,6 +5,7 @@ library;
 
 import 'package:app/core/errors/app_exception.dart';
 import 'package:app/core/utils/postgrest_search.dart';
+import 'package:app/data/models/approval_request.dart';
 import 'package:app/data/models/purchase.dart';
 import 'package:app/data/models/purchase_draft.dart';
 import 'package:app/data/models/purchase_item.dart';
@@ -89,6 +90,29 @@ Supplier buildSupplier({
   updatedAt: DateTime(2026),
 );
 
+/// One ask the fake recorded, shaped like what the server would hold.
+///
+/// A purchase write is a *request* for anybody but the owner (migration
+/// `20260921000044`), so a screen test that signs in as staff needs to see what was asked
+/// for, not only what the document says.
+class FakePurchaseAsk {
+  /// Creates an ask.
+  const FakePurchaseAsk({
+    required this.purchaseId,
+    required this.actionType,
+    required this.resumeStatus,
+  });
+
+  /// The document the ask is about.
+  final String purchaseId;
+
+  /// The action type the server would record: a save, or a cancellation.
+  final ApprovalActionType actionType;
+
+  /// The status approving it would give the document.
+  final PurchaseStatus resumeStatus;
+}
+
 /// An in-memory [PurchasesRepository] that applies the query the way one page of
 /// the real one would, and records what the writes were given.
 ///
@@ -96,6 +120,13 @@ Supplier buildSupplier({
 /// `implements` does not require a constructor, so the fake never needs a
 /// Supabase client - which is the whole point, because a real `SupabaseClient`
 /// cannot be constructed without an initialised backend.
+///
+/// **[isOwner] decides which of the server's two behaviours this fake stands in for.**
+/// The owner's writes land, exactly as they did before Phase 6.5c; anybody else's are
+/// STAGED - the document takes `pendingApproval` and one ask is raised, refreshed rather
+/// than stacked when the same document is saved again. The default is the owner, so every
+/// test written before the approval existed keeps asserting what it always asserted, and a
+/// test that wants the gated path opts into it.
 class FakePurchasesRepository implements PurchasesRepository {
   /// Creates a fake holding [purchases], already in display order.
   ///
@@ -104,6 +135,7 @@ class FakePurchasesRepository implements PurchasesRepository {
   FakePurchasesRepository({
     required List<Purchase> purchases,
     List<PurchaseItem> items = const <PurchaseItem>[],
+    this.isOwner = true,
   }) : purchases = List<Purchase>.of(purchases),
        items = List<PurchaseItem>.of(items);
 
@@ -112,6 +144,12 @@ class FakePurchasesRepository implements PurchasesRepository {
 
   /// The stored lines. `create`, `updateDraft` and `receive` replace them.
   final List<PurchaseItem> items;
+
+  /// Whether writes land (the owner) or are staged for him (everybody else).
+  final bool isOwner;
+
+  /// The asks raised so far, oldest first - what the owner's queue would hold.
+  final List<FakePurchaseAsk> asks = <FakePurchaseAsk>[];
 
   /// The last query `list` was given.
   PurchasesQuery? lastQuery;
@@ -227,7 +265,7 @@ class FakePurchasesRepository implements PurchasesRepository {
     final saved = _write(purchases.length + 1, header, lines, split);
     purchases.add(saved);
     _replaceItems(saved.id, lines, split);
-    return saved;
+    return _stagedOr(saved, resume: PurchaseStatus.draft, create: true);
   }
 
   @override
@@ -256,7 +294,7 @@ class FakePurchasesRepository implements PurchasesRepository {
     final saved = _writeFrom(current, header, lines, split, status: status);
     _replace(purchaseId, saved);
     _replaceItems(purchaseId, lines, split);
-    return saved;
+    return _stagedOr(saved, resume: status, create: false);
   }
 
   @override
@@ -267,6 +305,27 @@ class FakePurchasesRepository implements PurchasesRepository {
   }) async {
     lastStatus = status;
     _maybeThrow();
+
+    if (!isOwner) {
+      // A cancellation is not an edit: the server moves nothing until the owner
+      // answers, so the document keeps the status it has and the ask carries the
+      // intent alone. Any other move stages the document at the status asked for.
+      if (status == PurchaseStatus.cancelled) {
+        _ask(
+          purchaseId: purchaseId,
+          actionType: ApprovalActionType.purchaseDelete,
+          resume: PurchaseStatus.cancelled,
+        );
+        return _find(purchaseId);
+      }
+
+      final staged = _find(
+        purchaseId,
+      ).copyWith(status: PurchaseStatus.pendingApproval);
+      _replace(purchaseId, staged);
+      return _stagedOr(staged, resume: status, create: false);
+    }
+
     final saved = _find(purchaseId).copyWith(status: status);
     _replace(purchaseId, saved);
     return saved;
@@ -294,7 +353,62 @@ class FakePurchasesRepository implements PurchasesRepository {
     );
     _replace(purchaseId, saved);
     _replaceItems(purchaseId, lines, split);
-    return saved;
+    return _stagedOr(saved, resume: PurchaseStatus.received, create: false);
+  }
+
+  /// Applies the server's rule for who is gated to a write that just landed.
+  ///
+  /// The owner's [saved] document is returned untouched. Anybody else's is re-stored as
+  /// `pendingApproval` - the document is written, and nothing about it has posted - and
+  /// one ask is raised, refreshed rather than stacked when the same document is saved
+  /// again. A receipt's `stockPostedAt` is dropped with it, because nothing was received.
+  Purchase _stagedOr(
+    Purchase saved, {
+    required PurchaseStatus resume,
+    required bool create,
+  }) {
+    if (isOwner) {
+      return saved;
+    }
+
+    final staged = saved.copyWith(
+      status: PurchaseStatus.pendingApproval,
+      stockPostedAt: null,
+    );
+    _replace(staged.id, staged);
+    _ask(
+      purchaseId: staged.id,
+      actionType: create
+          ? ApprovalActionType.purchase
+          : ApprovalActionType.purchaseEdit,
+      resume: resume,
+    );
+    return staged;
+  }
+
+  /// Raises, or refreshes, the one undecided ask about [purchaseId].
+  ///
+  /// The convergence the server implements in `request_approval()`: a save of a document
+  /// that already has a question waiting refines that question instead of adding a second
+  /// one, and a cancellation keeps its own action type because it is a different question.
+  void _ask({
+    required String purchaseId,
+    required ApprovalActionType actionType,
+    required PurchaseStatus resume,
+  }) {
+    final index = asks.indexWhere(
+      (ask) => ask.purchaseId == purchaseId && ask.actionType == actionType,
+    );
+    final ask = FakePurchaseAsk(
+      purchaseId: purchaseId,
+      actionType: actionType,
+      resumeStatus: resume,
+    );
+    if (index < 0) {
+      asks.add(ask);
+      return;
+    }
+    asks[index] = ask;
   }
 
   /// Builds a brand new document from [header] and [lines].

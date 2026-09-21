@@ -90,6 +90,41 @@ class ApprovalsRepository {
     }
   }
 
+  /// The undecided request about one document, or `null` when there is none.
+  ///
+  /// Used by a document's own screen to answer "is this waiting, and for what?" - the
+  /// purchases detail reads it to show what the owner is being asked. It answers the
+  /// same way [byId] does for a caller who may not read the row: `null`, because the
+  /// question was "is anything waiting", not "does this row exist".
+  Future<ApprovalRequest?> pendingForTarget({
+    required String targetTable,
+    required String targetId,
+  }) async {
+    try {
+      final row = await _client
+          .from('approval_requests')
+          .select()
+          .eq('target_table', targetTable)
+          .eq('target_id', targetId)
+          .eq('status', ApprovalStatus.pending.dbValue)
+          .order('requested_at')
+          .limit(1)
+          .maybeSingle();
+
+      return row == null ? null : ApprovalRequest.fromJson(row);
+    } on sb.PostgrestException catch (error) {
+      throw mapPostgrestException(
+        error,
+        fallbackMessage: 'Unable to check what is waiting for approval.',
+      );
+    } on Object catch (error) {
+      throw ServerException(
+        message: 'Unable to check what is waiting for approval.',
+        cause: error,
+      );
+    }
+  }
+
   /// Raises a request, and answers with the row the server stored.
   ///
   /// The server refuses an action type whose chunk has not landed, and refuses a

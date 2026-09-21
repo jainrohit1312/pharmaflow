@@ -14,10 +14,15 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 /// The statuses offered as chips, `null` first meaning "any status".
+///
+/// `pendingApproval` is one of them because it is a state somebody has to find: a
+/// member of staff looking for the GRN he sent the owner this morning filters on it as
+/// readily as on a draft, and the owner checks what is waiting on the approvals screen.
 const List<PurchaseStatus?> _statusOptions = <PurchaseStatus?>[
   null,
   PurchaseStatus.draft,
   PurchaseStatus.ordered,
+  PurchaseStatus.pendingApproval,
   PurchaseStatus.received,
   PurchaseStatus.cancelled,
 ];

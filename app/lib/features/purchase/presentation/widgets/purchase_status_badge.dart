@@ -11,7 +11,8 @@ import 'package:flutter/material.dart';
 /// status whose stock and supplier payable have been posted (D-013), so it is
 /// the only one that reads as success, and `cancelled` is the only one that
 /// reads as a problem. Draft and ordered are both "not real yet" and stay quiet
-/// on purpose.
+/// on purpose. A waiting document takes the warning tone, because it is the one
+/// state somebody has to act on - the owner, by answering it.
 class PurchaseStatusBadge extends StatelessWidget {
   /// Creates a badge for [status].
   const PurchaseStatusBadge({
@@ -67,6 +68,11 @@ class PurchaseStatusBadge extends StatelessWidget {
         status.label,
         BadgeTone.danger,
         Icons.cancel_outlined,
+      ),
+      PurchaseStatus.pendingApproval => (
+        status.label,
+        BadgeTone.warning,
+        Icons.hourglass_top_outlined,
       ),
     };
   }

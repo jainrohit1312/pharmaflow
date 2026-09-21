@@ -2,7 +2,6 @@
 /// collect, including the batch details a GRN adds to each line.
 library;
 
-import 'package:app/core/utils/formatters.dart';
 import 'package:freezed_annotation/freezed_annotation.dart';
 
 part 'purchase_draft.freezed.dart';
@@ -62,7 +61,7 @@ abstract class PurchaseLineDraft with _$PurchaseLineDraft {
       _$PurchaseLineDraftFromJson(json);
 }
 
-/// Maps a line draft onto the two tables a receipt writes.
+/// Maps a line draft onto what a receipt needs.
 extension PurchaseLineDraftX on PurchaseLineDraft {
   /// Whether this line has everything a batch row and a received item need.
   ///
@@ -74,51 +73,14 @@ extension PurchaseLineDraftX on PurchaseLineDraft {
       batchNo!.trim().isNotEmpty &&
       expiryDate != null &&
       qty > 0;
-
-  /// The `product_batches` payload for this line.
-  ///
-  /// **`qty` is deliberately absent.** The batch's quantity belongs to the stock
-  /// triggers (D-011): a new row takes the column default of 0, and the trigger
-  /// then adds what this receipt brought in. Sending `qty: 0` here instead would
-  /// look harmless and would be catastrophic on a re-receipt - an upsert would
-  /// overwrite an existing batch's balance with zero, destroying live stock that
-  /// no trigger would restore.
-  ///
-  /// `landed_cost_per_unit` is absent for the same reason: the trigger computes
-  /// it from what was paid (D-012), and a client-written value would be
-  /// overwritten on receipt anyway.
-  Map<String, dynamic> toBatchJson({required String pharmacyId}) =>
-      <String, dynamic>{
-        'pharmacy_id': pharmacyId,
-        'product_id': productId,
-        'batch_no': batchNo,
-        'expiry_date': Formatters.dateIso(expiryDate!),
-        'mfg_date': mfgDate == null ? null : Formatters.dateIso(mfgDate!),
-        'purchase_rate': purchaseRate,
-        'mrp': mrp,
-        'selling_rate': sellingRate,
-      };
-
-  /// The `purchase_items` payload for this line.
-  Map<String, dynamic> toItemJson({
-    required String pharmacyId,
-    required String purchaseId,
-    required String? batchId,
-  }) => <String, dynamic>{
-    'pharmacy_id': pharmacyId,
-    'purchase_id': purchaseId,
-    'product_id': productId,
-    'batch_id': batchId,
-    'product_name_raw': productNameRaw,
-    'batch_no': batchNo,
-    'expiry_date': expiryDate == null ? null : Formatters.dateIso(expiryDate!),
-    'hsn_code': hsnCode,
-    'qty': qty,
-    'free_qty': freeQty,
-    'purchase_rate': purchaseRate,
-    'mrp': mrp,
-    'selling_rate': sellingRate,
-    'discount_percent': discountPercent,
-    'gst_percent': gstPercent,
-  };
 }
+
+/// Where a line's JSON goes now.
+///
+/// This file used to carry `toItemJson` and `toBatchJson` - the two table payloads
+/// `PurchasesRepository` wrote directly. There is no direct write any more: a purchase
+/// is written by `save_purchase()` (migration `20260921000044`), so the wire shape
+/// lives in one place, `PurchasePayload`, beside the call that sends it. The rule the
+/// batch payload documented there - **never send `qty`**, or an upsert zeroes stock no
+/// trigger would restore - is enforced in that function and asserted by
+/// `supabase/tests/grn_write_order.sql`.

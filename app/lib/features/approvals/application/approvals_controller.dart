@@ -28,6 +28,22 @@ Future<List<ApprovalRequest>> pendingApprovals(Ref ref) async {
 Future<ApprovalRequest?> approvalRequest(Ref ref, String id) =>
     ref.watch(approvalsRepositoryProvider).byId(id);
 
+/// The undecided request about one document, if there is one.
+///
+/// Keyed by the target rather than by the request's id, for the screens that hold a
+/// document and have to say what is waiting: a purchase detail that shows
+/// "waiting for the owner" can say what he is being asked, and can say nothing at all
+/// when the document is not actually waiting - which is the shape that keeps a screen
+/// from promising an approval that does not exist.
+@riverpod
+Future<ApprovalRequest?> approvalForTarget(
+  Ref ref, {
+  required String targetTable,
+  required String targetId,
+}) => ref
+    .watch(approvalsRepositoryProvider)
+    .pendingForTarget(targetTable: targetTable, targetId: targetId);
+
 /// Raises a request and decides one.
 ///
 /// A command holder rather than a state machine: what the UI needs from it is whether a

@@ -5,6 +5,7 @@ library;
 
 import 'package:app/core/router/routes.dart';
 import 'package:app/data/models/supplier.dart';
+import 'package:app/features/approvals/data/approvals_repository.dart';
 import 'package:app/features/auth/application/pharmacy_scope.dart';
 import 'package:app/features/products/data/products_repository.dart';
 import 'package:app/features/purchase/application/purchase_tax_split.dart';
@@ -23,6 +24,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 
+import 'fake_approvals_repository.dart';
 import 'fake_bill_picker.dart';
 import 'fake_products_repository.dart';
 import 'fake_purchase_ocr_repository.dart';
@@ -85,11 +87,17 @@ GoRouter purchaseTestRouter({
 /// [products] is only needed by a test that drives the product picker, which
 /// reads the catalogue through the products repository rather than through
 /// anything the purchase feature owns.
+///
+/// [approvals] is what a document that is **waiting** for the owner reads to say what
+/// is waiting: the detail screen's card shows the ask itself. It defaults to an empty
+/// fake rather than the real repository, so a test that never stages a document does not
+/// reach a Supabase client when it happens to render one.
 Future<GoRouter> pumpPurchaseApp(
   WidgetTester tester, {
   required FakePurchasesRepository repository,
   List<Supplier> suppliers = const <Supplier>[],
   FakeProductsRepository? products,
+  FakeApprovalsRepository? approvals,
   String initialLocation = Routes.purchase,
 }) async {
   tester.view.physicalSize = const Size(1200, 4000);
@@ -107,6 +115,9 @@ Future<GoRouter> pumpPurchaseApp(
       // element type would need an extra import for no benefit (D-015 notes).
       overrides: [
         purchasesRepositoryProvider.overrideWithValue(repository),
+        approvalsRepositoryProvider.overrideWithValue(
+          approvals ?? FakeApprovalsRepository(),
+        ),
         requirePharmacyIdProvider.overrideWith((ref) => 'ph-1'),
         supplierOptionsProvider.overrideWith((ref) async => suppliers),
         purchaseTaxSplitProvider.overrideWith(

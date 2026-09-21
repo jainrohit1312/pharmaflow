@@ -22,17 +22,31 @@ enum PurchaseStatus {
 
   /// Abandoned before receipt.
   cancelled,
+
+  /// Saved by a member of staff and waiting for the owner (Phase 6.5c).
+  ///
+  /// The document and its lines are written - that is what makes it a *pending*
+  /// GRN rather than a promise of one - and **nothing has posted**: no batch
+  /// stock, no supplier payable. `decide_approval()` moves it to the status the
+  /// save asked for, which for a receipt fires the same triggers a direct write
+  /// fired. Until then its lines stay editable, because the document is still
+  /// being prepared rather than recorded.
+  pendingApproval,
 }
 
 /// Parses a Postgres `purchase_status` literal into a [PurchaseStatus].
 ///
 /// Anything unrecognised falls back to [PurchaseStatus.draft], which is the
-/// least destructive reading: a draft can still be corrected.
+/// least destructive reading: a draft can still be corrected. `pending_approval`
+/// has a case of its own rather than falling in here - reading a document that is
+/// waiting for the owner as a draft would hide the one thing its owner needs to
+/// see.
 PurchaseStatus purchaseStatusFromDb(String? raw) =>
     switch (raw?.trim().toLowerCase()) {
       'ordered' => PurchaseStatus.ordered,
       'received' => PurchaseStatus.received,
       'cancelled' => PurchaseStatus.cancelled,
+      'pending_approval' => PurchaseStatus.pendingApproval,
       _ => PurchaseStatus.draft,
     };
 
@@ -44,6 +58,7 @@ extension PurchaseStatusX on PurchaseStatus {
     PurchaseStatus.ordered => 'ordered',
     PurchaseStatus.received => 'received',
     PurchaseStatus.cancelled => 'cancelled',
+    PurchaseStatus.pendingApproval => 'pending_approval',
   };
 
   /// The label shown in the UI.
@@ -52,10 +67,18 @@ extension PurchaseStatusX on PurchaseStatus {
     PurchaseStatus.ordered => 'Ordered',
     PurchaseStatus.received => 'Received',
     PurchaseStatus.cancelled => 'Cancelled',
+    PurchaseStatus.pendingApproval => 'Waiting for approval',
   };
 
   /// Whether stock and the ledger have been posted for this document.
+  ///
+  /// `pendingApproval` is deliberately NOT posted, however it was saved: a
+  /// staged receipt has created its batches and written its lines, and nothing
+  /// has moved.
   bool get isPosted => this == PurchaseStatus.received;
+
+  /// Whether the owner still has to answer for this document.
+  bool get isPendingApproval => this == PurchaseStatus.pendingApproval;
 
   /// Whether its lines may still be edited.
   ///
@@ -63,8 +86,15 @@ extension PurchaseStatusX on PurchaseStatus {
   /// change a document whose stock has already been applied, and the triggers
   /// deliberately do not reverse it. Corrections go through a purchase return or
   /// a stock adjustment.
+  ///
+  /// A waiting document **is** editable: it is the one being proposed, and the
+  /// person proposing it has to be able to finish the job - a pending GRN whose
+  /// receipt details were incomplete would be unanswerable. A save of it stays a
+  /// save so the owner is asked once, about what the document finally says.
   bool get isEditable =>
-      this == PurchaseStatus.draft || this == PurchaseStatus.ordered;
+      this == PurchaseStatus.draft ||
+      this == PurchaseStatus.ordered ||
+      this == PurchaseStatus.pendingApproval;
 }
 
 /// Round-trips [PurchaseStatus] with the `purchase_status` literal.

@@ -20,6 +20,8 @@ ApprovalRequest buildApprovalRequest({
     'discount_amount': 100,
     'bill_gross': 546,
   },
+  String? targetTable,
+  String? targetId,
   DateTime? requestedAt,
 }) => ApprovalRequest(
   id: id,
@@ -30,6 +32,8 @@ ApprovalRequest buildApprovalRequest({
   status: status,
   summary: summary,
   payload: payload,
+  targetTable: targetTable,
+  targetId: targetId,
 );
 
 /// One decision a test saw the screen make.
@@ -95,6 +99,23 @@ class FakeApprovalsRepository implements ApprovalsRepository {
     }
     for (final request in _pending) {
       if (request.id == id) {
+        return request;
+      }
+    }
+    return null;
+  }
+
+  @override
+  Future<ApprovalRequest?> pendingForTarget({
+    required String targetTable,
+    required String targetId,
+  }) async {
+    final error = errorToThrow;
+    if (error != null) {
+      throw error;
+    }
+    for (final request in _pending) {
+      if (request.targetTable == targetTable && request.targetId == targetId) {
         return request;
       }
     }
