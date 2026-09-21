@@ -25,6 +25,11 @@ import 'package:app/features/sales/data/sale_totals.dart';
 /// inventing a percentage. Everything else it needs is read off the cart - including
 /// whether any line is a Schedule H, H1, X or narcotic medicine, which is what makes
 /// a prescriber's name mandatory (D-072).
+///
+/// The bill's own discount is checked here too, and **on the bill's tax-inclusive total
+/// before it** - so the counter refuses a discount the server would refuse, with the
+/// sentence it would say, rather than discovering it one round trip later in front of a
+/// customer.
 String? saleRefusal({required PosCart cart, double? packageMarkupPercent}) {
   for (final line in cart.lines) {
     final refusal = SaleTotals.discountRefusal(
@@ -43,6 +48,20 @@ String? saleRefusal({required PosCart cart, double? packageMarkupPercent}) {
     if (rateRefusal != null) {
       return rateRefusal;
     }
+  }
+
+  // The bill-level discount, once, because it is a figure about the document rather than
+  // about any one line. Checked after the lines for the server's own reason: it prices
+  // and validates the lines first and shares the discount out afterwards, so a bad line
+  // is the sentence a counter hears - and the same order keeps the two refusals from
+  // disagreeing about which one is wrong.
+  final billRefusal = SaleTotals.billDiscountRefusal(
+    saleType: cart.saleType,
+    billDiscount: cart.billDiscount,
+    billGross: SaleTotals.billGross(cart.lines, saleType: cart.saleType),
+  );
+  if (billRefusal != null) {
+    return billRefusal;
   }
 
   switch (cart.saleType) {

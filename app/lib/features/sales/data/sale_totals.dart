@@ -28,6 +28,15 @@
 ///    number of paise, and `1.005` does not come out a paisa short of what the
 ///    column will hold.
 ///
+/// **The bill-level discount** (migration 00042, owner 2026-09-21) is applied here on
+/// the same basis and in the same order the server applies it: one amount in rupees
+/// comes off the tax-inclusive total, it is **distributed across the lines** in
+/// proportion to each line's own total with the last line taking the rounding
+/// remainder ([SaleTotals.billDiscountShares]), and each line's value and tax are then extracted
+/// from its discounted total. So a line's `discount` is its own percentage **plus** its
+/// share of the bill's, which is what keeps the document's `discountTotal` the sum of
+/// its lines and the receipt's `Discount -Rs 46.00` the figure the counter typed.
+///
 /// The money is carried as `double` rather than as an integer-paise type because
 /// the models decode `numeric(14,2)` columns into `double` and a parallel paise
 /// type would exist only to be converted at every boundary. The rounding rule is
@@ -97,6 +106,23 @@ class SaleDocumentTotals {
   final double grandTotal;
 }
 
+/// A basket priced: every line's own totals, and the document's.
+///
+/// Both halves come out of one walk of the lines ([SaleTotals.price]), so a widget
+/// showing the basket and the write sending it cannot describe two different bills -
+/// a disagreement there is a receipt that differs from the amount just taken.
+class SalePricedBasket {
+  /// Creates a priced basket.
+  const SalePricedBasket({required this.lines, required this.totals});
+
+  /// Every line's totals, in cart order, each carrying its share of a bill-level
+  /// discount when there is one.
+  final List<SaleLineTotals> lines;
+
+  /// The document's totals: the sums of [lines].
+  final SaleDocumentTotals totals;
+}
+
 /// Line and document totals for a sale, and the pricing rules the server applies.
 ///
 /// The refusals are here rather than in the screen because they are pricing rules
@@ -145,7 +171,9 @@ abstract final class SaleTotals {
     total - taxableFromInclusive(total: total, gstPercent: gstPercent),
   );
 
-  /// The full breakdown of one cart line, on [saleType]'s basis.
+  /// The full breakdown of one cart line, on [saleType]'s basis, with
+  /// [discountShare] - this line's share of a bill-level discount - taken off
+  /// alongside its own.
   ///
   /// What a line may carry is the type's business, and this applies the type as the
   /// server applies it rather than trusting what the cart happens to hold: a package
@@ -153,19 +181,22 @@ abstract final class SaleTotals {
   /// A line that *does* carry one the type forbids is refused by [discountRefusal]
   /// before it is sent - the server refuses it too, and would not silently price it
   /// at zero.
+  ///
+  /// [discountShare] is required rather than defaulted, deliberately: a caller that
+  /// forgot a bill-level discount would silently price a bill the server would not
+  /// store, and a required parameter is the one place that mistake is caught before a
+  /// customer sees it. Pass 0 when the bill carries none, or the line's own share from
+  /// [billDiscountShares].
   static SaleLineTotals forLine(
     SaleCartLine line, {
     required TaxSplit split,
     required SaleType saleType,
+    required double discountShare,
   }) {
     final gross = PurchaseTotals.round2(line.qty * line.rate);
-    final discount = saleType.hasDiscount
-        ? discountAmount(
-            qty: line.qty,
-            rate: line.rate,
-            discountPercent: line.discountPercent,
-          )
-        : 0.0;
+    final discount = PurchaseTotals.round2(
+      _ownDiscount(line, saleType: saleType) + discountShare,
+    );
     final total = PurchaseTotals.round2(gross - discount);
     final slab = saleType.chargesGst ? line.gstPercent : 0.0;
 
@@ -194,31 +225,152 @@ abstract final class SaleTotals {
     );
   }
 
-  /// The document totals for [lines], on [saleType]'s basis.
+  /// The document totals for [lines], on [saleType]'s basis, with [billDiscount]
+  /// shared across them.
+  ///
+  /// A thin face on [price] for callers that want only the header - the counter shows
+  /// both halves, and the write sends both.
   static SaleDocumentTotals forLines(
     List<SaleCartLine> lines, {
     required TaxSplit split,
     required SaleType saleType,
+    required double billDiscount,
+  }) => price(
+    lines,
+    split: split,
+    saleType: saleType,
+    billDiscount: billDiscount,
+  ).totals;
+
+  /// [lines] priced as a document: each line's totals, and the sums of them.
+  ///
+  /// The one walk that works out a bill-level discount, and the reason both halves come
+  /// back together: the counter's preview and the payload it writes read the same
+  /// figures rather than each deriving their own.
+  static SalePricedBasket price(
+    List<SaleCartLine> lines, {
+    required TaxSplit split,
+    required SaleType saleType,
+    required double billDiscount,
   }) {
+    final shares = billDiscountShares(
+      lines,
+      saleType: saleType,
+      billDiscount: billDiscount,
+    );
+
+    final lineTotals = <SaleLineTotals>[
+      for (var index = 0; index < lines.length; index++)
+        forLine(
+          lines[index],
+          split: split,
+          saleType: saleType,
+          discountShare: shares[index],
+        ),
+    ];
+
     var subTotal = 0.0;
     var discountTotal = 0.0;
     var taxTotal = 0.0;
     var grandTotal = 0.0;
 
-    for (final line in lines) {
-      final totals = forLine(line, split: split, saleType: saleType);
+    for (final totals in lineTotals) {
       subTotal += totals.taxable;
       discountTotal += totals.discount;
       taxTotal += totals.tax;
       grandTotal += totals.total;
     }
 
-    return SaleDocumentTotals(
-      subTotal: PurchaseTotals.round2(subTotal),
-      discountTotal: PurchaseTotals.round2(discountTotal),
-      taxTotal: PurchaseTotals.round2(taxTotal),
-      grandTotal: PurchaseTotals.round2(grandTotal),
+    return SalePricedBasket(
+      lines: lineTotals,
+      totals: SaleDocumentTotals(
+        subTotal: PurchaseTotals.round2(subTotal),
+        discountTotal: PurchaseTotals.round2(discountTotal),
+        taxTotal: PurchaseTotals.round2(taxTotal),
+        grandTotal: PurchaseTotals.round2(grandTotal),
+      ),
     );
+  }
+
+  /// What a line's own percentage discount takes off it, or 0 when its type has none.
+  static double _ownDiscount(SaleCartLine line, {required SaleType saleType}) =>
+      saleType.hasDiscount
+      ? discountAmount(
+          qty: line.qty,
+          rate: line.rate,
+          discountPercent: line.discountPercent,
+        )
+      : 0.0;
+
+  /// What a line comes to before ANY bill-level discount: `quantity x rate` less its
+  /// own percentage discount.
+  ///
+  /// The figure the server distributes the bill's discount in proportion to - its
+  /// `sale_items.total_amount` at the moment the lines have been priced and the bill's
+  /// discount has not.
+  static double lineGross(SaleCartLine line, {required SaleType saleType}) =>
+      PurchaseTotals.round2(
+        line.qty * line.rate - _ownDiscount(line, saleType: saleType),
+      );
+
+  /// The bill's tax-inclusive total **before** the bill-level discount: the sum of the
+  /// lines' own totals.
+  ///
+  /// The server takes D-071's 10% cap on this figure (migration 00042), so the counter
+  /// refuses on the same number rather than on a total the discount has already moved.
+  static double billGross(
+    List<SaleCartLine> lines, {
+    required SaleType saleType,
+  }) {
+    var gross = 0.0;
+    for (final line in lines) {
+      gross += lineGross(line, saleType: saleType);
+    }
+    return PurchaseTotals.round2(gross);
+  }
+
+  /// Each line's share of a bill-level discount of [billDiscount], in cart order.
+  ///
+  /// The server's own rule (migration 00042): a share in proportion to each line's own
+  /// total, and the **last line takes the rounding remainder**, so the shares add back
+  /// to the rupee figure the counter typed instead of to something a paisa short of it.
+  ///
+  /// All zeros when there is nothing to share, or when the type has no discount concept
+  /// at all - a package or transfer bill is priced from cost and is refused a discount
+  /// outright ([billDiscountRefusal]).
+  static List<double> billDiscountShares(
+    List<SaleCartLine> lines, {
+    required SaleType saleType,
+    required double billDiscount,
+  }) {
+    if (billDiscount == 0 || !saleType.hasDiscount || lines.isEmpty) {
+      return List<double>.filled(lines.length, 0);
+    }
+
+    final gross = billGross(lines, saleType: saleType);
+    if (gross <= 0) {
+      return List<double>.filled(lines.length, 0);
+    }
+
+    final shares = <double>[];
+    var shared = 0.0;
+
+    for (var index = 0; index < lines.length; index++) {
+      final isLast = index == lines.length - 1;
+      final share = isLast
+          // Whatever the shares above left over. This is what makes them add back to
+          // the figure the counter entered rather than to something a paisa short of it.
+          ? PurchaseTotals.round2(billDiscount - shared)
+          : PurchaseTotals.round2(
+              lineGross(lines[index], saleType: saleType) *
+                  billDiscount /
+                  gross,
+            );
+      shared = PurchaseTotals.round2(shared + share);
+      shares.add(share);
+    }
+
+    return shares;
   }
 
   /// The retail price of one unit, as `checkout_sale()` resolves it.
@@ -282,6 +434,44 @@ abstract final class SaleTotals {
       return 'A ${saleType.label.toLowerCase()} sale has no discount.';
     }
     if (discountPercent > 10) {
+      return 'A discount above 10% needs the owner\u2019s approval, and the '
+          'approval workflow is not built yet - bill at 10% or less.';
+    }
+    return null;
+  }
+
+  /// Why a bill-level discount cannot be applied, or `null` when it can.
+  ///
+  /// The server's own rules, in the server's own order (migration 00042), because the
+  /// counter refuses on the figure the server refuses on rather than one round trip
+  /// later:
+  ///
+  ///  * never negative;
+  ///  * nothing at all on a package or transfer bill, which has no discount concept;
+  ///  * never larger than the bill;
+  ///  * never above 10% of the bill's tax-inclusive total ([billGross] - the total
+  ///    BEFORE this discount). Above that the owner's approval is required, and that
+  ///    approval (`approval_requests`, Phase 6.5c) does not exist, so the cap is a real
+  ///    ceiling rather than a prompt - and **at exactly 10% the sale proceeds**.
+  static String? billDiscountRefusal({
+    required SaleType saleType,
+    required double billDiscount,
+    required double billGross,
+  }) {
+    if (billDiscount < 0) {
+      return 'A discount cannot be negative.';
+    }
+    if (billDiscount == 0) {
+      return null;
+    }
+    if (!saleType.hasDiscount) {
+      return 'A ${saleType.label.toLowerCase()} sale has no discount.';
+    }
+    if (billDiscount > billGross) {
+      return 'The discount of ${billDiscount.toStringAsFixed(2)} is larger than '
+          'the bill\u2019s ${billGross.toStringAsFixed(2)}.';
+    }
+    if (billDiscount > billGross * 0.10) {
       return 'A discount above 10% needs the owner\u2019s approval, and the '
           'approval workflow is not built yet - bill at 10% or less.';
     }

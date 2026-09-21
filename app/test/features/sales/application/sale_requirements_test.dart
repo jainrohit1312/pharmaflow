@@ -315,6 +315,71 @@ void main() {
       );
     });
 
+    test('a bill-level discount above the cap is refused, on the bill', () {
+      final container = _container();
+      _pos(container)
+        ..setPatient(_patient())
+        ..addLine(
+          product: buildProduct('Dolo 650'),
+          batch: buildBatch(),
+          qty: 1,
+        )
+        // One unit at the fixture's 150 MRP, so the bill is 150.00 and its 10% cap is
+        // 15.00 - and the cap is taken on the bill BEFORE this discount, as the server
+        // takes it.
+        ..setBillDiscount(15.01);
+
+      expect(_refusal(container), contains('above 10%'));
+    });
+
+    test('a bill-level discount of exactly the cap is allowed', () {
+      final container = _container();
+      _pos(container)
+        ..setPatient(_patient())
+        ..addLine(
+          product: buildProduct('Dolo 650'),
+          batch: buildBatch(),
+          qty: 1,
+        )
+        ..setBillDiscount(15);
+
+      expect(_refusal(container), isNull);
+    });
+
+    test('a bill-level discount larger than the bill is refused', () {
+      final container = _container();
+      _pos(container)
+        ..setPatient(_patient())
+        ..addLine(
+          product: buildProduct('Dolo 650'),
+          batch: buildBatch(),
+          qty: 1,
+        )
+        ..setBillDiscount(151);
+
+      expect(_refusal(container), contains('larger than the bill'));
+    });
+
+    test('a bill-level discount is refused outright on a package sale', () {
+      final container = _container();
+      _pos(container)
+        ..setSaleType(SaleType.package)
+        ..setCustomer('hospital-account')
+        ..setPatientDetails(name: 'ZZTEST patient', mobile: '9876543210')
+        ..setHospitalReference('PKG-1')
+        ..setBillDiscount(5)
+        ..addLine(
+          product: buildProduct('Dolo 650'),
+          batch: buildBatch(),
+          qty: 1,
+        );
+
+      expect(
+        _refusal(container, packageMarkupPercent: 20),
+        contains('no discount'),
+      );
+    });
+
     test('a retail rate above the batch MRP is refused, naming the product', () {
       // And it is refused *before* the missing patient is reported: a bill with
       // both wrong names the line, because the line is what a counter can act on

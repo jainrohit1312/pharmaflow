@@ -38,6 +38,7 @@ class PosCart {
     this.patientMobile,
     this.paymentMode = PaymentMode.cash,
     this.tendered = 0,
+    this.billDiscount = 0,
     this.placeOfSupply,
     this.saleType = SaleType.counter,
     this.admissionId,
@@ -75,6 +76,15 @@ class PosCart {
 
   /// What the customer has handed over, before any change is worked out.
   final double tendered;
+
+  /// The bill-level discount, in rupees, as the counter typed it (owner, 2026-09-21).
+  ///
+  /// One amount off the **tax-inclusive** total - the owner's own rule, because the
+  /// discount comes off a price that already contains the tax, so the tax is then
+  /// computed on the smaller figure. It rides on the *bill* rather than on a line
+  /// because he asked for it once near the totals instead of on every row, and
+  /// [SaleTotals.price] shares it across the lines the way `checkout_sale()` shares it.
+  final double billDiscount;
 
   /// Where the goods are going, which decides the tax split.
   final String? placeOfSupply;
@@ -184,6 +194,7 @@ class PosCart {
     patientMobile: patientMobile,
     paymentMode: paymentMode,
     tendered: tendered,
+    billDiscount: billDiscount,
     placeOfSupply: placeOfSupply,
     saleType: saleType,
     admissionId: admissionId,
@@ -210,6 +221,7 @@ class PosCart {
     patientMobile: value?.phone,
     paymentMode: paymentMode,
     tendered: tendered,
+    billDiscount: billDiscount,
     placeOfSupply: placeOfSupply,
     saleType: saleType,
     admissionId: admissionId,
@@ -240,6 +252,7 @@ class PosCart {
     patientMobile: null,
     paymentMode: paymentMode,
     tendered: tendered,
+    billDiscount: billDiscount,
     placeOfSupply: placeOfSupply,
     saleType: saleType,
     admissionId: admissionId,
@@ -260,6 +273,7 @@ class PosCart {
     patientMobile: mobile,
     paymentMode: paymentMode,
     tendered: tendered,
+    billDiscount: billDiscount,
     placeOfSupply: placeOfSupply,
     saleType: saleType,
     admissionId: admissionId,
@@ -283,6 +297,7 @@ class PosCart {
     patientMobile: patientMobile,
     paymentMode: paymentMode,
     tendered: tendered,
+    billDiscount: billDiscount,
     placeOfSupply: placeOfSupply,
     saleType: saleType,
     admissionId: value?.id,
@@ -303,6 +318,7 @@ class PosCart {
     patientMobile: patientMobile,
     paymentMode: paymentMode,
     tendered: tendered,
+    billDiscount: billDiscount,
     placeOfSupply: placeOfSupply,
     saleType: saleType,
     admissionId: admissionId,
@@ -327,6 +343,7 @@ class PosCart {
     patientMobile: patientMobile,
     paymentMode: paymentMode,
     tendered: tendered,
+    billDiscount: billDiscount,
     placeOfSupply: placeOfSupply,
     saleType: saleType,
     admissionId: admissionId,
@@ -350,6 +367,7 @@ class PosCart {
     patientMobile: patientMobile,
     paymentMode: paymentMode,
     tendered: tendered,
+    billDiscount: billDiscount,
     placeOfSupply: placeOfSupply,
     saleType: saleType,
     admissionId: admissionId,
@@ -370,6 +388,7 @@ class PosCart {
     patientMobile: patientMobile,
     paymentMode: paymentMode,
     tendered: tendered,
+    billDiscount: billDiscount,
     placeOfSupply: value,
     saleType: saleType,
     admissionId: admissionId,
@@ -390,6 +409,7 @@ class PosCart {
     patientMobile: patientMobile,
     paymentMode: value,
     tendered: tendered,
+    billDiscount: billDiscount,
     placeOfSupply: placeOfSupply,
     saleType: saleType,
     admissionId: admissionId,
@@ -410,6 +430,34 @@ class PosCart {
     patientMobile: patientMobile,
     paymentMode: paymentMode,
     tendered: value,
+    billDiscount: billDiscount,
+    placeOfSupply: placeOfSupply,
+    saleType: saleType,
+    admissionId: admissionId,
+    admissionNo: admissionNo,
+    doctorId: doctorId,
+    doctorName: doctorName,
+    hospitalReference: hospitalReference,
+    fromLocation: fromLocation,
+    toLocation: toLocation,
+    transferReason: transferReason,
+  );
+
+  /// A copy with the bill-level discount replaced.
+  ///
+  /// The one copy that moves it, so every other action leaves the discount where the
+  /// counter put it - which is what a counter expects of a figure it typed for *this*
+  /// bill and no other. It does **not** carry [idempotencyKey] forward, like every other
+  /// copy but [withIdempotencyKey]: the key identifies a payload, and a changed discount
+  /// is a different payload.
+  PosCart withBillDiscount(double value) => PosCart(
+    lines: lines,
+    customerId: customerId,
+    patientName: patientName,
+    patientMobile: patientMobile,
+    paymentMode: paymentMode,
+    tendered: tendered,
+    billDiscount: value,
     placeOfSupply: placeOfSupply,
     saleType: saleType,
     admissionId: admissionId,
@@ -436,6 +484,7 @@ class PosCart {
     patientMobile: patientMobile,
     paymentMode: paymentMode,
     tendered: tendered,
+    billDiscount: billDiscount,
     placeOfSupply: placeOfSupply,
     saleType: value,
     admissionId: admissionId,
@@ -460,6 +509,7 @@ class PosCart {
     patientMobile: patientMobile,
     paymentMode: paymentMode,
     tendered: tendered,
+    billDiscount: billDiscount,
     placeOfSupply: placeOfSupply,
     saleType: saleType,
     admissionId: admissionId,
@@ -659,6 +709,15 @@ class PosController extends _$PosController {
 
   /// Records what the customer handed over.
   void setTendered(double amount) => state = state.withTendered(amount);
+
+  /// Records the bill-level discount, in rupees.
+  ///
+  /// Deliberately unvalidated here. What a discount may be depends on the whole bill -
+  /// its tax-inclusive total, and whether its type has a discount concept at all - so
+  /// the rules live in [SaleTotals.billDiscountRefusal] and are applied before the write
+  /// (through `saleRefusal`), where the counter hears them as a sentence it can act on.
+  /// A field that refused mid-keystroke would refuse the "4" of "46".
+  void setBillDiscount(double amount) => state = state.withBillDiscount(amount);
 
   /// Empties the basket and forgets everything chosen for it.
   void clear() => state = const PosCart();

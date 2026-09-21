@@ -111,6 +111,7 @@ SaleDocumentTotals _totals(ProviderContainer container) {
     cart.lines,
     split: TaxSplit.intraState,
     saleType: cart.saleType,
+    billDiscount: cart.billDiscount,
   );
 }
 
@@ -167,6 +168,28 @@ void main() {
     expect(saved.status, SaleStatus.completed);
     expect(saved.paymentMode, PaymentMode.cash);
   });
+
+  test(
+    'writes the bill-level discount, and answers with the bill it produced',
+    () async {
+      final sales = FakeSalesRepository();
+      final container = _withStock(sales: sales).container;
+      container.read(posControllerProvider.notifier).setBillDiscount(20);
+      _ringUp(container);
+
+      final saved = await _write(container);
+
+      // The payload carries the ONE amount and not a per-line share of it, which is what
+      // the RPC shares out - and what comes home is the bill it produced: 200 less 20 is
+      // 180, of which 171.43 is value and 8.57 the tax it contains.
+      expect(sales.checkouts.single.billDiscount, 20);
+      expect(sales.checkouts.single.toPayload()['bill_discount'], 20);
+      expect(saved.grandTotal, 180);
+      expect(saved.discountTotal, 20);
+      expect(saved.subTotal, 171.43);
+      expect(saved.taxTotal, 8.57);
+    },
+  );
 
   test(
     'a counter sale with no tender typed records the bill as paid',

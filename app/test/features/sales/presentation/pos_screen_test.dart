@@ -387,6 +387,84 @@ void main() {
     expect(find.text(Formatters.currency(33.19)), findsOneWidget);
   });
 
+  testWidgets('a bill discount is on screen without a tap, and moves the bill', (
+    tester,
+  ) async {
+    await pumpSalesApp(
+      tester,
+      repository: FakeSalesRepository(),
+      searchResults: <Product>[buildProduct('Dolo 650')],
+      batches: <BatchStatus>[_batch()],
+      initialLocation: Routes.pos,
+    );
+
+    // Nothing rung up, so nothing to discount.
+    expect(find.widgetWithText(TextFormField, 'Discount ₹'), findsNothing);
+
+    await _addLine(tester);
+    await _type(tester, 'Qty', '2');
+
+    // The field the owner asked for (2026-09-21): one amount, near the totals, and on
+    // screen without a tap - which is what separates it from a line's rate and slab,
+    // which stay behind their own toggle.
+    expect(find.widgetWithText(TextFormField, 'Discount ₹'), findsOneWidget);
+    expect(
+      find.byTooltip('Rate, discount and GST'),
+      findsOneWidget,
+      reason: 'the per-line pricing detail is still one tap away',
+    );
+
+    await _type(tester, 'Discount ₹', '40');
+
+    // 400 less 40 is 360 charged, of which 342.86 is value and 17.14 the tax it contains -
+    // extracted from the DISCOUNTED price, not from the original 400.
+    expect(find.text(Formatters.currency(342.86)), findsOneWidget);
+    expect(find.text(Formatters.currency(17.14)), findsOneWidget);
+    expect(find.text('-${Formatters.currency(40)}'), findsOneWidget);
+    // The line's own total, the bill's total and what was paid: all 360.
+    expect(find.text(Formatters.currency(360)), findsNWidgets(3));
+  });
+
+  testWidgets('writes the discount the counter typed, with no disagreement', (
+    tester,
+  ) async {
+    final sales = FakeSalesRepository();
+    final products = FakeProductsRepository(products: const <Product>[])
+      ..batchQuantities['batch-1'] = 10;
+    await pumpSalesApp(
+      tester,
+      repository: sales,
+      products: products,
+      searchResults: <Product>[buildProduct('Dolo 650')],
+      batches: <BatchStatus>[_batch()],
+      customers: <Customer>[_patient()],
+      initialLocation: Routes.pos,
+    );
+    await _addLine(tester);
+    await _type(tester, 'Qty', '2');
+    await _choosePatient(tester);
+    await _type(tester, 'Discount ₹', '40');
+    await _type(tester, 'Received', '360');
+
+    await tester.tap(find.widgetWithText(ElevatedButton, 'Take payment'));
+    await tester.pumpAndSettle();
+    await _confirm(tester);
+
+    // The one amount travels as itself - the server shares it out - and the bill that
+    // came home is the bill the counter showed.
+    expect(sales.checkouts.single.billDiscount, 40);
+    expect(sales.sales.single.grandTotal, 360);
+    expect(sales.sales.single.discountTotal, 40);
+    expect(sales.sales.single.taxTotal, 17.14);
+    expect(
+      find.text('Verified'),
+      findsNothing,
+      reason:
+          'the preview was the stored row, so there is nothing to reconcile',
+    );
+    expect(find.textContaining('bill sale-1'), findsOneWidget);
+  });
+
   testWidgets('an over-tender shows the change, and leaves no balance due', (
     tester,
   ) async {

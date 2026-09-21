@@ -108,11 +108,13 @@ class SaleCheckoutController extends _$SaleCheckoutController {
 
       await _requireStock(pharmacyId: pharmacyId, lines: cart.lines);
 
-      final totals = SaleTotals.forLines(
+      final priced = SaleTotals.price(
         cart.lines,
         split: split,
         saleType: cart.saleType,
+        billDiscount: cart.billDiscount,
       );
+      final totals = priced.totals;
       final paid = cart.paidFor(totals.grandTotal);
       // The last line of defence rather than the first: every type that can be left
       // unpaid requires a party (counter and IPD a patient, package an account), so
@@ -136,14 +138,13 @@ class SaleCheckoutController extends _$SaleCheckoutController {
 
       final checkout = SaleCheckout(
         lines: <SaleCheckoutLine>[
-          for (final line in cart.lines)
+          // The preview's own line totals, taken straight from `priced` rather than
+          // worked out a second time: the figures the dialog showed are the figures the
+          // payload carries, including each line's share of the bill's discount.
+          for (var index = 0; index < cart.lines.length; index++)
             SaleCheckoutLine.from(
-              line: line,
-              totals: SaleTotals.forLine(
-                line,
-                split: split,
-                saleType: cart.saleType,
-              ),
+              line: cart.lines[index],
+              totals: priced.lines[index],
               saleType: cart.saleType,
             ),
         ],
@@ -160,6 +161,7 @@ class SaleCheckoutController extends _$SaleCheckoutController {
         // the change handed back is not a payment, and `sales_payment_check`
         // refuses a sale paid beyond its total.
         amountPaid: paid,
+        billDiscount: cart.billDiscount,
         placeOfSupply: cart.placeOfSupply,
         fromLocation: cart.fromLocation,
         toLocation: cart.toLocation,

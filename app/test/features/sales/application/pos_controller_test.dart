@@ -42,6 +42,9 @@ SaleDocumentTotals _totals(ProviderContainer container) {
     cart.lines,
     split: TaxSplit.intraState,
     saleType: cart.saleType,
+    // The cart's own bill-level discount, so a test that types one asserts the bill it
+    // produces rather than a bill without it.
+    billDiscount: cart.billDiscount,
   );
 }
 
@@ -343,6 +346,53 @@ void main() {
     });
   });
 
+  group('the bill-level discount', () {
+    test('moves the bill, and the line it is shared onto', () {
+      final container = _container();
+      final pos = _pos(container)
+        ..addLine(
+          product: buildProduct('Dolo 650'),
+          batch: buildBatch(),
+          qty: 1,
+        );
+
+      // One unit at the fixture batch's 150 MRP: 142.86 of value and 7.14 of tax.
+      expect(_totals(container).grandTotal, 150);
+      expect(_totals(container).subTotal, 142.86);
+
+      pos.setBillDiscount(15);
+
+      // 15 off 150 leaves 135, and the tax comes out of the 135 rather than out of the
+      // 150 - which is the owner's own rule for the basis (2026-09-21).
+      expect(_totals(container).grandTotal, 135);
+      expect(_totals(container).discountTotal, 15);
+      expect(_totals(container).subTotal, 128.57);
+      expect(_totals(container).taxTotal, 6.43);
+    });
+
+    test('is one amount for the bill, never a percentage of a line', () {
+      // He asked for it once, near the totals. So what the counter types here must not
+      // turn up as a per-line percentage, and it must not displace one either.
+      final container = _container();
+      _pos(container)
+        ..addLine(
+          product: buildProduct('Dolo 650'),
+          batch: buildBatch(),
+          qty: 2,
+        )
+        ..setBillDiscount(14.29);
+
+      expect(_cart(container).billDiscount, 14.29);
+      expect(
+        _cart(container).lines.single.discountPercent,
+        0,
+        reason:
+            'the bill discount is an amount, and the line keeps its own figure',
+      );
+      expect(_totals(container).discountTotal, 14.29);
+    });
+  });
+
   group('how the sale will be settled', () {
     test(
       'records the customer, the mode, the tender and the place of supply',
@@ -472,6 +522,7 @@ void main() {
         ..setPaymentMode(PaymentMode.upi)
         ..setTendered(500)
         ..setPlaceOfSupply('Maharashtra')
+        ..setBillDiscount(15)
         ..clear();
 
       final cart = _cart(container);
@@ -480,6 +531,13 @@ void main() {
       expect(cart.paymentMode, PaymentMode.cash);
       expect(cart.tendered, 0);
       expect(cart.placeOfSupply, isNull);
+      expect(
+        cart.billDiscount,
+        0,
+        reason:
+            'a discount typed for the last customer must not survive into the '
+            'next one',
+      );
     });
   });
 
@@ -520,6 +578,7 @@ void main() {
           ..setPlaceOfSupply('Maharashtra')
           ..setPaymentMode(PaymentMode.upi)
           ..setTendered(105)
+          ..setBillDiscount(46)
           ..addLine(
             product: buildProduct('Dolo 650'),
             batch: buildBatch(),
@@ -549,6 +608,7 @@ void main() {
           'placeOfSupply': cart.placeOfSupply,
           'paymentMode': cart.paymentMode,
           'tendered': cart.tendered,
+          'billDiscount': cart.billDiscount,
           'saleType': cart.saleType,
           'key': cart.idempotencyKey,
         };
@@ -605,6 +665,10 @@ void main() {
         'setTendered': (
           apply: () => pos.setTendered(500),
           owns: <String>{'tendered', 'key'},
+        ),
+        'setBillDiscount': (
+          apply: () => pos.setBillDiscount(9),
+          owns: <String>{'billDiscount', 'key'},
         ),
         'setQty': (
           apply: () => pos.setQty('batch-1', 3),

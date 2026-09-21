@@ -46,10 +46,18 @@ SaleCartLine _line({
 );
 
 /// One line's breakdown, on the commonest basis: a counter sale, intra-state.
+///
+/// No bill-level discount: that is a figure about the whole document, so the group that
+/// tests it prices whole baskets rather than single lines.
 SaleLineTotals _counter(
   SaleCartLine line, {
   TaxSplit split = TaxSplit.intraState,
-}) => SaleTotals.forLine(line, split: split, saleType: SaleType.counter);
+}) => SaleTotals.forLine(
+  line,
+  split: split,
+  saleType: SaleType.counter,
+  discountShare: 0,
+);
 
 void main() {
   group('a line', () {
@@ -174,6 +182,7 @@ void main() {
         _line(rate: 96, gstPercent: 5),
         split: TaxSplit.intraState,
         saleType: SaleType.package,
+        discountShare: 0,
       );
 
       expect(totals.total, 96);
@@ -191,6 +200,7 @@ void main() {
         _line(rate: 96, discountPercent: 10, gstPercent: 5),
         split: TaxSplit.intraState,
         saleType: SaleType.package,
+        discountShare: 0,
       );
 
       expect(totals.discount, 0);
@@ -204,6 +214,7 @@ void main() {
         _line(qty: 2, rate: 80, discountPercent: 10, gstPercent: 5),
         split: TaxSplit.intraState,
         saleType: SaleType.transfer,
+        discountShare: 0,
       );
 
       expect(totals.discount, 0);
@@ -367,6 +378,7 @@ void main() {
         lines,
         split: TaxSplit.intraState,
         saleType: SaleType.counter,
+        billDiscount: 0,
       );
       final perLine = lines.map(_counter).toList(growable: false);
 
@@ -407,6 +419,7 @@ void main() {
         ],
         split: TaxSplit.intraState,
         saleType: SaleType.counter,
+        billDiscount: 0,
       );
 
       expect(
@@ -420,6 +433,7 @@ void main() {
         const <SaleCartLine>[],
         split: TaxSplit.intraState,
         saleType: SaleType.counter,
+        billDiscount: 0,
       );
 
       expect(totals.subTotal, 0);
@@ -437,11 +451,13 @@ void main() {
         lines,
         split: TaxSplit.intraState,
         saleType: SaleType.counter,
+        billDiscount: 0,
       );
       final inter = SaleTotals.forLines(
         lines,
         split: TaxSplit.interState,
         saleType: SaleType.counter,
+        billDiscount: 0,
       );
 
       expect(
@@ -450,6 +466,202 @@ void main() {
         reason: 'where the goods went changes the heads, not the tax',
       );
       expect(intra.grandTotal, inter.grandTotal);
+    });
+  });
+
+  group('a bill-level discount', () {
+    /// The owner's own example: a bill of 546, a discount of 46, and 500 to pay.
+    ///
+    /// Two lines, 2 x 105 at 5% and 2 x 168 at 12% - **the same bill**
+    /// `supabase/tests/phase7a_bill_discount.sql` writes, so the preview the counter shows
+    /// and the row the server stores are pinned to the same figures rather than to two
+    /// derivations that happen to look alike.
+    List<SaleCartLine> ownerExample() => <SaleCartLine>[
+      _line(qty: 2, rate: 105, gstPercent: 5),
+      _line(batchId: 'batch-2', qty: 2, rate: 168, gstPercent: 12),
+    ];
+
+    /// That example, or any other basket, priced as a document.
+    SalePricedBasket price(List<SaleCartLine> lines, double billDiscount) =>
+        SaleTotals.price(
+          lines,
+          split: TaxSplit.intraState,
+          saleType: SaleType.counter,
+          billDiscount: billDiscount,
+        );
+
+    test('546 less 46 is 500, and the tax comes out of the 500', () {
+      final priced = price(ownerExample(), 46);
+
+      expect(priced.totals.grandTotal, 500);
+      expect(priced.totals.discountTotal, 46);
+      expect(priced.totals.taxTotal, 42.13);
+      expect(priced.totals.subTotal, 457.87);
+      expect(
+        PurchaseTotals.round2(priced.totals.subTotal + priced.totals.taxTotal),
+        priced.totals.grandTotal,
+        reason:
+            'the header is the sum of its lines, which is what sharing the '
+            'discount across them keeps true',
+      );
+    });
+
+    test('shares it in proportion to each line, and the last takes the rest', () {
+      final priced = price(ownerExample(), 46);
+
+      // 210 of the 546 is the 5% line, so its share is 210 x 46 / 546 = 17.69, and the
+      // 12% line takes the remainder, 28.31.
+      expect(priced.lines[0].discount, 17.69);
+      expect(priced.lines[0].total, 192.31);
+      expect(priced.lines[1].discount, 28.31);
+      expect(priced.lines[1].total, 307.69);
+      expect(
+        PurchaseTotals.round2(priced.lines[0].total + priced.lines[1].total),
+        priced.totals.grandTotal,
+        reason: 'the lines still add up to the header they were priced into',
+      );
+    });
+
+    test('takes the tax out of the DISCOUNTED price, not the original', () {
+      final priced = price(ownerExample(), 46);
+
+      // 192.31 / 1.05 = 183.15 of value and 9.16 of tax; 307.69 / 1.12 = 274.72 + 32.97.
+      expect(priced.lines[0].taxable, 183.15);
+      expect(priced.lines[0].tax, 9.16);
+      expect(priced.lines[1].taxable, 274.72);
+      expect(priced.lines[1].tax, 32.97);
+
+      expect(
+        priced.totals.taxTotal,
+        lessThan(price(ownerExample(), 0).totals.taxTotal),
+        reason:
+            'a discount given at the time of supply reduces the tax with it - '
+            'charging the tax of the undiscounted bill would over-report GST',
+      );
+    });
+
+    test('the last line absorbs the remainder, so the shares add to the rupee', () {
+      // Seven paise is not divisible by three in proportion: 10 x 0.07 / 60 = 0.0116...,
+      // 20 x 0.07 / 60 = 0.0233..., and the last line takes the remaining 0.04 rather
+      // than its own 0.03 - which is what makes the shares add back to what was typed.
+      final lines = <SaleCartLine>[
+        _line(rate: 10, gstPercent: 5),
+        _line(batchId: 'batch-2', rate: 20, gstPercent: 5),
+        _line(batchId: 'batch-3', rate: 30, gstPercent: 5),
+      ];
+
+      expect(
+        SaleTotals.billDiscountShares(
+          lines,
+          saleType: SaleType.counter,
+          billDiscount: 0.07,
+        ),
+        <double>[0.01, 0.02, 0.04],
+      );
+      expect(price(lines, 0.07).totals.discountTotal, 0.07);
+    });
+
+    test('a bill that names no discount is priced exactly as before', () {
+      final priced = price(ownerExample(), 0);
+
+      // 210 at 5% is 200 + 10, and 336 at 12% is 300 + 36, so the bill is 546.
+      expect(priced.totals.grandTotal, 546);
+      expect(priced.totals.subTotal, 500);
+      expect(priced.totals.taxTotal, 46);
+      expect(priced.totals.discountTotal, 0);
+      expect(priced.lines[0].discount, 0);
+    });
+
+    test("a line's own discount and the bill's share both come off it", () {
+      final lines = <SaleCartLine>[
+        _line(qty: 2, rate: 105, discountPercent: 10, gstPercent: 5),
+      ];
+
+      // 210 less its own 10% is 189.00; a further 9 off the bill leaves 180.00, and the
+      // line records BOTH (21.00 + 9.00) - which is what keeps `discountTotal` the sum
+      // of the lines rather than a figure of its own.
+      final priced = price(lines, 9);
+
+      expect(priced.lines.single.discount, 30);
+      expect(priced.lines.single.total, 180);
+      expect(priced.totals.discountTotal, 30);
+      expect(priced.totals.subTotal, 171.43);
+      expect(priced.totals.taxTotal, 8.57);
+    });
+
+    test('the cap is taken on the bill BEFORE the discount', () {
+      final lines = ownerExample();
+
+      expect(SaleTotals.billGross(lines, saleType: SaleType.counter), 546);
+      expect(
+        SaleTotals.billDiscountRefusal(
+          saleType: SaleType.counter,
+          billDiscount: 54.6,
+          billGross: 546,
+        ),
+        isNull,
+        reason: 'exactly 10% of the bill is allowed',
+      );
+      expect(
+        SaleTotals.billDiscountRefusal(
+          saleType: SaleType.counter,
+          billDiscount: 54.61,
+          billGross: 546,
+        ),
+        contains('above 10%'),
+        reason:
+            'a paisa above the cap needs an approval that does not exist yet',
+      );
+    });
+
+    test('is refused when it is larger than the bill, or negative', () {
+      expect(
+        SaleTotals.billDiscountRefusal(
+          saleType: SaleType.counter,
+          billDiscount: 600,
+          billGross: 546,
+        ),
+        contains('larger than the bill'),
+      );
+      expect(
+        SaleTotals.billDiscountRefusal(
+          saleType: SaleType.counter,
+          billDiscount: -1,
+          billGross: 546,
+        ),
+        contains('cannot be negative'),
+      );
+    });
+
+    test('is refused outright where the type has no discount concept', () {
+      for (final type in <SaleType>[SaleType.package, SaleType.transfer]) {
+        expect(
+          SaleTotals.billDiscountRefusal(
+            saleType: type,
+            billDiscount: 1,
+            billGross: 546,
+          ),
+          contains('has no discount'),
+          reason: type.label,
+        );
+        expect(
+          SaleTotals.billDiscountShares(
+            ownerExample(),
+            saleType: type,
+            billDiscount: 46,
+          ),
+          <double>[0, 0],
+          reason: 'nothing is shared out on a bill that may not carry one',
+        );
+      }
+    });
+
+    test('an empty basket with a discount comes to nothing, not an error', () {
+      final priced = price(const <SaleCartLine>[], 46);
+
+      expect(priced.lines, isEmpty);
+      expect(priced.totals.grandTotal, 0);
+      expect(priced.totals.discountTotal, 0);
     });
   });
 
@@ -463,6 +675,7 @@ void main() {
         <SaleCartLine>[_line(rate: 105, gstPercent: 5)],
         split: TaxSplit.intraState,
         saleType: SaleType.counter,
+        billDiscount: 0,
       );
 
       expect(totals.grandTotal, 105);
@@ -483,6 +696,7 @@ void main() {
         zeroSlab,
         split: TaxSplit.intraState,
         saleType: SaleType.counter,
+        billDiscount: 0,
       );
 
       expect(totals.grandTotal, 120);

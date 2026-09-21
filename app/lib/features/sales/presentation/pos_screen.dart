@@ -54,6 +54,11 @@ class _PosScreenState extends ConsumerState<PosScreen> {
   final _tender = TextEditingController();
   final _placeOfSupply = TextEditingController();
 
+  /// The bill-level discount, driven rather than left to the widget: the write clears it
+  /// with the rest of the bill once the sale is saved, so a discount cannot leak onto the
+  /// next customer's bill.
+  final _billDiscount = TextEditingController();
+
   /// The product search's field, driven rather than left to the widget: a
   /// selection, a dialog and a refusal all have to empty it and put the caret back.
   final _search = TextEditingController();
@@ -104,6 +109,7 @@ class _PosScreenState extends ConsumerState<PosScreen> {
     _debounce.dispose();
     _tender.dispose();
     _placeOfSupply.dispose();
+    _billDiscount.dispose();
     _search.dispose();
     _searchFocus.dispose();
     super.dispose();
@@ -254,11 +260,16 @@ class _PosScreenState extends ConsumerState<PosScreen> {
     final split =
         ref.watch(saleTaxSplitProvider(cart.placeOfSupply)).value ??
         TaxSplit.intraState;
-    final totals = SaleTotals.forLines(
+    // The lines and the header out of ONE walk, so the discount the counter types and the
+    // totals it watches move together - and so the figures on screen are the figures the
+    // write sends (D-075's whole point).
+    final priced = SaleTotals.price(
       cart.lines,
       split: split,
       saleType: cart.saleType,
+      billDiscount: cart.billDiscount,
     );
+    final totals = priced.totals;
     final paid = cart.paidFor(totals.grandTotal);
     final change = SaleTotals.changeFor(
       tendered: SaleTotals.tenderedFor(
@@ -394,11 +405,9 @@ class _PosScreenState extends ConsumerState<PosScreen> {
                             key: ValueKey<String>(cart.lines[index].batchId),
                             line: cart.lines[index],
                             order: index,
-                            lineTotal: SaleTotals.forLine(
-                              cart.lines[index],
-                              split: split,
-                              saleType: cart.saleType,
-                            ).total,
+                            // The line's own total, with its share of the bill's discount
+                            // already off it - the figure the receipt will print for it.
+                            lineTotal: priced.lines[index].total,
                             focusQty:
                                 _pendingQtyFocus == cart.lines[index].batchId,
                             onQtyFocused: () {
@@ -483,6 +492,8 @@ class _PosScreenState extends ConsumerState<PosScreen> {
               split: split,
               paid: paid,
               change: change,
+              discount: _billDiscount,
+              onDiscountChanged: pos.setBillDiscount,
             ),
             const SizedBox(height: 24),
             AppButton.primary(
@@ -548,11 +559,14 @@ class _PosScreenState extends ConsumerState<PosScreen> {
       return;
     }
 
-    final totals = SaleTotals.forLines(
+    // The same walk the screen drew from, so the dialog the operator confirms and the
+    // figures that were on screen behind it cannot be two different bills.
+    final totals = SaleTotals.price(
       cart.lines,
       split: split,
       saleType: cart.saleType,
-    );
+      billDiscount: cart.billDiscount,
+    ).totals;
 
     // What the document itself needs, asked through the same provider the write uses, so
     // the counter cannot check one question here and the write another. Every refusal
@@ -616,9 +630,10 @@ class _PosScreenState extends ConsumerState<PosScreen> {
       }
       // The basket is gone with the sale, so the fields that described it are
       // cleared too - a tender left over from the last customer would be applied
-      // to the next one.
+      // to the next one, and so would a discount.
       _tender.clear();
       _placeOfSupply.clear();
+      _billDiscount.clear();
 
       // The server's figures against the ones the dialog just showed. They agree in the
       // ordinary case - the client computes on the server's basis - and a disagreement is
@@ -653,6 +668,8 @@ class _TotalsPanel extends StatelessWidget {
     required this.split,
     required this.paid,
     required this.change,
+    required this.discount,
+    required this.onDiscountChanged,
   });
 
   /// The document totals for the basket.
@@ -667,6 +684,12 @@ class _TotalsPanel extends StatelessWidget {
   /// What is handed back.
   final double change;
 
+  /// The bill-level discount's own field, owned by the screen.
+  final TextEditingController discount;
+
+  /// Called with the discount in rupees, on every keystroke.
+  final ValueChanged<double> onDiscountChanged;
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -679,14 +702,44 @@ class _TotalsPanel extends StatelessWidget {
             label: 'Value',
             value: Formatters.currency(totals.subTotal),
           ),
-          if (totals.discountTotal > 0)
-            _AmountRow(
-              label: 'Discount',
-              value: '-${Formatters.currency(totals.discountTotal)}',
-            ),
           _AmountRow(
             label: split == TaxSplit.intraState ? 'CGST + SGST' : 'IGST',
             value: Formatters.currency(totals.taxTotal),
+          ),
+          // The bill's own discount: ONE amount in rupees, typed here and always on
+          // screen - not behind the tap a line's rate and slab are behind, because it is
+          // the figure the owner asked for once, near the totals (2026-09-21). What it
+          // takes off is shown beside it and the total it produces is the row directly
+          // below, which is the order the receipt prints them in.
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 6),
+            child: Row(
+              children: <Widget>[
+                // A fixed width rather than an expanded field: what it takes off appears
+                // beside it as soon as the figure is non-zero, and a field that narrowed
+                // itself mid-keystroke would move under the operator's thumb.
+                SizedBox(
+                  width: 176,
+                  child: AppTextField(
+                    controller: discount,
+                    label: 'Discount ₹',
+                    hint: '0.00',
+                    keyboardType: const TextInputType.numberWithOptions(
+                      decimal: true,
+                    ),
+                    validator: Validators.nonNegativeDecimalIfPresent,
+                    onChanged: (value) =>
+                        onDiscountChanged(double.tryParse(value.trim()) ?? 0),
+                  ),
+                ),
+                const Spacer(),
+                if (totals.discountTotal > 0)
+                  Text(
+                    '-${Formatters.currency(totals.discountTotal)}',
+                    style: theme.textTheme.bodyMedium,
+                  ),
+              ],
+            ),
           ),
           const Divider(height: 20),
           _AmountRow(

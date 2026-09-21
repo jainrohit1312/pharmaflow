@@ -137,6 +137,7 @@ class SaleCheckout {
     this.hospitalReference,
     this.paymentMode = PaymentMode.cash,
     this.amountPaid = 0,
+    this.billDiscount = 0,
     this.placeOfSupply,
     this.fromLocation,
     this.toLocation,
@@ -179,6 +180,14 @@ class SaleCheckout {
   /// clamped figure from [SaleTotals.recordablePaid], not the raw tender.
   final double amountPaid;
 
+  /// The bill-level discount, in rupees, as the counter entered it.
+  ///
+  /// One amount off the **tax-inclusive** total, which `checkout_sale()` shares across
+  /// the lines in proportion to each line's own total (migration 00042). It is the
+  /// document's figure and not a line's: the lines carry only their share of it, inside
+  /// `discount_amount`, exactly as the server stores them.
+  final double billDiscount;
+
   /// Where the goods are going, for the intra/inter-state tax split.
   final String? placeOfSupply;
 
@@ -210,6 +219,12 @@ class SaleCheckout {
     'payment_mode': paymentMode.dbValue,
     // A stock movement takes no payment, and the RPC refuses one that does.
     'amount_paid': saleType == SaleType.transfer ? 0 : amountPaid,
+    // The bill's own discount (migration 00042), left out entirely - rather than sent
+    // as a zero - for a type that has no discount concept, for the same reason a
+    // package line sends none: only what this document is made of travels, and the RPC
+    // refuses a discount a package or transfer bill has no business carrying.
+    if (saleType.hasDiscount && billDiscount != 0)
+      'bill_discount': billDiscount,
     'place_of_supply': placeOfSupply,
     if (idempotencyKey != null) 'idempotency_key': idempotencyKey,
     ..._typeFields(),

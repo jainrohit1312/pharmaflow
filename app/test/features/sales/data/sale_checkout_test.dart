@@ -50,6 +50,10 @@ SaleCheckoutLine _line({
       line,
       split: TaxSplit.intraState,
       saleType: saleType,
+      // A line on its own, with no bill-level discount behind it. The bill's own
+      // discount is a figure about the document, and the group that tests it builds
+      // whole payloads rather than single lines.
+      discountShare: 0,
     ),
     saleType: saleType,
   );
@@ -224,6 +228,43 @@ void main() {
       expect(payload['cgst_amount'], 2.5);
       expect(payload['sgst_amount'], 2.5);
       expect(payload['igst_amount'], 0);
+    });
+  });
+
+  group('the bill-level discount', () {
+    test('travels as one amount in rupees, for the RPC to share out', () {
+      final payload = SaleCheckout(
+        lines: <SaleCheckoutLine>[_line()],
+        billDiscount: 46,
+      ).toPayload();
+
+      expect(payload['bill_discount'], 46);
+    });
+
+    test('is left out when the bill carries none', () {
+      // Not sent as a zero: a payload that names no discount has to be the payload this
+      // function sent before the discount existed.
+      final payload = _sale(SaleType.counter).toPayload();
+      expect(payload.containsKey('bill_discount'), isFalse);
+    });
+
+    test('is left out entirely where the type has no discount concept', () {
+      // A cart can still hold one from an earlier type, and the RPC refuses a discount a
+      // package or transfer bill has no business carrying - so it is left out rather than
+      // sent, exactly as a line's own discount is.
+      for (final type in <SaleType>[SaleType.package, SaleType.transfer]) {
+        final payload = SaleCheckout(
+          lines: <SaleCheckoutLine>[_line(saleType: type)],
+          saleType: type,
+          billDiscount: 46,
+        ).toPayload();
+
+        expect(
+          payload.containsKey('bill_discount'),
+          isFalse,
+          reason: type.label,
+        );
+      }
     });
   });
 
