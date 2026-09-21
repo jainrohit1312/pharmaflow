@@ -58,19 +58,25 @@ SaleDetailData _bill({
   String? customerId,
   String? patientName,
   String? patientCode,
+  String? doctorName,
   double discountTotal = 40,
 }) {
   final grandTotal = PurchaseTotals.round2(160 + taxTotal);
-  final sale = buildSale(
-    invoiceNo: 'INV-7',
-    saleDate: DateTime(2026, 9, 18, 14, 5),
-    subTotal: 160,
-    taxTotal: taxTotal,
-    grandTotal: grandTotal,
-    amountPaid: amountPaid ?? grandTotal,
-    balanceDue: balanceDue ?? 0,
-    customerId: customerId,
-  ).copyWith(discountTotal: discountTotal, patientName: patientName);
+  final sale =
+      buildSale(
+        invoiceNo: 'INV-7',
+        saleDate: DateTime(2026, 9, 18, 14, 5),
+        subTotal: 160,
+        taxTotal: taxTotal,
+        grandTotal: grandTotal,
+        amountPaid: amountPaid ?? grandTotal,
+        balanceDue: balanceDue ?? 0,
+        customerId: customerId,
+      ).copyWith(
+        discountTotal: discountTotal,
+        patientName: patientName,
+        doctorName: doctorName,
+      );
 
   final stored =
       item ??
@@ -202,6 +208,25 @@ void main() {
         isNull,
         reason: 'a transfer moves stock; it is not dispensed to anyone',
       );
+    });
+  });
+
+  group('the prescriber', () {
+    test('is printed, because a Schedule H bill has to name one', () {
+      final sheet = printer.buildSheet(
+        data: _bill(doctorName: 'Dr Rao'),
+        pharmacy: _pharmacy(),
+      );
+
+      // A Drug-Rules bill is the record of who wrote the prescription (D-072), so the name
+      // goes on the paper and not only on a screen.
+      expect(sheet.doctor, 'Dr Rao');
+    });
+
+    test('is left off a bill that names nobody, rather than printed blank', () {
+      final sheet = printer.buildSheet(data: _bill(), pharmacy: _pharmacy());
+
+      expect(sheet.doctor, isNull);
     });
   });
 

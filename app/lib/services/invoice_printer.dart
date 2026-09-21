@@ -114,6 +114,7 @@ class InvoiceSheet {
     required this.payment,
     required this.footer,
     this.patient,
+    this.doctor,
   });
 
   /// The seller's block: the pharmacy's name first, then the details it has.
@@ -141,6 +142,14 @@ class InvoiceSheet {
   /// package bill, whose party is the hospital's account row, and anyone registered
   /// before Phase 7a until `save_patient()` first touches them.
   final String? patient;
+
+  /// Who prescribed it, or `null` when the sale names nobody.
+  ///
+  /// **This is a Drug-Rules line, not a courtesy.** A Schedule H, H1, X or narcotic medicine
+  /// may not be dispensed without a prescriber, and the bill is the record of who wrote it
+  /// (D-072) - so it prints whenever the sale named one, whatever the line's schedule. Nothing
+  /// is invented when it did not: a bill with no prescriber simply has no prescriber line.
+  final String? doctor;
 
   /// What was sold.
   final List<InvoiceLine> lines;
@@ -200,6 +209,7 @@ class InvoicePrinter {
       reference: 'Bill ${sale.invoiceNo}',
       issuedAt: _dateTime(sale.saleDate),
       patient: _patient(sale, data.patientCode),
+      doctor: _prescriber(sale),
       // Iterated over the document's **lines** rather than its items, because a bill
       // has to name the pack each line came out of and the batch detail lives beside
       // the line rather than on it (`SaleDocumentLine`).
@@ -301,6 +311,16 @@ class InvoicePrinter {
                   pw.SizedBox(height: 2),
                   pw.Text(
                     sheet.patient!,
+                    style: const pw.TextStyle(fontSize: 8),
+                  ),
+                ],
+                // Under the patient, because it answers the same question: who this bill is
+                // about, and who wrote it. A register that has to be produced on demand reads
+                // the prescriber off the bill, not off a screen (D-072).
+                if (sheet.doctor != null) ...<pw.Widget>[
+                  pw.SizedBox(height: 2),
+                  pw.Text(
+                    'Prescribed by ${sheet.doctor}',
                     style: const pw.TextStyle(fontSize: 8),
                   ),
                 ],
@@ -409,6 +429,15 @@ class InvoicePrinter {
       return null;
     }
     return '${name ?? 'Patient'} · ${hasCode ? patientCode!.trim() : unknownMark}';
+  }
+
+  /// Who prescribed it, or `null` when the sale names nobody.
+  ///
+  /// The sale's own snapshot, not a read of the doctors master: the master converges spellings
+  /// (D-072) and the bill keeps the one it was written with.
+  static String? _prescriber(Sale sale) {
+    final name = sale.doctorName?.trim();
+    return name == null || name.isEmpty ? null : name;
   }
 
   /// How one line was priced.
