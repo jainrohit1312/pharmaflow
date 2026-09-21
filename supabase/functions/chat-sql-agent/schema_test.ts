@@ -20,9 +20,11 @@ import {
   buildClassificationBody,
   CLASSIFICATION_CHOICES,
   DEFAULT_CHAT_MODEL,
+  DEFAULT_SUMMARY_SUBJECT,
   generateContentUrl,
   MAX_HISTORY_TURNS,
   parseClassification,
+  SUMMARY_SUBJECTS,
   SUPPORTED_RPCS,
   SYSTEM_INSTRUCTION,
 } from './schema.ts';
@@ -78,6 +80,40 @@ Deno.test('the system instruction names every report the model may choose', () =
     assertStringIncludes(SYSTEM_INSTRUCTION, rpc);
   }
   assertStringIncludes(SYSTEM_INSTRUCTION, 'unsupported');
+});
+
+Deno.test('a summary subject is an enum of the sections, and the prompt says which', () => {
+  // The closed set again, one level down: the model can say WHICH part of a summary
+  // the question is about, and it cannot say anything the renderer does not have a
+  // sentence for. Every subject is named in the prompt, because the model has to
+  // choose well rather than merely legally.
+  const body = buildClassificationBody({ question: 'x', history: [] }) as Record<string, any>;
+  const subject = body.generationConfig.responseSchema.properties.subject;
+
+  assertEquals(subject.enum, [...SUMMARY_SUBJECTS]);
+  assertEquals(subject.enum.length, 6);
+  for (const name of SUMMARY_SUBJECTS) {
+    assertStringIncludes(SYSTEM_INSTRUCTION, name);
+  }
+  assertEquals(SUMMARY_SUBJECTS.includes(DEFAULT_SUMMARY_SUBJECT), true);
+});
+
+Deno.test('a subject comes back with the choice, and one outside the enum is dropped', () => {
+  const parsed = parseClassification(
+    reply('{"rpc":"report_summary","subject":"purchases"}'),
+  );
+  assertEquals(parsed.params.subject, 'purchases');
+
+  // Not a failure - the renderer falls back to the broad reading, the same way an
+  // unparsable date falls back to the report's own default.
+  const invented = parseClassification(
+    reply('{"rpc":"report_summary","subject":"profit"}'),
+  );
+  assertEquals(invented.params.subject, null);
+
+  const absent = parseClassification(reply('{"rpc":"report_summary"}'));
+  assertEquals(absent.params.subject, null);
+  assertEquals(DEFAULT_SUMMARY_SUBJECT, 'everything');
 });
 
 Deno.test('history is carried as context, and labelled as not an instruction', () => {

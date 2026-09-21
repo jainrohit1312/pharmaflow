@@ -18,7 +18,7 @@
 
 import { assertEquals, assertStringIncludes } from 'jsr:@std/assert';
 import { renderAnswer, UNSUPPORTED_ANSWER } from './answer.ts';
-import type { ChatParams, ClassificationChoice } from './schema.ts';
+import type { ChatParams, ClassificationChoice, SummarySubject } from './schema.ts';
 
 /** The parameters a test does not care about. */
 function params(overrides: Partial<ChatParams> = {}): ChatParams {
@@ -28,6 +28,7 @@ function params(overrides: Partial<ChatParams> = {}): ChatParams {
     days: null,
     limit: null,
     metric: null,
+    subject: null,
     ...overrides,
   };
 }
@@ -113,6 +114,151 @@ Deno.test('a summary says the numbers the report returned, and its own window', 
     'Between 2026-09-01 and 2026-09-19: 12 sales for **₹45230.00**, ₹40000.00 collected and **₹5230.00** still due. '
       + '3 purchases were received. Stock on hand is worth **₹250000.50** at cost.',
   );
+});
+
+/**
+ * One `report_summary` envelope with every section in it, as migration 00021 answers.
+ *
+ * `sub_total + tax_total = grand_total`, because that is the relation the sentence
+ * states out loud and a fixture that broke it would let a wrong reading pass.
+ */
+const FULL_SUMMARY = {
+  from: '2026-09-01',
+  to: '2026-09-19',
+  sales: {
+    count: 12,
+    sub_total: 39000,
+    tax_total: 6230,
+    grand_total: 45230,
+    collected: 40000,
+    outstanding: 5230,
+  },
+  purchases: { count: 3, tax_total: 1800, grand_total: 21800 },
+  returns: { sale_count: 2, sale_total: 1500, purchase_count: 1, purchase_total: 700 },
+  expenses: { count: 4, total: 12000 },
+  stock: { products: 314, units: 61360, value_at_cost: 604704.48, value_at_mrp: 812000 },
+  expiring: { expired_value_at_mrp: 900, critical_value_at_mrp: 1200, warning_value_at_mrp: 3400 },
+};
+
+Deno.test('the subject the question named is the section the sentence leads with', () => {
+  // One envelope, five questions, five different sentences - which is the whole of
+  // "every summary sounds the same".
+  const sentences = new Map<SummarySubject, string>([
+    [
+      'sales',
+      'Between 2026-09-01 and 2026-09-19: 12 sales for **₹45230.00** - '
+        + '**₹39000.00** of it before tax and **₹6230.00** tax. '
+        + '₹40000.00 collected and **₹5230.00** still due.',
+    ],
+    [
+      'purchases',
+      'Between 2026-09-01 and 2026-09-19: 3 purchases were received for **₹21800.00**, '
+        + 'of which **₹1800.00** is tax.',
+    ],
+    [
+      'returns',
+      'Between 2026-09-01 and 2026-09-19: **₹1500.00** of sales came back over 2 sale returns, '
+        + 'and **₹700.00** went back to suppliers over 1 purchase return.',
+    ],
+    [
+      'expenses',
+      'Between 2026-09-01 and 2026-09-19: 4 expenses were recorded, totalling **₹12000.00**.',
+    ],
+    [
+      'stock',
+      'Stock on hand now is worth **₹604704.48** at cost: 61360 units across 314 products, '
+        + 'and **₹812000.00** at MRP.',
+    ],
+  ]);
+
+  for (const [subject, expected] of sentences) {
+    const rendered = renderAnswer('report_summary', FULL_SUMMARY, params({ subject }));
+    assertEquals(rendered.understood, true, `${subject} should have rendered`);
+    assertEquals(rendered.text, expected, `${subject} read the wrong section`);
+  }
+});
+
+Deno.test('the tax split and the returns are read, not left in the envelope', () => {
+  // Every figure above comes from a section no sentence had ever opened before the
+  // subject existed: `sales.sub_total`, `sales.tax_total`, `returns`, `expenses`.
+  const sales = renderAnswer('report_summary', FULL_SUMMARY, params({ subject: 'sales' }));
+  const returns = renderAnswer('report_summary', FULL_SUMMARY, params({ subject: 'returns' }));
+
+  assertStringIncludes(sales.text, '₹39000.00');
+  assertStringIncludes(sales.text, '₹6230.00');
+  assertStringIncludes(returns.text, '₹1500.00');
+  assertStringIncludes(returns.text, '₹700.00');
+});
+
+Deno.test('a stock question is told the stock is NOW, and is given no period at all', () => {
+  // The period belongs to the sections that happened in it. `product_stock` is live, so
+  // prefixing it with a date range would say the shelf is where it was in September.
+  const rendered = renderAnswer('report_summary', FULL_SUMMARY, params({ subject: 'stock' }));
+
+  assertStringIncludes(rendered.text, 'now');
+  assertEquals(rendered.text.includes('2026-09-01'), false);
+  assertEquals(rendered.text.includes('Between'), false);
+});
+
+Deno.test('naming no subject reads exactly as the broad question always did', () => {
+  const nothing = renderAnswer('report_summary', FULL_SUMMARY, params());
+  const everything = renderAnswer(
+    'report_summary',
+    FULL_SUMMARY,
+    params({ subject: 'everything' }),
+  );
+
+  assertEquals(nothing.text, everything.text);
+  assertStringIncludes(nothing.text, '12 sales for **₹45230.00**');
+});
+
+Deno.test('a period with nothing in it is a sentence, not a row of zeroes', () => {
+  const empty = {
+    from: '2026-09-01',
+    to: '2026-09-19',
+    sales: {
+      count: 0,
+      sub_total: 0,
+      tax_total: 0,
+      grand_total: 0,
+      collected: 0,
+      outstanding: 0,
+    },
+    purchases: { count: 0, tax_total: 0, grand_total: 0 },
+    returns: { sale_count: 0, sale_total: 0, purchase_count: 0, purchase_total: 0 },
+    expenses: { count: 0, total: 0 },
+    stock: { products: 314, units: 61360, value_at_cost: 604704.48, value_at_mrp: 812000 },
+  };
+
+  assertEquals(
+    renderAnswer('report_summary', empty, params({ subject: 'sales' })).text,
+    'Between 2026-09-01 and 2026-09-19: Nothing was billed.',
+  );
+  assertEquals(
+    renderAnswer('report_summary', empty, params({ subject: 'purchases' })).text,
+    'Between 2026-09-01 and 2026-09-19: No purchases were received.',
+  );
+  assertEquals(
+    renderAnswer('report_summary', empty, params({ subject: 'returns' })).text,
+    'Between 2026-09-01 and 2026-09-19: Nothing came back - no sale returns and no purchase returns.',
+  );
+  assertEquals(
+    renderAnswer('report_summary', empty, params({ subject: 'expenses' })).text,
+    'Between 2026-09-01 and 2026-09-19: No expenses were recorded.',
+  );
+});
+
+Deno.test('a section the envelope does not carry is unreadable, never half a sentence', () => {
+  const noPurchases = { from: '2026-09-01', to: '2026-09-19', sales: FULL_SUMMARY.sales };
+
+  const rendered = renderAnswer(
+    'report_summary',
+    noPurchases,
+    params({ subject: 'purchases' }),
+  );
+
+  assertEquals(rendered.understood, false);
+  assertEquals(rendered.text.includes('₹'), false);
 });
 
 Deno.test('an envelope missing the figures is not rendered as if it had them', () => {

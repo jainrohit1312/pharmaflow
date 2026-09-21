@@ -63,6 +63,43 @@ export const CLASSIFICATION_CHOICES = [...SUPPORTED_RPCS, 'unsupported'] as cons
 /** What the model chose. */
 export type ClassificationChoice = (typeof CLASSIFICATION_CHOICES)[number];
 
+/**
+ * What a summary leads with: the one part of `report_summary`'s envelope the
+ * question is actually about.
+ *
+ * `report_summary` answers with every total the reports screen shows - sales,
+ * purchases, returns, expenses and stock - in one round trip (migration 00021). The
+ * sentence, though, read four figures out of `sales` and one out of `stock`, for
+ * every question asked of it, which is what "every summary sounds the same" meant in
+ * practice: a question about what came back from customers got the sales paragraph, a
+ * question about the stock got the sales paragraph with a stock clause on the end.
+ *
+ * So the model declares the *subject* and the sentence is chosen by it. This is one
+ * more parameter rather than one more report: the report is the same envelope, the
+ * figures are the same figures, and nothing about the answer is different except
+ * which of them a reader is shown first. It is the same idea the system instruction
+ * already applied *between* reports - "choose the one whose subject the question
+ * names" - applied inside one.
+ *
+ * `everything` is the broad question ("how did last month go?") and the default, and
+ * it reads exactly as the sentence always did, so a classifier that names no subject
+ * changes nothing.
+ */
+export const SUMMARY_SUBJECTS = [
+  'sales',
+  'purchases',
+  'returns',
+  'expenses',
+  'stock',
+  'everything',
+] as const;
+
+/** One of the five subjects, or the broad tour. */
+export type SummarySubject = (typeof SUMMARY_SUBJECTS)[number];
+
+/** What a summary leads with when the model names nothing. */
+export const DEFAULT_SUMMARY_SUBJECT: SummarySubject = 'everything';
+
 /** The parameters the model may fill, whatever report it chose. */
 export interface ChatParams {
   /** `YYYY-MM-DD`, for `report_summary` and `top_products`. */
@@ -75,6 +112,15 @@ export interface ChatParams {
   limit: number | null;
   /** Which ranking `top_products` should use. */
   metric: 'units' | 'revenue' | null;
+  /**
+   * What a `report_summary` leads with.
+   *
+   * Not a report argument: `report_summary` takes a period and answers with every
+   * section, so this decides which section the *sentence* opens with and never
+   * travels to the database. `paramsFor` therefore drops it, and the envelope's
+   * `params` - "the arguments the report actually ran with" - is right to omit it.
+   */
+  subject: SummarySubject | null;
 }
 
 /** The model's whole answer: a choice, and the parameters it declared. */
@@ -128,6 +174,12 @@ export const CLASSIFICATION_SCHEMA: Record<string, unknown> = {
       enum: ['units', 'revenue'],
       description: 'How to rank the best sellers.',
     },
+    subject: {
+      type: 'STRING',
+      enum: [...SUMMARY_SUBJECTS],
+      description:
+        'For a summary: the one part of the business the question is about, or "everything".',
+    },
   },
   required: ['rpc'],
 };
@@ -145,7 +197,7 @@ export const SYSTEM_INSTRUCTION = [
   'You never write SQL, and you never state a figure.',
   '',
   'Choose exactly one `rpc`:',
-  '- report_summary: totals for a date range - sales, purchases, returns, expenses, stock value. Parameters: from_date, to_date.',
+  '- report_summary: totals for a date range - sales, purchases, returns, expenses, stock value. Parameters: from_date, to_date, subject.',
   '- low_stock_products: what is at or below its reorder level. Parameters: limit.',
   '- expiring_batches: batches expiring within a horizon. Parameters: days, limit.',
   '- top_products: what sells best over a window, by units or by revenue. Parameters: from_date, to_date, metric, limit.',
@@ -156,6 +208,8 @@ export const SYSTEM_INSTRUCTION = [
   '- Choose from that list and nothing else.',
   '- Parameters carry only a date range, a horizon in days, a row limit and a metric. A figure you would like to say goes nowhere: the answer is read from the report.',
   '- If two reports could answer, choose the one whose subject the question names.',
+  '- For report_summary, name what the question is ABOUT with `subject`: sales, purchases, returns, expenses, stock, or everything. Only the part you name is shown, so name the part the question asked about, and use "everything" for a broad question about the period as a whole.',
+  '- A summary\'s "stock" is the pharmacy\'s whole stock, valued. A question about ONE product\'s stock is not this report: choose "unsupported".',
   '- If the question is not one of these, choose "unsupported".',
 ].join('\n');
 
@@ -275,6 +329,7 @@ export function parseClassification(apiResponse: unknown): Classification {
       metric: record.metric === 'revenue' || record.metric === 'units'
         ? record.metric
         : null,
+      subject: asSubject(record.subject),
     },
   };
 }
@@ -286,6 +341,22 @@ function asDate(value: unknown): string | null {
   }
   const trimmed = value.trim();
   return /^\d{4}-\d{2}-\d{2}$/.test(trimmed) ? trimmed : null;
+}
+
+/**
+ * One of [SUMMARY_SUBJECTS], or `null`.
+ *
+ * `null` is not a failure: it is "the model named no subject", and the sentence then
+ * takes [DEFAULT_SUMMARY_SUBJECT] - the same reading this report always had. A name
+ * outside the closed set is dropped rather than passed on, so a model that invents a
+ * sixth subject cannot reach the renderer with it (the same belt `asDate` and
+ * `asInteger` are).
+ */
+function asSubject(value: unknown): SummarySubject | null {
+  const name = asText(value);
+  return name !== null && (SUMMARY_SUBJECTS as readonly string[]).includes(name)
+    ? (name as SummarySubject)
+    : null;
 }
 
 /** A whole number, or `null`. A numeric string is accepted; anything else is not. */

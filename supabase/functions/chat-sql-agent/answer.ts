@@ -46,7 +46,12 @@
  * nothing.
  */
 
-import type { ChatParams, ClassificationChoice } from './schema.ts';
+import {
+  DEFAULT_SUMMARY_SUBJECT,
+  type ChatParams,
+  type ClassificationChoice,
+  type SummarySubject,
+} from './schema.ts';
 
 /** A rendered answer, and whether the envelope was readable. */
 export interface RenderedAnswer {
@@ -79,7 +84,7 @@ export function renderAnswer(
 ): RenderedAnswer {
   switch (rpc) {
     case 'report_summary':
-      return renderSummary(data);
+      return renderSummary(data, params.subject ?? DEFAULT_SUMMARY_SUBJECT);
     case 'low_stock_products':
       return renderLowStock(data);
     case 'expiring_batches':
@@ -99,8 +104,220 @@ const UNREADABLE: RenderedAnswer = {
   understood: false,
 };
 
-function renderSummary(data: unknown): RenderedAnswer {
+/**
+ * The summary sentence the question actually asked for.
+ *
+ * `report_summary` answers with five sections in one round trip (migration 00021) and
+ * this file used to read four figures out of `sales`, and one out of `stock`, whatever
+ * the question was about - which is what "every summary sounds the same" was. So the
+ * sentence is chosen by [subject]: the part of the envelope the model said the question
+ * named, and each of them states its own section's figures and nothing else.
+ *
+ * Two rules hold across all six:
+ *
+ *   - **The period belongs only where there is one.** Sales, purchases, returns and
+ *     expenses happened *in* it. `stock` is what is on the shelf **now**, so it takes no
+ *     period at all - prefixing it with a date range would say the shelf is where it was
+ *     in September, which is the same error as reading today's stock inside a historical
+ *     report.
+ *   - **A section this file cannot read is [UNREADABLE]**, never a sentence with holes in
+ *     it.
+ *
+ * `everything` is the broad question and the default, and it reads exactly as this
+ * sentence always did - so a classifier that names no subject changes nothing.
+ */
+function renderSummary(data: unknown, subject: SummarySubject): RenderedAnswer {
   const envelope = asRecord(data);
+  const from = asString(envelope.from);
+  const to = asString(envelope.to);
+  const window = from !== null && to !== null ? `Between ${from} and ${to}: ` : '';
+
+  switch (subject) {
+    case 'sales':
+      return renderSalesSection(envelope, window);
+    case 'purchases':
+      return renderPurchasesSection(envelope, window);
+    case 'returns':
+      return renderReturnsSection(envelope, window);
+    case 'expenses':
+      return renderExpensesSection(envelope, window);
+    case 'stock':
+      return renderStockSection(envelope);
+    case 'everything':
+      return renderEverything(envelope, window);
+  }
+}
+
+/**
+ * The money on the counter, and what of it is not the pharmacy's.
+ *
+ * `sub_total` and `tax_total` have been in this envelope since `00021` and no sentence
+ * had ever read them, which is a good part of why every summary looked alike: the same
+ * four figures answered every question about the period.
+ */
+function renderSalesSection(
+  envelope: Record<string, unknown>,
+  window: string,
+): RenderedAnswer {
+  const sales = asRecord(envelope.sales);
+  const count = integer(sales.count);
+  const grandTotal = money(sales.grand_total);
+  const subTotal = money(sales.sub_total);
+  const taxTotal = money(sales.tax_total);
+  const collected = money(sales.collected);
+  const outstanding = money(sales.outstanding);
+
+  if (
+    count === null || grandTotal === null || subTotal === null ||
+    taxTotal === null || collected === null || outstanding === null
+  ) {
+    return UNREADABLE;
+  }
+
+  if (count === 0) {
+    return { text: `${window}Nothing was billed.`, understood: true };
+  }
+
+  return {
+    text:
+      `${window}${count} ${plural(count, 'sale', 'sales')} for **${grandTotal}** - ` +
+      `**${subTotal}** of it before tax and **${taxTotal}** tax. ` +
+      `${collected} collected and **${outstanding}** still due.`,
+    understood: true,
+  };
+}
+
+/** What was bought in, and how much of the bill was tax. */
+function renderPurchasesSection(
+  envelope: Record<string, unknown>,
+  window: string,
+): RenderedAnswer {
+  const purchases = asRecord(envelope.purchases);
+  const count = integer(purchases.count);
+  const grandTotal = money(purchases.grand_total);
+  const taxTotal = money(purchases.tax_total);
+
+  if (count === null || grandTotal === null || taxTotal === null) {
+    return UNREADABLE;
+  }
+
+  if (count === 0) {
+    return { text: `${window}No purchases were received.`, understood: true };
+  }
+
+  return {
+    text:
+      `${window}${count} ${plural(count, 'purchase was', 'purchases were')} received ` +
+      `for **${grandTotal}**, of which **${taxTotal}** is tax.`,
+    understood: true,
+  };
+}
+
+/**
+ * What came back, both ways.
+ *
+ * A return is a credit note whichever direction it went (D-046's own reading of the
+ * envelope), so the two are stated together and neither is netted off the sales above:
+ * a customer return and a supplier return are not the same subtraction, and the report
+ * keeps them apart for the same reason.
+ */
+function renderReturnsSection(
+  envelope: Record<string, unknown>,
+  window: string,
+): RenderedAnswer {
+  const returns = asRecord(envelope.returns);
+  const saleCount = integer(returns.sale_count);
+  const saleTotal = money(returns.sale_total);
+  const purchaseCount = integer(returns.purchase_count);
+  const purchaseTotal = money(returns.purchase_total);
+
+  if (
+    saleCount === null || saleTotal === null ||
+    purchaseCount === null || purchaseTotal === null
+  ) {
+    return UNREADABLE;
+  }
+
+  if (saleCount === 0 && purchaseCount === 0) {
+    return {
+      text: `${window}Nothing came back - no sale returns and no purchase returns.`,
+      understood: true,
+    };
+  }
+
+  const fromCustomers = saleCount === 0
+    ? 'No sales came back'
+    : `**${saleTotal}** of sales came back over ${saleCount} ${
+      plural(saleCount, 'sale return', 'sale returns')
+    }`;
+  const toSuppliers = purchaseCount === 0
+    ? 'nothing went back to a supplier'
+    : `**${purchaseTotal}** went back to suppliers over ${purchaseCount} ${
+      plural(purchaseCount, 'purchase return', 'purchase returns')
+    }`;
+
+  return { text: `${window}${fromCustomers}, and ${toSuppliers}.`, understood: true };
+}
+
+/** What the owner spent, over and above what he bought for stock. */
+function renderExpensesSection(
+  envelope: Record<string, unknown>,
+  window: string,
+): RenderedAnswer {
+  const expenses = asRecord(envelope.expenses);
+  const count = integer(expenses.count);
+  const total = money(expenses.total);
+
+  if (count === null || total === null) {
+    return UNREADABLE;
+  }
+
+  if (count === 0) {
+    return { text: `${window}No expenses were recorded.`, understood: true };
+  }
+
+  return {
+    text: `${window}${count} ${
+      plural(count, 'expense was', 'expenses were')
+    } recorded, totalling **${total}**.`,
+    understood: true,
+  };
+}
+
+/**
+ * What is on the shelf - and *now* is the point, which is why this one takes no period.
+ *
+ * `product_stock` is a live view of the batches, so the figure is today's whatever
+ * period the question mentioned. Saying so is the whole job of this sentence: an owner
+ * asking "how much stock do I have" after a question about September should not be shown
+ * one number that claims to be both.
+ */
+function renderStockSection(envelope: Record<string, unknown>): RenderedAnswer {
+  const stock = asRecord(envelope.stock);
+  const products = integer(stock.products);
+  const units = integer(stock.units);
+  const atCost = money(stock.value_at_cost);
+  const atMrp = money(stock.value_at_mrp);
+
+  if (products === null || units === null || atCost === null || atMrp === null) {
+    return UNREADABLE;
+  }
+
+  return {
+    text:
+      `Stock on hand now is worth **${atCost}** at cost: ${units} ${
+        plural(units, 'unit', 'units')
+      } across ${products} ${plural(products, 'product', 'products')}, ` +
+      `and **${atMrp}** at MRP.`,
+    understood: true,
+  };
+}
+
+/** The broad question: one line on each of the three things an owner checks first. */
+function renderEverything(
+  envelope: Record<string, unknown>,
+  window: string,
+): RenderedAnswer {
   const sales = asRecord(envelope.sales);
   const purchases = asRecord(envelope.purchases);
   const stock = asRecord(envelope.stock);
@@ -111,8 +328,6 @@ function renderSummary(data: unknown): RenderedAnswer {
   const outstanding = money(sales.outstanding);
   const purchaseCount = integer(purchases.count);
   const stockValue = money(stock.value_at_cost);
-  const from = asString(envelope.from);
-  const to = asString(envelope.to);
 
   if (
     count === null || grandTotal === null || collected === null ||
@@ -120,8 +335,6 @@ function renderSummary(data: unknown): RenderedAnswer {
   ) {
     return UNREADABLE;
   }
-
-  const window = from !== null && to !== null ? `Between ${from} and ${to}: ` : '';
 
   return {
     text:

@@ -39,6 +39,7 @@ function params(overrides: Partial<ChatParams> = {}): ChatParams {
     days: null,
     limit: null,
     metric: null,
+    subject: null,
     ...overrides,
   };
 }
@@ -383,4 +384,54 @@ Deno.test('paramsFor hands each report only the arguments it takes', () => {
   // ran even when the model named none.
   assertEquals(paramsFor('expiring_batches', params()).p_days, 90);
   assertEquals(paramsFor('dead_stock', params()).p_days, 90);
+});
+
+Deno.test('a summary subject never reaches the report, because it is not one of its arguments', () => {
+  // `report_summary` takes a period and answers with every section; the subject only
+  // chooses which section the sentence leads with. So it must not travel as an
+  // argument, and it must not appear in the envelope's `params` either - that field is
+  // "the arguments the report actually ran with" (D-053).
+  assertEquals(paramsFor('report_summary', params({ subject: 'sales' })), {
+    p_from: null,
+    p_to: null,
+  });
+});
+
+Deno.test('the subject the model named is the sentence the caller is given', async () => {
+  // The arguments are captured here rather than through `stubDeps`' recorder: an
+  // override replaces the recording stub, which is the point of an override.
+  let calledWith: Record<string, unknown> | null = null;
+
+  const { deps } = stubDeps({
+    classify: () =>
+      Promise.resolve({
+        rpc: 'report_summary',
+        params: params({ subject: 'stock' }),
+      } satisfies Classification),
+    run: (_request, _rpc, args) => {
+      calledWith = args;
+      return Promise.resolve({
+        from: '2026-09-01',
+        to: '2026-09-19',
+        sales: {
+          count: 12,
+          sub_total: 39000,
+          tax_total: 6230,
+          grand_total: 45230,
+          collected: 40000,
+          outstanding: 5230,
+        },
+        purchases: { count: 3, tax_total: 1800, grand_total: 21800 },
+        stock: { products: 314, units: 61360, value_at_cost: 604704.48, value_at_mrp: 812000 },
+      });
+    },
+  });
+
+  const body = await bodyOf(
+    await createHandler(deps)(post({ question: 'how much stock do I have?' })),
+  );
+
+  assertStringIncludes(body.answer, 'Stock on hand now is worth');
+  assertEquals(calledWith, { p_from: null, p_to: null });
+  assertEquals(body.params, { p_from: null, p_to: null });
 });
