@@ -47,8 +47,26 @@ class FakeApprovalsRepository implements ApprovalsRepository {
   /// Every decision the screen made, in order.
   final List<RecordedDecision> decisions = <RecordedDecision>[];
 
+  /// Every request the counter raised, in order.
+  final List<ApprovalRequest> requests = <ApprovalRequest>[];
+
   /// How many times the pending list was read.
   int reads = 0;
+
+  /// Answers the request with [id] as the owner would, so a test can drive
+  /// "asked -> answered" without a second identity.
+  void approve(String id) => _answer(id, ApprovalStatus.approved);
+
+  /// Refuses the request with [id], on the same terms.
+  void refuse(String id) => _answer(id, ApprovalStatus.rejected);
+
+  void _answer(String id, ApprovalStatus status) {
+    for (var index = 0; index < _pending.length; index++) {
+      if (_pending[index].id == id) {
+        _pending[index] = _pending[index].copyWith(status: status);
+      }
+    }
+  }
 
   /// Thrown by the next call, when a test wants a failure.
   ///
@@ -67,6 +85,48 @@ class FakeApprovalsRepository implements ApprovalsRepository {
       throw error;
     }
     return List<ApprovalRequest>.of(_pending);
+  }
+
+  @override
+  Future<ApprovalRequest?> byId(String id) async {
+    final error = errorToThrow;
+    if (error != null) {
+      throw error;
+    }
+    for (final request in _pending) {
+      if (request.id == id) {
+        return request;
+      }
+    }
+    return null;
+  }
+
+  @override
+  Future<ApprovalRequest> request({
+    required ApprovalActionType actionType,
+    required String title,
+    String? summary,
+    Map<String, dynamic> payload = const <String, dynamic>{},
+    String? targetTable,
+    String? targetId,
+    String? idempotencyKey,
+  }) async {
+    final error = errorToThrow;
+    if (error != null) {
+      throw error;
+    }
+    final raised = ApprovalRequest(
+      id: 'approval-${requests.length + 1}',
+      pharmacyId: 'ph-1',
+      title: title,
+      requestedAt: DateTime(2026, 9, 21, 15),
+      actionType: actionType,
+      summary: summary,
+      payload: payload,
+    );
+    requests.add(raised);
+    _pending.add(raised);
+    return raised;
   }
 
   @override

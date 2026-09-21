@@ -18,6 +18,7 @@ import 'package:app/core/utils/formatters.dart';
 import 'package:app/core/widgets/app_search_field.dart';
 import 'package:app/core/widgets/expiry_badge.dart';
 import 'package:app/data/models/admission.dart';
+import 'package:app/data/models/approval_request.dart';
 import 'package:app/data/models/batch_status.dart';
 import 'package:app/data/models/customer.dart';
 import 'package:app/data/models/doctor.dart';
@@ -28,6 +29,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import '../../../support/fake_approvals_repository.dart';
 import '../../../support/fake_customers_repository.dart';
 import '../../../support/fake_doctors_repository.dart';
 import '../../../support/fake_inventory_repository.dart';
@@ -423,6 +425,100 @@ void main() {
     expect(find.text('-${Formatters.currency(40)}'), findsOneWidget);
     // The line's own total, the bill's total and what was paid: all 360.
     expect(find.text(Formatters.currency(360)), findsNWidgets(3));
+  });
+
+  testWidgets('an above-cap discount offers the owner, and waits for him', (
+    tester,
+  ) async {
+    // The cap is a control on STAFF, so the counter offers the ask rather than a bare
+    // refusal - and once asked, the bill waits rather than being written.
+    final sales = FakeSalesRepository();
+    final approvals = FakeApprovalsRepository();
+    await pumpSalesApp(
+      tester,
+      repository: sales,
+      approvals: approvals,
+      searchResults: <Product>[buildProduct('Dolo 650')],
+      batches: <BatchStatus>[_batch()],
+      customers: <Customer>[_patient()],
+      initialLocation: Routes.pos,
+    );
+    await _addLine(tester);
+    await _type(tester, 'Qty', '2');
+
+    // Within the cap: no ask to make. 40 of 400 is exactly 10%.
+    await _type(tester, 'Discount ₹', '40');
+    expect(find.widgetWithText(OutlinedButton, 'Ask the owner'), findsNothing);
+
+    // Over it, and the counter says which half is missing rather than just no.
+    await _type(tester, 'Discount ₹', '100');
+    expect(
+      find.text('A discount above 10% needs the owner\u2019s approval.'),
+      findsOneWidget,
+    );
+    await tester.tap(find.widgetWithText(OutlinedButton, 'Ask the owner'));
+    await tester.pumpAndSettle();
+
+    // The ask carries the two figures the owner is agreeing to.
+    expect(approvals.requests, hasLength(1));
+    final asked = approvals.requests.single;
+    expect(asked.actionType, ApprovalActionType.discountAboveLimit);
+    expect(asked.discountAmount, 100);
+    expect(asked.billGross, 400);
+
+    // And the bill now waits, with the figures still on the bill and no way to write it.
+    expect(find.text('Waiting for the owner to answer.'), findsOneWidget);
+    expect(find.widgetWithText(TextButton, 'Check'), findsOneWidget);
+
+    // The owner's answer is what lets it through: the counter re-reads, shows it, and the
+    // write carries the approval.
+    approvals.approve(asked.id);
+    await tester.tap(find.widgetWithText(TextButton, 'Check'));
+    await tester.pumpAndSettle();
+    expect(find.text('Approved - you can bill this.'), findsOneWidget);
+
+    // The write half of this loop - bill it, and check the payload carried the approval -
+    // is NOT driven here yet: through this harness the sale never reaches the fake
+    // repository, and the cause is not yet known. The wire itself is asserted in
+    // `sale_checkout_test.dart` (the key travels and is left out), so what is missing is
+    // the SCREEN-level proof that an approved discount can be billed at all - recorded for
+    // the next step rather than papered over.
+  });
+
+  testWidgets('a bill whose approval is unanswered cannot be written', (
+    tester,
+  ) async {
+    // The courtesy half of the control: the server would refuse the write anyway - it
+    // matches the bill against the stored approval - but a cashier hears this instead.
+    final sales = FakeSalesRepository();
+    final approvals = FakeApprovalsRepository();
+    await pumpSalesApp(
+      tester,
+      repository: sales,
+      approvals: approvals,
+      searchResults: <Product>[buildProduct('Dolo 650')],
+      batches: <BatchStatus>[_batch()],
+      customers: <Customer>[_patient()],
+      initialLocation: Routes.pos,
+    );
+    await _addLine(tester);
+    await _type(tester, 'Qty', '2');
+    await _type(tester, 'Discount ₹', '100');
+    await _choosePatient(tester);
+    await tester.tap(find.widgetWithText(OutlinedButton, 'Ask the owner'));
+    await tester.pumpAndSettle();
+
+    // Past the ask's SnackBar, which sits over the till (see the test above).
+    await tester.pump(const Duration(seconds: 5));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(ElevatedButton, 'Take payment'));
+    await tester.pumpAndSettle();
+
+    expect(
+      find.text('The owner has not answered yet - the bill waits for him.'),
+      findsOneWidget,
+    );
+    expect(sales.checkouts, isEmpty);
   });
 
   testWidgets('writes the discount the counter typed, with no disagreement', (

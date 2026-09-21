@@ -232,6 +232,10 @@ class PosCart {
     paymentMode: paymentMode,
     tendered: tendered,
     billDiscount: billDiscount,
+    // Carried, not dropped: naming the patient does not move the bill's figures, and the
+    // approval is matched against those. Dropping it here would mean a counter that asked
+    // for an approval could never bill, because choosing the patient comes after.
+    discountApprovalId: discountApprovalId,
     placeOfSupply: placeOfSupply,
     saleType: saleType,
     admissionId: admissionId,
@@ -441,6 +445,10 @@ class PosCart {
     paymentMode: paymentMode,
     tendered: value,
     billDiscount: billDiscount,
+    // Carried, for the same reason as `withPatient`: the tender is part of settling the
+    // bill, not of what the bill says. Taking money is what happens immediately before the
+    // write, so dropping the approval here would drop it on every real sale.
+    discountApprovalId: discountApprovalId,
     placeOfSupply: placeOfSupply,
     saleType: saleType,
     admissionId: admissionId,
