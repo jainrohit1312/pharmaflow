@@ -1,7 +1,7 @@
 # Chat 3q Summary — Phase 7a, C3 chunks 1 to 3 (the receipt and the payment)
 
-**Status:** PARTIAL (Phase 7a's app is now done except **C3/4**, the balance views — C1a, C1b, C2,
-C3/1, C3/2 and C3/3 are complete and gated)
+**Status:** PARTIAL (Phase 7a's app is now done except **C3/4b**, the deposit-application sheet —
+C1a, C1b, C2, C3/1, C3/2, C3/3 and C3/4a are complete and gated)
 **Date:** 2026-09-21
 **Phases done:** Phase 7a — the Flutter slice **C3, chunks 1 to 3 of 4**, each with its own commit
 and full gate run, plus the one migration C3 was blocked on (**pushed to hosted**).
@@ -40,6 +40,28 @@ Nothing else under `supabase/` changed. No other migration, policy or RPC was to
 | `d2c0990` | C3/1 — migration `00039` `sale_document`, its SQL test, and D-079's status moved RECORDED → BUILT | 926 (no Dart changed) |
 | `6804d10` | C3/2 — the receipt: the `sale_document` reader, and the 80mm bill's per-line batch, expiry and patient code | 926 → 933 |
 | `0f8ad77` | C3/3 — the payment: the confirmation on the counter's figures, the server's answer as the authority, and the payment-mode completeness rule | 933 → 943 |
+| `be05756` | C3/4a — the three balance views, and one collection path (`collect_payment` everywhere) | 943 → 954 |
+
+**C3/4a — the balance views and the one collection path (`be05756`, 15 files).** The owner's answer to
+the collection-path question was **one path**: `LedgerRepository.recordPayment` now goes through
+`collect_payment` with `p_allocations: null`, so Phase 4's ledger sheet records a **deposit** rather
+than a receipt that settles nothing — the divergence D-075 warns about is closed at the source
+(**D-081**). No Dart file calls `record_payment` any more. Then the three views: a **patient's
+account** (`patient_account`) above the ledger card on the customer detail; a new
+**`/admissions/:admissionId`** screen (`admission_account`) reached from a new **Admissions list** on
+that patient's detail and from a bill that names one; and **what settled a bill**
+(`payment_allocations`) inside the sale detail. Every figure is the server's, and the tests prove it
+with **deliberately inconsistent fixtures** — `charges − returns − allocated` ≠ the `outstanding` they
+carry — so a screen that recomputed the balance would print a different number. The allocations card's
+own row-total was **removed before it landed** for the same reason. `sale_detail_test_app.dart` gained
+the `balancesRepositoryProvider` override, without which the bill screen silently read a live
+repository in tests (one test caught it: two `ErrorView`s).
+
+**Not built, and it is the whole of what remains: the deposit-application sheet.** `applyDeposit` and
+`PaymentAllocationTarget` exist in `BalancesRepository` with the server's contract documented, and
+**no screen calls them and no test exercises them yet**. Its first question is §1 of the next opening
+prompt — how to list a party's **open bills**, which no RPC returns today — and the owner has to
+choose between a small additive RPC and a client-side per-bill remainder.
 
 ## Flutter Files Created (2)
 
@@ -148,4 +170,6 @@ in this chat** (7 in C3/2, 10 in C3/3). **No assertion was deleted, skipped, loo
 
 ## What's Next
 
-`context/chat3r-opening-prompt.md` — **C3/4: the balance views**, and nothing else.
+`context/chat3r-opening-prompt.md` — **C3/4b: applying a deposit from the UI**, and nothing else. Its
+§1 is a question for the owner (how to list a party's open bills), and the prompt instructs the next
+chat to **ask rather than choose**.

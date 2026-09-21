@@ -3780,5 +3780,49 @@ server had no sentence to mirror; the credit branch keeps the server's own words
   reach the till.
 - **Not in this chunk:** the balance views (C3/4) — patient, admission, and the sale's allocations.
 
+---
+
+## D-081 — A Receipt Has One Door: Everything Goes Through `collect_payment`
+
+**Date:** 2026-09-21
+
+**Status:** Active (Phase 7a, C3/4 — built; commit `be05756`)
+
+**Decision:** Every receipt this app writes goes through **`collect_payment()`** (migration
+`20260920000037`). `record_payment()` — which writes a receipt and its ledger row and **nothing
+else** — is no longer called from Dart at all; it remains the server's own step *inside*
+`collect_payment`, where the receipt and its allocations are one transaction.
+
+Phase 4's ledger sheet is the case that settles the question, because it is the one that looked like
+an exception: `payment_sheet.dart` → `PaymentController.recordPayment` → `LedgerRepository.recordPayment`
+now sends `p_allocations: null`, which `collect_payment` answers as a receipt whose **whole amount is
+an unallocated deposit**. That is exactly what that sheet has always meant — a counter taking an
+advance — and the screen is unchanged.
+
+**Rationale:** the owner's call on 2026-09-21, and the reason is the divergence D-075 warns about.
+A receipt taken through `record_payment` alone **settles nothing**: once a balance is computed from
+allocations (`outstanding = charges − valid returns − allocated`), every bill that receipt paid reads
+as **unpaid**, while the ledger and the receipt both say it was paid. Two internally-consistent views
+of one transaction, disagreeing — the worst shape a money bug can take, because nothing looks wrong
+locally. `collect_payment` is a strict superset of `record_payment`'s behaviour (an empty allocation
+list is a complete answer, partial allocation is supported, and it is idempotent on
+`p_idempotency_key`), so there was no capability to trade away.
+
+**Consequences:**
+
+- **A payment taken from the ledger screen is a deposit, and behaves like one.** It shows on the
+  patient's account as **held unapplied** until somebody applies it (`allocate_payment`), which writes
+  **only** allocation rows — applying a deposit is not a second receipt (D-075).
+- **The collection path is now one place to change.** A future rule about taking money - a
+  reference-number requirement, a mode restriction - has one call site in Dart rather than two, and
+  the two cannot drift apart.
+- **Nothing in Dart calls `record_payment` directly.** A grep for it under `app/lib` finds the doc
+  comment that says so and nothing else; `supabase/tests/phase7a_sale_types.sql` and Phase 4's own
+  ledger tests still assert the behaviour, so the switch is covered on both sides.
+- **Not yet built: applying a deposit from the UI.** `BalancesRepository.applyDeposit` exists with the
+  server's contract documented; no screen calls it. See `context/chat3r-opening-prompt.md`, which
+  states the one thing that has to be decided before it can be written.
+
+
 
 
