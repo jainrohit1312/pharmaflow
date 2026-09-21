@@ -417,9 +417,11 @@ abstract final class SaleTotals {
   ///
   /// Two rules, both the server's: a package or transfer sale has no discount
   /// concept at all, and a pharmacy sale is capped at 10% - above which the owner's
-  /// approval is required. That approval (`approval_requests`, Phase 6.5c) does not
-  /// exist, so the cap is a real ceiling rather than a prompt, and **at exactly 10%
-  /// the sale proceeds**.
+  /// approval is required. That approval now EXISTS server-side (migration 00043 built
+  /// `approval_requests` and wired the cap to it), but **the counter cannot yet ask for
+  /// one** - that is Phase 6.5c chunk 2 - so the cap is still a real ceiling here, and
+  /// the sentence says which of the two is missing rather than claiming the workflow
+  /// does not exist. **At exactly 10% the sale proceeds.**
   static String? discountRefusal({
     required SaleType saleType,
     required double discountPercent,
@@ -435,7 +437,7 @@ abstract final class SaleTotals {
     }
     if (discountPercent > 10) {
       return 'A discount above 10% needs the owner\u2019s approval, and the '
-          'approval workflow is not built yet - bill at 10% or less.';
+          'counter cannot request one yet - bill at 10% or less.';
     }
     return null;
   }
@@ -450,9 +452,11 @@ abstract final class SaleTotals {
   ///  * nothing at all on a package or transfer bill, which has no discount concept;
   ///  * never larger than the bill;
   ///  * never above 10% of the bill's tax-inclusive total ([billGross] - the total
-  ///    BEFORE this discount). Above that the owner's approval is required, and that
-  ///    approval (`approval_requests`, Phase 6.5c) does not exist, so the cap is a real
-  ///    ceiling rather than a prompt - and **at exactly 10% the sale proceeds**.
+  ///    BEFORE this discount). Above that the owner's approval is required. Migration
+  ///    00043 built the mechanism and wired the cap to it, so the approval is real and
+  ///    the sale can carry it - but **the counter cannot ask for one until Phase 6.5c
+  ///    chunk 2**, so the cap is still a ceiling at the till and the sentence names the
+  ///    half that is missing - and **at exactly 10% the sale proceeds**.
   static String? billDiscountRefusal({
     required SaleType saleType,
     required double billDiscount,
@@ -473,7 +477,7 @@ abstract final class SaleTotals {
     }
     if (billDiscount > billGross * 0.10) {
       return 'A discount above 10% needs the owner\u2019s approval, and the '
-          'approval workflow is not built yet - bill at 10% or less.';
+          'counter cannot request one yet - bill at 10% or less.';
     }
     return null;
   }

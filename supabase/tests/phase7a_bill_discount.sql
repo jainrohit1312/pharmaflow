@@ -39,8 +39,10 @@
 --       0.04, with the last line absorbing the remainder.
 --   5.  A payload that names no discount - and one that names a zero - is priced exactly as it was
 --       before this migration.
---   6.  Exactly 10% of the bill is allowed; a paisa above it is refused with the counter's own
---       sentence, naming the approval workflow that does not exist.
+--   6.  Exactly 10% of the bill is allowed; a paisa above it is refused TO STAFF with the sentence
+--       naming the approval it needs (migration 00043 built it), while the OWNER is exempt from
+--       the cap altogether (owner, 2026-09-21) - so both halves of who the control binds are
+--       asserted rather than one.
 --   7.  A discount larger than the bill is refused, and by its own message rather than the cap's.
 --   8.  A negative discount is refused.
 --   9.  A package sale and a transfer refuse a bill discount outright - they have no discount
@@ -68,6 +70,7 @@ declare
   v_batch_c       uuid;
   v_batch_d       uuid;
   v_hospital_acct uuid;
+  v_cashier       uuid := '00000000-0000-0000-0000-000000000042';
   v_patient       public.customers;
   v_sale          public.sales;
   v_sale2         public.sales;
@@ -143,6 +146,19 @@ begin
   insert into public.customers (pharmacy_id, name, phone)
   values (v_pharmacy, 'ZZTEST 42 hospital account', '9000000041')
   returning id into v_hospital_acct;
+
+  -- A cashier, because the cap is a control on STAFF: `checkout_sale()` exempts the owner from it
+  -- since migration 00043 (owner, 2026-09-21 - "only sale bill is allowed without approval, rest
+  -- all functionality is allowed only on approval from owner", and the owner is free). So the
+  -- above-cap assertions below run as somebody the control is FOR.
+  insert into auth.users (id, email)
+  values (v_cashier, 'zztest-42-cashier@example.invalid')
+  on conflict (id) do nothing;
+
+  insert into public.profiles (id, full_name, role, pharmacy_id)
+  values (v_cashier, 'ZZTEST 42 cashier', 'cashier', v_pharmacy)
+  on conflict (id) do update
+    set role = excluded.role, pharmacy_id = excluded.pharmacy_id;
 
   -- A package sale is priced at cost plus this markup, so it has to be configured for the
   -- package case below to reach the DISCOUNT refusal rather than the markup one.
@@ -354,6 +370,12 @@ begin
 
   -- One paisa above it is refused, in the counter's own words. The whole sentence is asserted,
   -- because the brief's point is that the sentence stays TRUTHFUL rather than that it exists.
+  -- As a CASHIER, because the cap is a control on staff. Migration 00043 changed what the refusal
+  -- says as well as who meets it: an approval workflow now exists, so the sentence no longer
+  -- claims it does not.
+  perform set_config('request.jwt.claims', json_build_object('sub', v_cashier::text)::text, true);
+  perform set_config('request.jwt.claim.sub', v_cashier::text, true);
+
   v_msg := null;
   begin
     v_sale2 := public.checkout_sale(jsonb_build_object(
@@ -370,10 +392,30 @@ begin
   end;
 
   v_log := array_append(v_log, case
-    when v_msg = 'a discount above 10% of the bill needs the owner''s approval, and the approval workflow (Phase 6.5c) is not built yet - bill at 10% or less'
+    when v_msg = 'a discount above 10% of the bill needs the owner''s approval: ask for it, and bill once he has given it'
       then 'PASS' else 'FAIL' end
-    || ': 6. a discount above the cap is refused with the counter''s sentence (got '
+    || ': 6. a discount above the cap is refused to staff, naming the approval it needs (got '
     || coalesce(v_msg, 'NULL') || ')');
+
+  -- The owner is exempt from the cap (owner, 2026-09-21), and this is the same paisa-above figure
+  -- that was just refused to the cashier.
+  perform set_config('request.jwt.claims', json_build_object('sub', v_user::text)::text, true);
+  perform set_config('request.jwt.claim.sub', v_user::text, true);
+
+  v_sale2 := public.checkout_sale(jsonb_build_object(
+    'sale_type', 'counter',
+    'customer_id', v_patient.id,
+    'bill_discount', 54.61,
+    'items', jsonb_build_array(
+      jsonb_build_object('product_id', v_product_a, 'batch_id', v_batch_a, 'qty', 2, 'rate', 105),
+      jsonb_build_object('product_id', v_product_b, 'batch_id', v_batch_b, 'qty', 2, 'rate', 168)
+    )
+  ));
+
+  v_log := array_append(v_log, case
+    when v_sale2.grand_total = 491.39 then 'PASS' else 'FAIL' end
+    || ': 6. but the owner himself is free - he needs nobody''s approval (got grand '
+    || v_sale2.grand_total || ')');
 
   -- More than the bill is a different, more fundamental error: the cap must not be the message a
   -- counter sees when the discount cannot come off the bill at all.
