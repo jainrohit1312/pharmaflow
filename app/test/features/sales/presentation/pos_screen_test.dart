@@ -11,8 +11,6 @@
 /// means anything if the deliberate case still works.
 library;
 
-import 'dart:async';
-
 import 'package:app/core/router/routes.dart';
 import 'package:app/core/utils/formatters.dart';
 import 'package:app/core/widgets/app_search_field.dart';
@@ -98,6 +96,16 @@ Customer _patient() => buildCustomer(
 /// the point of showing them rather than an empty box.
 Future<void> _choosePatient(WidgetTester tester) async {
   await tester.tap(find.text('ZZTEST patient').last);
+  await tester.pumpAndSettle();
+}
+
+/// Confirms the bill in the dialog the counter raises before it writes.
+///
+/// The write is two steps now: the counter shows what it is about to write, and nothing
+/// reaches the till until the operator says so. A test that wants a sale written takes
+/// both steps - which is the change, not an inconvenience of the harness.
+Future<void> _confirm(WidgetTester tester) async {
+  await tester.tap(find.widgetWithText(ElevatedButton, 'Confirm & Submit'));
   await tester.pumpAndSettle();
 }
 
@@ -477,6 +485,9 @@ void main() {
 
     await tester.tap(find.widgetWithText(ElevatedButton, 'Take payment'));
     await tester.pumpAndSettle();
+    // The bill is confirmed before it is written: nothing reaches the till until the
+    // operator has said so.
+    await _confirm(tester);
 
     expect(sales.checkouts, hasLength(1));
     expect(sales.checkouts.single.lines.single.batchId, 'batch-1');
@@ -489,13 +500,14 @@ void main() {
     expect(find.text('Dolo 650'), findsNothing);
   });
 
-  testWidgets('a rapid double tap takes payment once, not twice', (
+  testWidgets('a rapid second tap cannot raise a second confirmation', (
     tester,
   ) async {
-    // The write is held open, which is the window a second tap arrives in: with an
-    // instant fake the first submission is already answered by the time the second
-    // tap lands, and the race being tested would not exist.
-    final sales = FakeSalesRepository()..checkoutGate = Completer<void>();
+    // The confirmation is the **new** window a double tap lands in, and the newer of the
+    // two: no write has started while it is up, so the live-state guard that stops one
+    // arriving during a write cannot see it. Two taps with no frame between them would
+    // otherwise raise two dialogs over each other and let one bill be confirmed twice.
+    final sales = FakeSalesRepository();
     final products = FakeProductsRepository(products: const <Product>[])
       ..batchQuantities['batch-1'] = 10;
     await pumpSalesApp(
@@ -513,15 +525,24 @@ void main() {
     final button = find.widgetWithText(ElevatedButton, 'Take payment');
     await tester.tap(button);
     await tester.tap(button, warnIfMissed: false);
-    sales.checkoutGate!.complete();
     await tester.pumpAndSettle();
 
     expect(
-      sales.checkouts,
-      hasLength(1),
-      reason:
-          'a second tap while the first is in flight is the same submission',
+      find.widgetWithText(ElevatedButton, 'Confirm & Submit'),
+      findsOneWidget,
+      reason: 'a second tap asks the same question once, not twice',
     );
+    expect(
+      sales.checkouts,
+      isEmpty,
+      reason: 'and nothing is written until the confirmation is answered',
+    );
+
+    // Answering it once writes one sale, which is the whole of the contract: a second
+    // submission is the first one.
+    await _confirm(tester);
+
+    expect(sales.checkouts, hasLength(1));
   });
 
   testWidgets('refuses to take payment for a bill with no patient', (
@@ -552,6 +573,150 @@ void main() {
       reason:
           'the sentence names what is missing rather than only that something is',
     );
+  });
+
+  group('the confirmation', () {
+    testWidgets('shows the bill before it is written, and can be cancelled', (
+      tester,
+    ) async {
+      final sales = FakeSalesRepository();
+      final products = FakeProductsRepository(products: const <Product>[])
+        ..batchQuantities['batch-1'] = 10;
+      await pumpSalesApp(
+        tester,
+        repository: sales,
+        products: products,
+        searchResults: <Product>[buildProduct('Dolo 650')],
+        batches: <BatchStatus>[_batch()],
+        customers: <Customer>[_patient()],
+        initialLocation: Routes.pos,
+      );
+      await _addLine(tester);
+      await _choosePatient(tester);
+
+      await tester.tap(find.widgetWithText(ElevatedButton, 'Take payment'));
+      await tester.pumpAndSettle();
+
+      // What is about to be written, and the plain statement that these figures are not
+      // the last word: the server recomputes them from its own reading.
+      expect(find.text('Server will verify totals.'), findsOneWidget);
+      expect(
+        find.widgetWithText(ElevatedButton, 'Confirm & Submit'),
+        findsOneWidget,
+      );
+      expect(find.widgetWithText(TextButton, 'Cancel'), findsOneWidget);
+      expect(
+        find.text('Total'),
+        findsWidgets,
+        reason: 'the bill is on the dialog as well as behind it',
+      );
+      expect(
+        find.text('Verified'),
+        findsNothing,
+        reason: 'the notice is only for a server that disagreed',
+      );
+      expect(
+        sales.checkouts,
+        isEmpty,
+        reason: 'nothing is written before the operator confirms the bill',
+      );
+
+      await tester.tap(find.widgetWithText(TextButton, 'Cancel'));
+      await tester.pumpAndSettle();
+
+      expect(sales.checkouts, isEmpty);
+      expect(find.text('Server will verify totals.'), findsNothing);
+      expect(
+        find.text('Dolo 650'),
+        findsOneWidget,
+        reason: 'a cancelled confirmation leaves the basket where it was',
+      );
+    });
+
+    testWidgets('refuses a settling mode that is short of the bill', (
+      tester,
+    ) async {
+      // The rule the server does not have. `sales_payment_check()` refuses only a sale
+      // paid MORE than its bill, so a "cash" sale carrying a balance is storable there -
+      // and it is not a sale this counter should write.
+      final sales = FakeSalesRepository();
+      final products = FakeProductsRepository(products: const <Product>[])
+        ..batchQuantities['batch-1'] = 10;
+      await pumpSalesApp(
+        tester,
+        repository: sales,
+        products: products,
+        searchResults: <Product>[buildProduct('Dolo 650')],
+        batches: <BatchStatus>[_batch()],
+        customers: <Customer>[_patient()],
+        initialLocation: Routes.pos,
+      );
+      await _addLine(tester);
+      await _choosePatient(tester);
+
+      await _type(tester, 'Received', '10');
+      await tester.tap(find.widgetWithText(ElevatedButton, 'Take payment'));
+      await tester.pumpAndSettle();
+
+      expect(
+        find.text('Server will verify totals.'),
+        findsNothing,
+        reason: 'a sale the counter is about to refuse is not worth confirming',
+      );
+      expect(sales.checkouts, isEmpty);
+      expect(find.textContaining('requires the full'), findsOneWidget);
+      expect(find.textContaining('short.'), findsOneWidget);
+    });
+
+    testWidgets("names the server's figures when they differ from the counter's", (
+      tester,
+    ) async {
+      // The client computes on the server's basis, so agreement is the ordinary case and
+      // this is the rare one. It is not silent, because the bill the customer is handed
+      // is the server's version - so the divergence is the fake's whole purpose.
+      final sales = FakeSalesRepository()
+        // The stored total differs from the counter's in every figure, not only the tax
+        // split: the notice names the total that moved, so a fixture that agreed on the
+        // total would not exercise it.
+        ..storedTotalsOverride = const SaleDocumentTotalSum(
+          subTotal: 200,
+          discountTotal: 0,
+          taxTotal: 10,
+          grandTotal: 210,
+        );
+      final products = FakeProductsRepository(products: const <Product>[])
+        ..batchQuantities['batch-1'] = 10;
+      await pumpSalesApp(
+        tester,
+        repository: sales,
+        products: products,
+        searchResults: <Product>[buildProduct('Dolo 650')],
+        batches: <BatchStatus>[_batch()],
+        customers: <Customer>[_patient()],
+        initialLocation: Routes.pos,
+      );
+      await _addLine(tester);
+      await _choosePatient(tester);
+
+      await tester.tap(find.widgetWithText(ElevatedButton, 'Take payment'));
+      await tester.pumpAndSettle();
+      await _confirm(tester);
+
+      expect(find.text('Verified'), findsOneWidget);
+      expect(find.text(Formatters.currency(210)), findsWidgets);
+      expect(
+        find.textContaining('The counter showed'),
+        findsOneWidget,
+        reason:
+            'a disagreement names both figures rather than only the new one',
+      );
+
+      // The sale is written either way, and the bill it opens is the server's.
+      expect(sales.checkouts, hasLength(1));
+      await tester.tap(find.widgetWithText(ElevatedButton, 'OK'));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('bill sale-1'), findsOneWidget);
+    });
   });
 
   group('the basket lines', () {
@@ -907,6 +1072,7 @@ void main() {
       await _type(tester, 'Prescriber', 'Dr Nobody');
       await tester.tap(find.widgetWithText(ElevatedButton, 'Take payment'));
       await tester.pumpAndSettle();
+      await _confirm(tester);
 
       expect(sales.checkouts.single.doctorName, 'Dr Nobody');
       expect(
@@ -941,6 +1107,7 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(find.widgetWithText(ElevatedButton, 'Take payment'));
       await tester.pumpAndSettle();
+      await _confirm(tester);
 
       expect(sales.checkouts.single.doctorId, 'id-Dr Rao');
       expect(sales.checkouts.single.doctorName, 'Dr Rao');

@@ -19,10 +19,12 @@ import 'package:app/features/purchase/data/purchase_totals.dart';
 import 'package:app/features/sales/application/pos_controller.dart';
 import 'package:app/features/sales/application/pos_search.dart';
 import 'package:app/features/sales/application/sale_checkout_controller.dart';
+import 'package:app/features/sales/application/sale_requirements.dart';
 import 'package:app/features/sales/application/sale_tax_split.dart';
 import 'package:app/features/sales/data/sale_totals.dart';
 import 'package:app/features/sales/presentation/patients/patient_step.dart';
 import 'package:app/features/sales/presentation/widgets/batch_chooser_sheet.dart';
+import 'package:app/features/sales/presentation/widgets/payment_confirmation.dart';
 import 'package:app/features/sales/presentation/widgets/pos_cart_line.dart';
 import 'package:app/features/sales/presentation/widgets/pos_search_results.dart';
 import 'package:app/features/sales/presentation/widgets/pos_strip.dart';
@@ -72,6 +74,13 @@ class _PosScreenState extends ConsumerState<PosScreen> {
   /// Reset by the next keystroke, so Escape dismisses the list without ending the
   /// search.
   bool _searchClosed = false;
+
+  /// Whether the confirmation dialog is already up.
+  ///
+  /// The dialog is a **second** window a double tap can land in, and the newer of the
+  /// two: no write has started while it is open, so the live-state guard in `_checkout`
+  /// cannot see the second tap the way it sees one arriving during a write.
+  bool _confirming = false;
 
   /// What the counter's list is showing: the search when a term is typed - a term
   /// wins over the strip, because typing is an explicit act - and the strip's own
@@ -231,7 +240,11 @@ class _PosScreenState extends ConsumerState<PosScreen> {
     );
     final paid = cart.paidFor(totals.grandTotal);
     final change = SaleTotals.changeFor(
-      tendered: _tenderedValue(totals.grandTotal, cart),
+      tendered: SaleTotals.tenderedFor(
+        grandTotal: totals.grandTotal,
+        tendered: cart.tendered,
+        isOnAccount: cart.paymentMode.isOnAccount,
+      ),
       total: totals.grandTotal,
     );
 
@@ -478,16 +491,87 @@ class _PosScreenState extends ConsumerState<PosScreen> {
     _resetSearch();
   }
 
-  /// Writes the sale and opens its invoice.
+  /// Confirms the bill, writes it, and opens its invoice.
+  ///
+  /// Two steps, in this order, because only one of the two can be the truth (D-075):
+  ///
+  ///  1. the counter shows what it is about to write - its own total, computed on the
+  ///     server's basis - and the operator confirms it;
+  ///  2. the server writes the sale and answers with the stored row. Nothing is shown as
+  ///     written, and nothing is printed, until it does.
+  ///
+  /// Every refusal happens **before** the dialog, so the operator is never asked to
+  /// confirm a sale the counter is about to refuse.
   Future<void> _checkout(PosCart cart, TaxSplit split) async {
-    // A second tap (or key) while the first is still being written is the same
-    // submission, not another sale. The button is already disabled while a write is
-    // in flight, but a rebuild happens a frame after the tap does - so the live
-    // state decides this rather than the state this build drew from.
-    if (ref.read(saleCheckoutControllerProvider).isLoading) {
+    // A second tap (or key) is the same submission, not another sale. The button is
+    // already disabled while a write is in flight, but a rebuild happens a frame after
+    // the tap does - so the live state decides this rather than the state this build
+    // drew from. `_confirming` covers the other window: a second tap arriving while the
+    // confirmation is up, when no write has started and `isLoading` is still false.
+    if (_confirming || ref.read(saleCheckoutControllerProvider).isLoading) {
       return;
     }
+
+    final totals = SaleTotals.forLines(
+      cart.lines,
+      split: split,
+      saleType: cart.saleType,
+    );
+
+    // What the document itself needs, asked through the same provider the write uses, so
+    // the counter cannot check one question here and the write another. Every refusal
+    // happens **before** the dialog: asking an operator to confirm a sale the counter is
+    // about to refuse spends the one moment they are looking at the screen.
+    final refusal = saleRefusal(
+      cart: cart,
+      packageMarkupPercent: await ref.read(
+        packageMarkupPercentProvider(cart.saleType).future,
+      ),
+    );
+    if (!mounted) {
+      return;
+    }
+    if (refusal != null) {
+      _report(refusal);
+      _searchFocus.requestFocus();
+      return;
+    }
+
+    // The counter's own completeness rule, the one the server does not have: it refuses
+    // a sale paid *more* than its bill and turns any shortfall into a balance whatever
+    // the mode says, so a "cash" sale carrying a balance is storable - and is not
+    // something this counter should write.
+    final paymentRefusal = paymentModeRefusal(
+      cart: cart,
+      grandTotal: totals.grandTotal,
+    );
+    if (paymentRefusal != null) {
+      _report(paymentRefusal);
+      _searchFocus.requestFocus();
+      return;
+    }
+
+    // Step one: the counter shows what it is about to write and the operator confirms
+    // it. Nothing has been written at this point.
+    _confirming = true;
+    final confirmed = await showPaymentConfirmation(
+      context,
+      cart: cart,
+      totals: totals,
+    );
+    _confirming = false;
+    if (!mounted) {
+      return;
+    }
+    if (!confirmed) {
+      // A cancelled confirmation is not an error, so nothing is reported: the caret goes
+      // back to the field the operator will type into next.
+      _searchFocus.requestFocus();
+      return;
+    }
+
     try {
+      // Step two: the server writes it and answers with the stored row.
       final saved = await ref
           .read(saleCheckoutControllerProvider.notifier)
           .checkout(cart: cart, split: split);
@@ -499,10 +583,22 @@ class _PosScreenState extends ConsumerState<PosScreen> {
       // to the next one.
       _tender.clear();
       _placeOfSupply.clear();
+
+      // The server's figures against the ones the dialog just showed. They agree in the
+      // ordinary case - the client computes on the server's basis - and a disagreement is
+      // named rather than hidden, because the bill the customer is about to be handed is
+      // the server's version of this sale and not the counter's.
+      if (!SaleTotals.matchesStored(shown: totals, stored: saved)) {
+        await showVerifiedTotals(context, shown: totals, stored: saved);
+        if (!mounted) {
+          return;
+        }
+      }
+
       context.go(Routes.saleDetail(saved.id));
     } on Object {
       // The controller has already put the failure in its state, which the
-      // `ref.listen` above turns into a SnackBar.
+      // `ref.listen` above turns into a SnackBar. Nothing is shown as written.
     }
   }
 
@@ -513,14 +609,6 @@ class _PosScreenState extends ConsumerState<PosScreen> {
       ..showSnackBar(SnackBar(content: Text(message)));
   }
 }
-
-/// The raw tender for a bill, whether or not one was typed.
-///
-/// The screen needs the *tendered* figure to work out the change; the figure that
-/// gets stored is [PosCart.paidFor], which clamps it.
-double _tenderedValue(double grandTotal, PosCart cart) => cart.tendered > 0
-    ? cart.tendered
-    : (cart.paymentMode.isOnAccount ? 0 : grandTotal);
 
 /// The bill: what it adds up to, and what comes back.
 class _TotalsPanel extends StatelessWidget {

@@ -7,6 +7,7 @@ import 'package:app/core/router/routes.dart';
 import 'package:app/data/models/batch_status.dart';
 import 'package:app/data/models/customer.dart';
 import 'package:app/data/models/product.dart';
+import 'package:app/data/repositories/pharmacy_repository.dart';
 import 'package:app/features/auth/application/pharmacy_scope.dart';
 import 'package:app/features/customers/application/customer_options.dart';
 import 'package:app/features/customers/application/patient_lookup.dart';
@@ -29,6 +30,7 @@ import 'package:go_router/go_router.dart';
 
 import 'fake_doctors_repository.dart';
 import 'fake_patients_repository.dart';
+import 'fake_pharmacy_repository.dart';
 import 'fake_products_repository.dart';
 import 'fake_sales_repository.dart';
 
@@ -77,6 +79,7 @@ Future<GoRouter> pumpSalesApp(
   FakeProductsRepository? products,
   FakePatientsRepository? patients,
   FakeDoctorsRepository? doctors,
+  FakePharmacyRepository? pharmacy,
   List<Product> searchResults = const <Product>[],
   List<BatchStatus> batches = const <BatchStatus>[],
   List<String> categories = const <String>[],
@@ -144,6 +147,12 @@ Future<GoRouter> pumpSalesApp(
         ),
         productsRepositoryProvider.overrideWithValue(
           products ?? FakeProductsRepository(products: const <Product>[]),
+        ),
+        // The counter asks the pharmacy for its package markup before it raises the
+        // confirmation dialog - the same read the write itself makes - so it is stubbed
+        // here rather than left to reach a real client on a package sale.
+        pharmacyRepositoryProvider.overrideWithValue(
+          pharmacy ?? FakePharmacyRepository(),
         ),
       ],
       child: MaterialApp.router(routerConfig: router),

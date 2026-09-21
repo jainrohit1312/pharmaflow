@@ -58,6 +58,12 @@ String? _refusal(ProviderContainer container, {double? packageMarkupPercent}) =>
       packageMarkupPercent: packageMarkupPercent,
     );
 
+/// The payment refusal this basket meets for a bill of [grandTotal], if any.
+String? _paymentRefusal(
+  ProviderContainer container, {
+  required double grandTotal,
+}) => paymentModeRefusal(cart: _cart(container), grandTotal: grandTotal);
+
 void main() {
   group('a counter sale', () {
     test('needs a patient before the medicines', () {
@@ -338,6 +344,88 @@ void main() {
             'the controller turns it into a ValidationException; the rule itself '
             'has to be answerable without one',
       );
+    });
+  });
+
+  group('the payment', () {
+    test('needs nothing when the counter took the exact amount', () {
+      final container = _container();
+      _ringUp(container);
+
+      // No tender and a mode that settles means the exact amount was handed over.
+      expect(_paymentRefusal(container, grandTotal: 105), isNull);
+    });
+
+    test('needs nothing when the customer handed over more, which is change', () {
+      final container = _container();
+      _ringUp(container);
+      _pos(container).setTendered(500);
+
+      // The figure that gets stored is clamped to the bill: the change a cashier hands
+      // back is not revenue, and `sales_payment_check()` refuses a sale paid beyond it.
+      expect(_paymentRefusal(container, grandTotal: 105), isNull);
+    });
+
+    test('is refused when a settling mode is short of the bill', () {
+      final container = _container();
+      _ringUp(container);
+      _pos(container).setTendered(10);
+
+      // The rule the server does not have: `sales_payment_check()` (00020) refuses a sale
+      // paid *more* than its bill and turns a shortfall into a balance whatever the mode
+      // says, so this is the counter's own completeness check.
+      expect(
+        _paymentRefusal(container, grandTotal: 105),
+        'Cash requires the full ₹105.00. ₹95.00 short.',
+      );
+    });
+
+    test('names the mode the customer actually chose', () {
+      final container = _container();
+      _ringUp(container);
+      _pos(container).setPaymentMode(PaymentMode.card);
+      _pos(container).setTendered(50);
+
+      expect(
+        _paymentRefusal(container, grandTotal: 105),
+        'Card requires the full ₹105.00. ₹55.00 short.',
+      );
+    });
+
+    test('lets credit leave a balance when a customer owes it', () {
+      final container = _container();
+      _ringUp(container);
+      _pos(container)
+        ..setPaymentMode(PaymentMode.credit)
+        ..setPatient(_patient());
+
+      expect(_paymentRefusal(container, grandTotal: 105), isNull);
+    });
+
+    test('refuses a balance nobody owes, in the server\u2019s own words', () {
+      final container = _container();
+      _ringUp(container);
+      _pos(container).setPaymentMode(PaymentMode.credit);
+
+      // The server's sentence (migration 00019): "a sale with an unpaid balance needs a
+      // customer to owe it". Unreachable through the counter's own screen today, because
+      // every sale type that bills somebody already requires its party first - kept and
+      // asserted because it is the server's rule, and a future type that allowed an
+      // unowed balance would otherwise reach the till.
+      expect(
+        _paymentRefusal(container, grandTotal: 105),
+        'A sale with an unpaid balance needs a customer to owe it.',
+      );
+    });
+
+    test('says nothing about a transfer, which takes no payment at all', () {
+      final container = _container();
+      _pos(container).setSaleType(SaleType.transfer);
+      _ringUp(container);
+
+      // Stock moving between the owner's own locations: `paidFor` is zero for a transfer,
+      // and `checkout_sale()` refuses one that carries any money.
+      expect(_paymentRefusal(container, grandTotal: 105), isNull);
     });
   });
 }

@@ -127,6 +127,14 @@ class FakeSalesRepository implements SalesRepository {
   /// The payloads `checkout` was handed, in order.
   final List<SaleCheckout> checkouts = <SaleCheckout>[];
 
+  /// When set, `checkout` stores these totals instead of the payload's own.
+  ///
+  /// The server recomputes a sale's money from its own reading of the slabs rather than
+  /// trusting the client's (D-075), so its figures can differ from the counter's. That is
+  /// the case the counter's "Verified" notice exists for, and a test can only look at
+  /// that notice if it can make the two disagree.
+  SaleDocumentTotalSum? storedTotalsOverride;
+
   /// When true the next `list` call throws.
   bool failNextList = false;
 
@@ -298,7 +306,7 @@ class FakeSalesRepository implements SalesRepository {
     }
 
     checkouts.add(checkout);
-    final totals = _sumLines(checkout);
+    final totals = storedTotalsOverride ?? _sumLines(checkout);
     final saved = Sale(
       id: 'sale-${sales.length + 1}',
       pharmacyId: pharmacyId,

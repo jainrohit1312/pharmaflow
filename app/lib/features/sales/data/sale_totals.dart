@@ -331,4 +331,33 @@ abstract final class SaleTotals {
     final change = PurchaseTotals.round2(tendered - total);
     return change > 0 ? change : 0;
   }
+
+  /// The raw tender for a bill of [grandTotal], whether or not one was typed.
+  ///
+  /// The figure the **change** is worked out from; the figure that gets stored is
+  /// `PosCart.paidFor`, which clamps it. No tender and a mode that settles at the
+  /// counter means the exact amount was handed over; no tender and credit means nothing
+  /// was. Shared with the confirmation step so the change the counter shows and the
+  /// change its dialog shows cannot be worked out two different ways.
+  static double tenderedFor({
+    required double grandTotal,
+    required double tendered,
+    required bool isOnAccount,
+  }) => tendered > 0 ? tendered : (isOnAccount ? 0 : grandTotal);
+
+  /// Whether the figures the counter showed are the ones the server stored.
+  ///
+  /// The client computes on the server's own basis (D-075) and the server recomputes
+  /// from its own reading of the slabs, so agreement is the ordinary case - and it is
+  /// still worth asking, because a disagreement means the receipt the customer is
+  /// handed differs from the amount the operator just took. Compared **exactly**:
+  /// both sides are whole paise, so a tolerance here would swallow the one-paisa
+  /// divergence that is exactly the defect worth naming.
+  static bool matchesStored({
+    required SaleDocumentTotals shown,
+    required Sale stored,
+  }) =>
+      shown.grandTotal == stored.grandTotal &&
+      shown.taxTotal == stored.taxTotal &&
+      shown.subTotal == stored.subTotal;
 }

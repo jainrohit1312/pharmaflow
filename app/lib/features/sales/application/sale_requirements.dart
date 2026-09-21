@@ -11,8 +11,10 @@
 /// a reason, and its source and destination must differ).
 library;
 
+import 'package:app/core/utils/formatters.dart';
 import 'package:app/data/models/product.dart';
 import 'package:app/data/models/sale.dart';
+import 'package:app/features/purchase/data/purchase_totals.dart';
 import 'package:app/features/sales/application/pos_controller.dart';
 import 'package:app/features/sales/data/sale_totals.dart';
 
@@ -105,6 +107,51 @@ String? saleRefusal({required PosCart cart, double? packageMarkupPercent}) {
       cart.saleType.isPharmacySale &&
       _blank(cart.doctorName)) {
     return 'A Schedule H/H1/X line needs the prescriber\u2019s name.';
+  }
+
+  return null;
+}
+
+/// Why a basket cannot be paid for as it stands, or `null` when it can.
+///
+/// **This rule is the counter's own**, and it is worth saying why there is no server
+/// sentence to mirror. `sales_payment_check()` (migration 00020) refuses a sale paid
+/// *more* than its total - the change handed back is not revenue - and nothing else;
+/// `checkout_sale()` turns any shortfall into a balance and a `credit` status whatever
+/// the mode says. So a "cash" sale holding a "balance due" is storable, and it is not a
+/// thing this counter should be able to write: a mode that settles at the counter
+/// settles it, and only `credit` leaves money owed.
+///
+/// The second half is the server's own rule, in the server's words (migration 00019:
+/// *"a sale with an unpaid balance needs a customer to owe it"*), said here so the
+/// operator hears it before the write rather than as a server error after it. That case
+/// is unreachable through today's screen - a counter, IPD or package bill already
+/// requires its party before this is asked, and a transfer takes no payment at all - and
+/// it stays for the same reason `SaleCheckoutController` keeps its own copy of it: a
+/// future sale type that allowed an unowed balance would otherwise reach the till.
+String? paymentModeRefusal({
+  required PosCart cart,
+  required double grandTotal,
+}) {
+  // A transfer moves stock between the owner's own locations: no money changes hands,
+  // and `checkout_sale()` refuses a transfer that carries any.
+  if (cart.saleType == SaleType.transfer) {
+    return null;
+  }
+
+  final paid = cart.paidFor(grandTotal);
+  if (paid >= grandTotal) {
+    return null;
+  }
+
+  if (!cart.paymentMode.isOnAccount) {
+    final short = PurchaseTotals.round2(grandTotal - paid);
+    return '${cart.paymentMode.label} requires the full '
+        '${Formatters.currency(grandTotal)}. ${Formatters.currency(short)} short.';
+  }
+
+  if (_blank(cart.customerId)) {
+    return 'A sale with an unpaid balance needs a customer to owe it.';
   }
 
   return null;

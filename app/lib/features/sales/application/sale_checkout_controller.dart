@@ -32,6 +32,25 @@ String newSubmissionKey() =>
 /// apart.
 int _submissionCount = 0;
 
+/// The pharmacy's configured package markup, read only when a package sale needs it.
+///
+/// `null` is a real answer - nobody has configured it - and refuses the sale rather
+/// than pricing it at an invented percentage (D-070). A counter sale does not pay for
+/// this read.
+///
+/// One provider rather than a private read inside the write: the counter's confirmation
+/// step has to ask the same question **before** the dialog it raises, and two reads of
+/// the same setting could answer differently about one basket.
+@riverpod
+Future<double?> packageMarkupPercent(Ref ref, SaleType saleType) async {
+  if (saleType != SaleType.package) {
+    return null;
+  }
+  final pharmacyId = ref.watch(requirePharmacyIdProvider);
+  final pharmacy = await ref.watch(pharmacyRepositoryProvider).byId(pharmacyId);
+  return pharmacy?.packageMarkupPercent;
+}
+
 /// Writes the basket as a sale, in one transaction.
 ///
 /// The order of the things this does is the whole design:
@@ -79,7 +98,9 @@ class SaleCheckoutController extends _$SaleCheckoutController {
 
       final refusal = saleRefusal(
         cart: cart,
-        packageMarkupPercent: await _packageMarkup(pharmacyId, cart.saleType),
+        packageMarkupPercent: await ref.read(
+          packageMarkupPercentProvider(cart.saleType).future,
+        ),
       );
       if (refusal != null) {
         throw ValidationException(message: refusal);
@@ -159,21 +180,6 @@ class SaleCheckoutController extends _$SaleCheckoutController {
       state = AsyncError<Sale?>(error, stackTrace);
       rethrow;
     }
-  }
-
-  /// The pharmacy's package markup, read only when a package sale needs it.
-  ///
-  /// `null` is a real answer - nobody has configured it - and refuses the sale
-  /// rather than pricing it at an invented percentage (D-070). A counter sale does
-  /// not pay for this read.
-  Future<double?> _packageMarkup(String pharmacyId, SaleType saleType) async {
-    if (saleType != SaleType.package) {
-      return null;
-    }
-    final pharmacy = await ref
-        .read(pharmacyRepositoryProvider)
-        .byId(pharmacyId);
-    return pharmacy?.packageMarkupPercent;
   }
 
   /// Refuses the basket when a line asks for more than its batch holds.
