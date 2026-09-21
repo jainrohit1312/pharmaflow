@@ -3,6 +3,7 @@ library;
 
 import 'package:app/data/models/sale.dart';
 import 'package:app/data/models/sale_return.dart';
+import 'package:app/data/models/write_outcome.dart';
 import 'package:app/features/auth/application/pharmacy_scope.dart';
 import 'package:app/features/inventory/application/stock_readers.dart';
 import 'package:app/features/products/data/products_repository.dart';
@@ -88,7 +89,12 @@ class SaleReturnFormController extends _$SaleReturnFormController {
   Future<SaleReturn?> build() async => null;
 
   /// Records a return of [quantities] units, keyed by sale-item id.
-  Future<SaleReturn> createReturn({
+  ///
+  /// **What comes back may be a request rather than a return** (Phase 6.5c): for
+  /// anybody but the owner the whole document travels to the owner and nothing is
+  /// written, so nothing restocked and no credit note was posted. [WriteOutcome.isStaged]
+  /// says which, and the state holds the document only when there is one.
+  Future<WriteOutcome<SaleReturn>> createReturn({
     required String saleId,
     required DateTime returnDate,
     required Map<String, int> quantities,
@@ -98,7 +104,7 @@ class SaleReturnFormController extends _$SaleReturnFormController {
   }) async {
     state = const AsyncLoading<SaleReturn?>();
     try {
-      final saved = await ref
+      final outcome = await ref
           .read(saleReturnsRepositoryProvider)
           .create(
             pharmacyId: ref.read(requirePharmacyIdProvider),
@@ -109,10 +115,15 @@ class SaleReturnFormController extends _$SaleReturnFormController {
             refundMode: refundMode,
             reason: reason,
           );
-      state = AsyncData<SaleReturn?>(saved);
+      state = AsyncData<SaleReturn?>(outcome.document);
+
+      if (outcome.isStaged) {
+        return outcome;
+      }
+
       ref.invalidate(saleReturnsListControllerProvider);
       refreshStockReaders(ref);
-      return saved;
+      return outcome;
     } on Object catch (error, stackTrace) {
       state = AsyncError<SaleReturn?>(error, stackTrace);
       rethrow;

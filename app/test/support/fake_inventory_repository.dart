@@ -7,6 +7,7 @@ import 'package:app/data/models/alert_payloads.dart';
 import 'package:app/data/models/batch_status.dart';
 import 'package:app/data/models/product_stock.dart';
 import 'package:app/data/models/stock_adjustment.dart';
+import 'package:app/data/models/write_outcome.dart';
 import 'package:app/features/inventory/data/inventory_repository.dart';
 
 /// Builds a `product_stock` row with only the fields a test cares about.
@@ -95,9 +96,15 @@ class FakeInventoryRepository implements InventoryRepository {
   /// No product names: naming rows is a products-repository job
   /// (`ProductsRepository.namesFor`), so the expiry controllers read names from the
   /// products fake and this one never sees them.
+  ///
+  /// [isOwner] decides which of the server's two behaviours this fake stands in for: the
+  /// owner's correction is written, anybody else's is a request that moves nothing. The
+  /// default is the owner, so every test written before the approval existed keeps
+  /// asserting what it always asserted.
   FakeInventoryRepository({
     List<ProductStock> stock = const <ProductStock>[],
     List<BatchStatus> batches = const <BatchStatus>[],
+    this.isOwner = true,
   }) : stock = List<ProductStock>.of(stock),
        batches = List<BatchStatus>.of(batches);
 
@@ -106,6 +113,12 @@ class FakeInventoryRepository implements InventoryRepository {
 
   /// The rows the batch view holds.
   final List<BatchStatus> batches;
+
+  /// Whether writes land (the owner) or are raised as requests (everybody else).
+  final bool isOwner;
+
+  /// How many corrections the fake sent to the owner instead of writing.
+  int stagedSubmissions = 0;
 
   /// The last query `stockList` was given.
   StockQuery? lastStockQuery;
@@ -218,7 +231,7 @@ class FakeInventoryRepository implements InventoryRepository {
         ..sort(_byExpiry);
 
   @override
-  Future<void> adjustStock({
+  Future<WriteOutcome<StockAdjustment>> adjustStock({
     required String pharmacyId,
     required String productId,
     required AdjustmentType type,
@@ -237,6 +250,27 @@ class FakeInventoryRepository implements InventoryRepository {
       errorToThrow = null;
       throw error;
     }
+
+    // A member of staff's correction is a REQUEST (Phase 6.5c): the server writes no
+    // row and moves no stock, so the fake reports the same outcome.
+    if (!isOwner) {
+      stagedSubmissions++;
+      return WriteOutcome<StockAdjustment>.staged('ask-$productId');
+    }
+
+    return WriteOutcome<StockAdjustment>.recorded(
+      StockAdjustment(
+        id: 'adjustment-1',
+        pharmacyId: 'ph-1',
+        productId: productId,
+        batchId: batchId,
+        adjustmentType: type,
+        qty: qty,
+        reason: reason,
+        createdAt: DateTime(2026),
+        updatedAt: DateTime(2026),
+      ),
+    );
   }
 
   @override

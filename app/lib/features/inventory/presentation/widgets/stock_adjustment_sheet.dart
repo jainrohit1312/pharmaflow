@@ -6,11 +6,12 @@ import 'package:app/core/utils/validators.dart';
 import 'package:app/core/widgets/app_button.dart';
 import 'package:app/core/widgets/app_text_field.dart';
 import 'package:app/data/models/stock_adjustment.dart';
+import 'package:app/data/models/write_outcome.dart';
 import 'package:app/features/inventory/application/stock_adjustment_controller.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-/// Shows the stock correction sheet, resolving to whether anything was written.
+/// Shows the stock correction sheet, resolving to what the write did.
 ///
 /// [onHand] is the batch's current quantity, and it is what makes the decrease
 /// direction checkable before the write: the database refuses a decrease that
@@ -20,27 +21,28 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 /// A batch is required. `stock_adjustments.batch_id` is nullable, and the trigger
 /// records a product-level row without moving anything - which is not a thing a
 /// user should be able to do from a screen that looks like it changes stock.
-Future<bool> showStockAdjustmentSheet(
+///
+/// The answer is the **write's outcome** rather than a bare "something was written":
+/// for anybody but the owner the correction is a request, and a caller that reported
+/// "Stock adjusted." for one would be reporting a movement that has not happened.
+Future<WriteOutcome<StockAdjustment>?> showStockAdjustmentSheet(
   BuildContext context, {
   required String productId,
   required String productName,
   required String batchId,
   required String batchNo,
   required int onHand,
-}) async {
-  final written = await showModalBottomSheet<bool>(
-    context: context,
-    isScrollControlled: true,
-    builder: (sheetContext) => _StockAdjustmentSheet(
-      productId: productId,
-      productName: productName,
-      batchId: batchId,
-      batchNo: batchNo,
-      onHand: onHand,
-    ),
-  );
-  return written ?? false;
-}
+}) => showModalBottomSheet<WriteOutcome<StockAdjustment>>(
+  context: context,
+  isScrollControlled: true,
+  builder: (sheetContext) => _StockAdjustmentSheet(
+    productId: productId,
+    productName: productName,
+    batchId: batchId,
+    batchNo: batchNo,
+    onHand: onHand,
+  ),
+);
 
 /// The correction form.
 class _StockAdjustmentSheet extends ConsumerStatefulWidget {
@@ -76,7 +78,7 @@ class _StockAdjustmentSheetState extends ConsumerState<_StockAdjustmentSheet> {
     super.dispose();
   }
 
-  /// Validates, writes, and closes with `true` once the row is in.
+  /// Validates, writes, and closes with the outcome once the write has answered.
   Future<void> _submit() async {
     final form = _formKey.currentState;
     if (form == null || !form.validate()) {
@@ -84,7 +86,7 @@ class _StockAdjustmentSheetState extends ConsumerState<_StockAdjustmentSheet> {
     }
 
     try {
-      await ref
+      final outcome = await ref
           .read(stockAdjustmentControllerProvider.notifier)
           .adjustStock(
             productId: widget.productId,
@@ -96,7 +98,7 @@ class _StockAdjustmentSheetState extends ConsumerState<_StockAdjustmentSheet> {
       if (!mounted) {
         return;
       }
-      Navigator.of(context).pop(true);
+      Navigator.of(context).pop(outcome);
     } on Object catch (error) {
       if (!mounted) {
         return;

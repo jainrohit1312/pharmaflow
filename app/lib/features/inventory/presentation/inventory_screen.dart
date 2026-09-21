@@ -9,6 +9,7 @@ import 'package:app/core/widgets/app_scaffold.dart';
 import 'package:app/core/widgets/app_search_field.dart';
 import 'package:app/core/widgets/error_view.dart';
 import 'package:app/core/widgets/loading_view.dart';
+import 'package:app/features/approvals/presentation/sent_to_owner.dart';
 import 'package:app/features/inventory/application/expiry_batch.dart';
 import 'package:app/features/inventory/application/expiry_dashboard_controller.dart';
 import 'package:app/features/inventory/application/low_stock_controller.dart';
@@ -348,7 +349,7 @@ class _ExpiryTab extends ConsumerWidget {
     WidgetRef ref,
     ExpiryBatch entry,
   ) async {
-    final written = await showStockAdjustmentSheet(
+    final outcome = await showStockAdjustmentSheet(
       context,
       productId: entry.batch.productId,
       productName: entry.productName,
@@ -356,11 +357,16 @@ class _ExpiryTab extends ConsumerWidget {
       batchNo: entry.batch.batchNo,
       onHand: entry.qty,
     );
-    if (!written || !context.mounted) {
+    if (outcome == null || !context.mounted) {
       return;
     }
-    // The controller has already invalidated the board, so the row's quantity is
-    // being refetched; this only confirms the row was written.
+    // A correction is a REQUEST for anybody but the owner, and a request moves no
+    // stock - so "Stock adjusted." would be a claim about a balance that has not
+    // changed. The controller invalidated the board only when the write landed.
+    if (outcome.isStaged) {
+      showSentToOwnerNotice(context, message: sentForApprovalMessage);
+      return;
+    }
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
       ..showSnackBar(const SnackBar(content: Text('Stock adjusted.')));

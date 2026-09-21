@@ -265,7 +265,7 @@ void main() {
         final repository = _returns();
         final container = _container(returns: repository);
 
-        final saved = await _form(container).createReturn(
+        final outcome = await _form(container).createReturn(
           saleId: 'sale-1',
           returnDate: DateTime(2026, 9, 18),
           quantities: <String, int>{'item-1': 2},
@@ -273,6 +273,7 @@ void main() {
           refundMode: PaymentMode.upi,
           reason: 'Damaged in transit',
         );
+        final saved = outcome.document!;
 
         // 2 of the line's 5 units: 40% of 400 taxable, 48 tax and 448.
         expect(saved.subTotal, 160);
@@ -287,6 +288,11 @@ void main() {
         expect(saved.refundMode, PaymentMode.upi);
         expect(saved.reason, 'Damaged in transit');
         expect(saved.customerId, isNull);
+        expect(
+          outcome.isStaged,
+          isFalse,
+          reason: 'the owner is not gated, and this fake is him',
+        );
 
         // What was stored is the slice too, on the line as well as the header.
         final line = repository.items.single;
@@ -318,13 +324,14 @@ void main() {
       );
       final container = _container(returns: repository);
 
-      final saved = await _form(container).createReturn(
+      final outcome = await _form(container).createReturn(
         saleId: 'sale-1',
         returnDate: DateTime(2026, 9, 18),
         quantities: <String, int>{'item-1': 4, 'item-2': 1},
         restock: true,
         refundMode: PaymentMode.cash,
       );
+      final saved = outcome.document!;
 
       expect(saved.subTotal, 420); // 320 + 100
       expect(saved.taxTotal, 50.40); // 38.40 + 12

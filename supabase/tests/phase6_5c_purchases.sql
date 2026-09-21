@@ -179,8 +179,8 @@ begin
     || ': 1. and for purchase_delete');
 
   v_log := array_append(v_log, case
-    when not public.approval_has_executor('purchase_return') then 'PASS' else 'FAIL' end
-    || ': 1. and still no for an action type whose chunk has not landed (purchase_return)');
+    when not public.approval_has_executor('product_create') then 'PASS' else 'FAIL' end
+    || ': 1. and still no for an action type whose chunk has not landed (product_create)');
 
   select has_function_privilege('anon', p.oid, 'EXECUTE') into v_allowed
     from pg_proc p

@@ -8,6 +8,7 @@ import 'dart:async';
 import 'package:app/core/errors/app_exception.dart';
 import 'package:app/data/models/sale.dart';
 import 'package:app/data/models/sale_return.dart';
+import 'package:app/data/models/write_outcome.dart';
 import 'package:app/features/returns/data/sale_return_totals.dart';
 import 'package:app/features/returns/data/sale_returns_repository.dart';
 
@@ -89,12 +90,18 @@ SaleReturnItem buildSaleReturnItem({
 /// cannot be constructed without an initialised backend.
 class FakeSaleReturnsRepository implements SaleReturnsRepository {
   /// Creates a fake over [returns], [items], [sales] and [returnable].
+  ///
+  /// [isOwner] decides which of the server's two behaviours this fake stands in for: the
+  /// owner's return is written, anybody else's is a request that writes nothing and restocks
+  /// nothing. The default is the owner, so every test written before the approval existed
+  /// keeps asserting what it always asserted.
   FakeSaleReturnsRepository({
     List<SaleReturn> returns = const <SaleReturn>[],
     List<SaleReturnItem> items = const <SaleReturnItem>[],
     List<Sale> sales = const <Sale>[],
     Map<String, List<SaleReturnableLine>> returnable =
         const <String, List<SaleReturnableLine>>{},
+    this.isOwner = true,
   }) : returns = List<SaleReturn>.of(returns),
        items = List<SaleReturnItem>.of(items),
        sales = List<Sale>.of(sales),
@@ -111,6 +118,12 @@ class FakeSaleReturnsRepository implements SaleReturnsRepository {
 
   /// What can come back from each sale, by sale id.
   final Map<String, List<SaleReturnableLine>> returnable;
+
+  /// Whether writes land (the owner) or are raised as requests (everybody else).
+  final bool isOwner;
+
+  /// How many returns the fake sent to the owner instead of writing.
+  int stagedSubmissions = 0;
 
   /// What the last `create` was asked for, accepted or refused.
   Map<String, int>? lastQuantities;
@@ -190,7 +203,7 @@ class FakeSaleReturnsRepository implements SaleReturnsRepository {
   }
 
   @override
-  Future<SaleReturn> create({
+  Future<WriteOutcome<SaleReturn>> create({
     required String pharmacyId,
     required String saleId,
     required DateTime returnDate,
@@ -294,9 +307,16 @@ class FakeSaleReturnsRepository implements SaleReturnsRepository {
       reason: reason,
     );
 
+    // A member of staff's return is a REQUEST (Phase 6.5c): the server writes nothing,
+    // restocks nothing and posts no credit note, so the fake must not either.
+    if (!isOwner) {
+      stagedSubmissions++;
+      return WriteOutcome<SaleReturn>.staged('ask-$returnId');
+    }
+
     returns.insert(0, saved);
     items.addAll(created);
-    return saved;
+    return WriteOutcome<SaleReturn>.recorded(saved);
   }
 
   /// The bill being returned against.

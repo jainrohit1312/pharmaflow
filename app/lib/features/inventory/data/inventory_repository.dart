@@ -19,6 +19,7 @@ import 'package:app/data/models/alert_payloads.dart';
 import 'package:app/data/models/batch_status.dart';
 import 'package:app/data/models/product_stock.dart';
 import 'package:app/data/models/stock_adjustment.dart';
+import 'package:app/data/models/write_outcome.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart' as sb;
 
@@ -267,13 +268,19 @@ class InventoryRepository {
 
   /// Records a manual stock correction.
   ///
-  /// The row is the whole write: `stock_apply_adjustment()` moves the batch in
-  /// the same transaction and raises `check_violation` when a decrease would take
-  /// the batch below zero, so there is no second call to keep in step - and a
-  /// failure means nothing moved. That error is deliberately left to
-  /// [mapPostgrestException], which surfaces the database's own message
-  /// ("would take batch … below zero") rather than inventing a vaguer one.
-  Future<void> adjustStock({
+  /// **The write is a request for anybody but the owner** (Phase 6.5c), and
+  /// `record_stock_adjustment()` decides which: the owner's correction is written and comes
+  /// back `recorded`, and anybody else's is raised as an approval request with **nothing
+  /// written and no stock moved**. The answer says which, so the caller reports the
+  /// correction or says where the work went.
+  ///
+  /// When it is written, the row is the whole write: `stock_apply_adjustment()` moves the
+  /// batch in the same transaction and raises `check_violation` when a decrease would take
+  /// the batch below zero, so a failure means nothing moved. That error is deliberately left
+  /// to [mapPostgrestException], which surfaces the database's own message ("would take batch
+  /// … below zero") rather than inventing a vaguer one - and when the write is a REQUEST the
+  /// same sentence is what the owner meets if he approves a correction the stock cannot take.
+  Future<WriteOutcome<StockAdjustment>> adjustStock({
     required String pharmacyId,
     required String productId,
     required AdjustmentType type,
@@ -288,14 +295,23 @@ class InventoryRepository {
     }
 
     try {
-      await _client.from('stock_adjustments').insert(<String, dynamic>{
-        'pharmacy_id': pharmacyId,
-        'product_id': productId,
-        'batch_id': batchId,
-        'adjustment_type': type.dbValue,
-        'qty': qty,
-        'reason': _trimmedOrNull(reason),
-      });
+      final answer = await _client.rpc<dynamic>(
+        'record_stock_adjustment',
+        params: <String, dynamic>{
+          'p_payload': <String, dynamic>{
+            'product_id': productId,
+            'batch_id': batchId,
+            'adjustment_type': type.dbValue,
+            'qty': qty,
+            'reason': _trimmedOrNull(reason),
+          },
+        },
+      );
+
+      return WriteOutcome.fromJson(
+        answer as Map<String, dynamic>,
+        StockAdjustment.fromJson,
+      );
     } on sb.PostgrestException catch (error) {
       throw mapPostgrestException(
         error,

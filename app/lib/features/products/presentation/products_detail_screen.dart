@@ -18,6 +18,7 @@ import 'package:app/core/widgets/status_badge.dart';
 import 'package:app/data/models/batch_status.dart';
 import 'package:app/data/models/product.dart';
 import 'package:app/data/models/product_alias.dart';
+import 'package:app/features/approvals/presentation/sent_to_owner.dart';
 import 'package:app/features/inventory/presentation/widgets/stock_adjustment_sheet.dart';
 import 'package:app/features/products/application/products_detail_controller.dart';
 import 'package:app/features/products/application/products_form_controller.dart';
@@ -375,7 +376,7 @@ class _BatchesTab extends ConsumerWidget {
     WidgetRef ref,
     BatchStatus batch,
   ) async {
-    final written = await showStockAdjustmentSheet(
+    final outcome = await showStockAdjustmentSheet(
       context,
       productId: productId,
       productName: productName,
@@ -383,7 +384,14 @@ class _BatchesTab extends ConsumerWidget {
       batchNo: batch.batchNo,
       onHand: batch.qty,
     );
-    if (!written || !context.mounted) {
+    if (outcome == null || !context.mounted) {
+      return;
+    }
+    // A correction is a REQUEST for anybody but the owner, and a request moves no stock:
+    // the batch list is re-read only when something actually changed, and the sentence says
+    // which of the two happened.
+    if (outcome.isStaged) {
+      showSentToOwnerNotice(context, message: sentForApprovalMessage);
       return;
     }
     ref.invalidate(productDetailControllerProvider(productId));

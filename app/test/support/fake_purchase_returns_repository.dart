@@ -7,6 +7,7 @@ import 'package:app/core/errors/app_exception.dart';
 import 'package:app/data/models/purchase.dart';
 import 'package:app/data/models/purchase_return.dart';
 import 'package:app/data/models/purchase_return_item.dart';
+import 'package:app/data/models/write_outcome.dart';
 import 'package:app/features/returns/data/purchase_return_totals.dart';
 import 'package:app/features/returns/data/purchase_returns_repository.dart';
 
@@ -74,12 +75,18 @@ PurchaseReturnItem buildReturnItem({
 /// a form that skipped a check the write enforces should fail in the test.
 class FakePurchaseReturnsRepository implements PurchaseReturnsRepository {
   /// Creates a fake over [returns], [items], [purchases] and [returnable].
+  ///
+  /// [isOwner] decides which of the server's two behaviours this fake stands in for: the
+  /// owner's return is written, anybody else's is a request that writes nothing. The default
+  /// is the owner, so every test written before the approval existed keeps asserting what it
+  /// always asserted.
   FakePurchaseReturnsRepository({
     List<PurchaseReturn> returns = const <PurchaseReturn>[],
     List<PurchaseReturnItem> items = const <PurchaseReturnItem>[],
     List<Purchase> purchases = const <Purchase>[],
     Map<String, List<ReturnableLine>> returnable =
         const <String, List<ReturnableLine>>{},
+    this.isOwner = true,
   }) : returns = List<PurchaseReturn>.of(returns),
        items = List<PurchaseReturnItem>.of(items),
        purchases = List<Purchase>.of(purchases),
@@ -96,6 +103,12 @@ class FakePurchaseReturnsRepository implements PurchaseReturnsRepository {
 
   /// What can go back from each purchase, by purchase id.
   final Map<String, List<ReturnableLine>> returnable;
+
+  /// Whether writes land (the owner) or are raised as requests (everybody else).
+  final bool isOwner;
+
+  /// How many returns the fake sent to the owner instead of writing.
+  int stagedSubmissions = 0;
 
   /// The quantities the last `create` was given.
   Map<String, int>? lastQuantities;
@@ -155,7 +168,7 @@ class FakePurchaseReturnsRepository implements PurchaseReturnsRepository {
   }) async => returnable[purchaseId] ?? const <ReturnableLine>[];
 
   @override
-  Future<PurchaseReturn> create({
+  Future<WriteOutcome<PurchaseReturn>> create({
     required String pharmacyId,
     required String purchaseId,
     required DateTime returnDate,
@@ -255,9 +268,18 @@ class FakePurchaseReturnsRepository implements PurchaseReturnsRepository {
       reason: reason,
     );
 
+    // A member of staff's return is a REQUEST (Phase 6.5c): the server writes nothing
+    // and raises an ask carrying the whole document, so the fake must not write one
+    // either - a screen test that saw a return "saved" here would be asserting a
+    // behaviour the server does not have.
+    if (!isOwner) {
+      stagedSubmissions++;
+      return WriteOutcome<PurchaseReturn>.staged('ask-$returnId');
+    }
+
     returns.insert(0, saved);
     items.addAll(created);
-    return saved;
+    return WriteOutcome<PurchaseReturn>.recorded(saved);
   }
 
   /// The purchase being returned against.

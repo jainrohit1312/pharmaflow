@@ -2,6 +2,7 @@
 library;
 
 import 'package:app/data/models/purchase_return.dart';
+import 'package:app/data/models/write_outcome.dart';
 import 'package:app/features/auth/application/pharmacy_scope.dart';
 import 'package:app/features/inventory/application/stock_readers.dart';
 import 'package:app/features/returns/application/purchase_returns_list_controller.dart';
@@ -37,7 +38,13 @@ class PurchaseReturnFormController extends _$PurchaseReturnFormController {
   /// repository from the invoice line, the returns already raised against it and
   /// the batch balance - so a stale form cannot talk the write into a larger
   /// credit than the invoice supports.
-  Future<PurchaseReturn> createReturn({
+  ///
+  /// **What comes back may be a request rather than a return** (Phase 6.5c): for
+  /// anybody but the owner the whole document travels to the owner and nothing is
+  /// written. [WriteOutcome.isStaged] says which, and the state holds the document
+  /// only when there is one - a staged write has fetched nothing, so there is
+  /// nothing to refresh either.
+  Future<WriteOutcome<PurchaseReturn>> createReturn({
     required String purchaseId,
     required DateTime returnDate,
     required Map<String, int> quantities,
@@ -45,7 +52,7 @@ class PurchaseReturnFormController extends _$PurchaseReturnFormController {
   }) async {
     state = const AsyncLoading<PurchaseReturn?>();
     try {
-      final saved = await ref
+      final outcome = await ref
           .read(purchaseReturnsRepositoryProvider)
           .create(
             pharmacyId: ref.read(requirePharmacyIdProvider),
@@ -54,10 +61,15 @@ class PurchaseReturnFormController extends _$PurchaseReturnFormController {
             quantities: quantities,
             reason: reason,
           );
-      state = AsyncData<PurchaseReturn?>(saved);
+      state = AsyncData<PurchaseReturn?>(outcome.document);
+
+      if (outcome.isStaged) {
+        return outcome;
+      }
+
       ref.invalidate(purchaseReturnsListControllerProvider);
       refreshStockReaders(ref);
-      return saved;
+      return outcome;
     } on Object catch (error, stackTrace) {
       state = AsyncError<PurchaseReturn?>(error, stackTrace);
       rethrow;

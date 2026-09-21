@@ -3,11 +3,15 @@
 /// Phase 6.5c put purchases behind the owner's approval, and the difference between "saved"
 /// and "sent" is not a detail: a member of staff's receipt has **posted nothing**, so the
 /// medicines are not in stock, and a silence after tapping Save would read as a receipt.
-/// One sentence, in one place, so the three screens that write a purchase cannot each
-/// phrase it differently from what the server did.
+///
+/// A purchase is the one gated document whose staged state is a *row*, so this file's job is
+/// reading that state; the sentences themselves live with the rail, in
+/// `features/approvals/presentation/sent_to_owner.dart`, so no two features can phrase the
+/// same fact differently.
 library;
 
 import 'package:app/data/models/purchase.dart';
+import 'package:app/features/approvals/presentation/sent_to_owner.dart';
 import 'package:flutter/material.dart';
 
 /// Whether a write's answer means the document went to the owner rather than landing.
@@ -25,17 +29,6 @@ bool wentToOwner({
   required bool isOwner,
   required bool isCancellation,
 }) => document.status.isPendingApproval || (isCancellation && !isOwner);
-
-/// What a staged document's writer is told.
-const String sentToOwnerMessage =
-    'Sent to the owner. Nothing posts until he approves it.';
-
-/// What a cancellation's asker is told.
-///
-/// Deliberately not the sentence above: a cancellation posts nothing either way, so the
-/// thing its asker needs to know is that the document has not moved.
-const String sentToOwnerCancellationMessage =
-    'Sent to the owner. The document stays as it is until he answers.';
 
 /// Shows the right sentence when [wentToOwner], and shows nothing otherwise.
 ///
@@ -55,15 +48,10 @@ void reportSentToOwner(
     return;
   }
 
-  ScaffoldMessenger.of(context)
-    ..hideCurrentSnackBar()
-    ..showSnackBar(
-      SnackBar(
-        content: Text(
-          isCancellation && !document.status.isPendingApproval
-              ? sentToOwnerCancellationMessage
-              : sentToOwnerMessage,
-        ),
-      ),
-    );
+  showSentToOwnerNotice(
+    context,
+    message: isCancellation && !document.status.isPendingApproval
+        ? sentToOwnerCancellationMessage
+        : sentToOwnerMessage,
+  );
 }

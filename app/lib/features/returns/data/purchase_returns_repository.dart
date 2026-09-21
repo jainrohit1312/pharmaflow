@@ -16,6 +16,7 @@ import 'package:app/data/models/purchase.dart';
 import 'package:app/data/models/purchase_item.dart';
 import 'package:app/data/models/purchase_return.dart';
 import 'package:app/data/models/purchase_return_item.dart';
+import 'package:app/data/models/write_outcome.dart';
 import 'package:app/features/returns/data/purchase_return_totals.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart' as sb;
@@ -244,16 +245,16 @@ class PurchaseReturnsRepository {
   /// [returnableFor] - so a form cannot talk the write into a bigger credit than
   /// the invoice supports.
   ///
-  /// **Two statements, not one.** The header is written first, because the items
-  /// reference it, and the items are written in a single INSERT, which Postgres
-  /// applies atomically - so stock moves for all of them or none of them. A
-  /// refused set can therefore leave a header with no lines. It is deliberately
-  /// not deleted on failure: an item insert that reached the database but whose
-  /// response was lost would be indistinguishable from one that never ran, and
-  /// deleting the header would cascade its lines away while the stock stayed
-  /// decremented. An empty header is visible on the list and costs nothing; the
-  /// cancellation only has to be raised again.
-  Future<PurchaseReturn> create({
+  /// **The write is a request for anybody but the owner** (Phase 6.5c), and it is
+  /// `record_purchase_return()` that decides which: the owner's return is written and
+  /// comes back `recorded`, and anybody else's is raised as an approval request
+  /// carrying the whole document, with **nothing written at all**. The answer says
+  /// which, so the caller opens the return or says where the work went.
+  ///
+  /// The header and its lines are one call now, which is strictly safer than the two
+  /// statements this used to make: a refused line set can no longer leave a header
+  /// with no lines behind it.
+  Future<WriteOutcome<PurchaseReturn>> create({
     required String pharmacyId,
     required String purchaseId,
     required DateTime returnDate,
@@ -332,35 +333,28 @@ class PurchaseReturnsRepository {
     final totals = PurchaseReturnTotals.forLines(amounts);
 
     try {
-      final headerRow = await _client
-          .from('purchase_returns')
-          .insert(<String, dynamic>{
-            'pharmacy_id': pharmacyId,
+      final answer = await _client.rpc<dynamic>(
+        'record_purchase_return',
+        params: <String, dynamic>{
+          'p_payload': <String, dynamic>{
             'purchase_id': purchaseId,
-            'supplier_id': purchase.supplierId,
             'return_date': Formatters.dateIso(returnDate),
             'reason': _trimmedOrNull(reason),
             'sub_total': totals.subTotal,
             'tax_total': totals.taxTotal,
             'grand_total': totals.grandTotal,
-          })
-          .select()
-          .single();
-      final returnId = headerRow['id'] as String;
-
-      // One statement for every line: the trigger moves stock per row and raises
-      // on a batch that is short, and a single INSERT means the raise takes the
-      // whole set with it rather than leaving half the units returned.
-      await _client.from('purchase_return_items').insert(<Map<String, dynamic>>[
-        for (final payload in payloads)
-          <String, dynamic>{
-            ...payload,
-            'pharmacy_id': pharmacyId,
-            'purchase_return_id': returnId,
+            // One array for every line: the server writes them in a single INSERT,
+            // so the stock trigger's refusal takes the whole set with it rather
+            // than leaving half the units returned.
+            'items': payloads,
           },
-      ]);
+        },
+      );
 
-      return PurchaseReturn.fromJson(headerRow);
+      return WriteOutcome.fromJson(
+        answer as Map<String, dynamic>,
+        PurchaseReturn.fromJson,
+      );
     } on sb.PostgrestException catch (error) {
       throw mapPostgrestException(
         error,

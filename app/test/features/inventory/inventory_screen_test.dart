@@ -199,6 +199,43 @@ void main() {
     expect(find.text('Stock adjusted.'), findsOneWidget);
   });
 
+  testWidgets('a staff correction says it went to the owner, and moves nothing', (
+    tester,
+  ) async {
+    // Phase 6.5c: a correction is a REQUEST for anybody but the owner, and a request moves
+    // no stock - so "Stock adjusted." would be a claim about a balance that has not changed.
+    final repository = FakeInventoryRepository(
+      batches: <BatchStatus>[buildBatch()],
+      isOwner: false,
+    );
+    await pumpInventoryApp(tester, repository: repository);
+    await _openTab(tester, 'Expiry');
+
+    await tester.tap(find.byTooltip('Adjust this batch'));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.widgetWithText(TextFormField, 'Quantity'), '2');
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(ElevatedButton, 'Record adjustment'));
+    await tester.pumpAndSettle();
+
+    expect(
+      repository.stagedSubmissions,
+      1,
+      reason: 'the correction was asked for rather than written',
+    );
+    expect(
+      find.text(
+        'Sent to the owner. Nothing has been recorded until he approves it.',
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.text('Stock adjusted.'),
+      findsNothing,
+      reason: 'nothing was adjusted, so nothing may say it was',
+    );
+  });
+
   testWidgets('will not let a decrease exceed what the batch holds', (
     tester,
   ) async {

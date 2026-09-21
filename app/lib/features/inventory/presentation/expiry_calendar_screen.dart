@@ -10,6 +10,7 @@ import 'package:app/core/widgets/app_empty_view.dart';
 import 'package:app/core/widgets/app_scaffold.dart';
 import 'package:app/core/widgets/error_view.dart';
 import 'package:app/core/widgets/loading_view.dart';
+import 'package:app/features/approvals/presentation/sent_to_owner.dart';
 import 'package:app/features/inventory/application/expiry_batch.dart';
 import 'package:app/features/inventory/application/expiry_calendar_controller.dart';
 import 'package:app/features/inventory/presentation/widgets/expiry_batch_card.dart';
@@ -173,7 +174,7 @@ class _CalendarBody extends ConsumerWidget {
     WidgetRef ref,
     ExpiryBatch entry,
   ) async {
-    final written = await showStockAdjustmentSheet(
+    final outcome = await showStockAdjustmentSheet(
       context,
       productId: entry.batch.productId,
       productName: entry.productName,
@@ -181,7 +182,13 @@ class _CalendarBody extends ConsumerWidget {
       batchNo: entry.batch.batchNo,
       onHand: entry.qty,
     );
-    if (!written || !context.mounted) {
+    if (outcome == null || !context.mounted) {
+      return;
+    }
+    // A correction is a REQUEST for anybody but the owner, and a request moves no stock,
+    // so the confirmation has to say which of the two happened.
+    if (outcome.isStaged) {
+      showSentToOwnerNotice(context, message: sentForApprovalMessage);
       return;
     }
     ScaffoldMessenger.of(context)

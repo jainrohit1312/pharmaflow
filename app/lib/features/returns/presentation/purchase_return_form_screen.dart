@@ -16,6 +16,7 @@ import 'package:app/core/widgets/section_card.dart';
 import 'package:app/data/models/purchase.dart';
 import 'package:app/data/models/purchase_return.dart';
 import 'package:app/data/models/supplier.dart';
+import 'package:app/features/approvals/presentation/sent_to_owner.dart';
 import 'package:app/features/returns/application/purchase_return_form_controller.dart';
 import 'package:app/features/returns/data/purchase_return_totals.dart';
 import 'package:app/features/returns/data/purchase_returns_repository.dart';
@@ -195,7 +196,7 @@ class _PurchaseReturnFormScreenState
     }
 
     try {
-      final saved = await ref
+      final outcome = await ref
           .read(purchaseReturnFormControllerProvider.notifier)
           .createReturn(
             purchaseId: purchaseId,
@@ -206,7 +207,13 @@ class _PurchaseReturnFormScreenState
       if (!mounted) {
         return;
       }
-      context.go(Routes.returnDetail(saved.id));
+      // A return is a REQUEST for anybody but the owner: nothing was written, so
+      // there is no document to open and the work is in his queue instead.
+      if (outcome.document case final saved?) {
+        context.go(Routes.returnDetail(saved.id));
+        return;
+      }
+      showSentToOwnerNotice(context, message: sentForApprovalMessage);
     } on Object {
       // The controller has already put the failure in its state, which the
       // `ref.listen` above turns into a SnackBar.

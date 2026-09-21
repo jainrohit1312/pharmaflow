@@ -21,6 +21,7 @@ import 'package:app/data/datasources/supabase_client.dart';
 import 'package:app/data/models/sale.dart';
 import 'package:app/data/models/sale_item.dart';
 import 'package:app/data/models/sale_return.dart';
+import 'package:app/data/models/write_outcome.dart';
 import 'package:app/features/returns/data/sale_return_totals.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart' as sb;
@@ -207,13 +208,18 @@ class SaleReturnsRepository {
   /// figures (`SaleReturnTotals`), and the limit from [returnableFor], so a form
   /// cannot refund more than was bought.
   ///
-  /// **Two statements, not one.** The header is written first, because the lines
-  /// reference it, and the lines are one INSERT - which Postgres applies atomically,
-  /// so every restock happens together or none of them does. A refused set can
-  /// therefore leave a header with no lines, deliberately not deleted: the same
-  /// reasoning as the purchase side, where an insert that reached the database but
-  /// whose response was lost is indistinguishable from one that never ran.
-  Future<SaleReturn> create({
+  /// **The write is a request for anybody but the owner** (Phase 6.5c), and it is
+  /// `record_sale_return()` that decides which: the owner's return is written and comes
+  /// back `recorded`, and anybody else's is raised as an approval request carrying the
+  /// whole document, with **nothing written and no stock restored**. The patient comes
+  /// from the sale and the restock decision from [restock] - which is sent explicitly,
+  /// never left to a default, because the trigger reads an absent `restock` as "write it
+  /// off".
+  ///
+  /// The header and its lines are one call now, which is strictly safer than the two
+  /// statements this used to make: a refused line set can no longer leave a header with
+  /// no lines behind it.
+  Future<WriteOutcome<SaleReturn>> create({
     required String pharmacyId,
     required String saleId,
     required DateTime returnDate,
@@ -287,34 +293,30 @@ class SaleReturnsRepository {
     final totals = SaleReturnTotals.forLines(amounts);
 
     try {
-      final headerRow = await _client
-          .from('sale_returns')
-          .insert(<String, dynamic>{
-            'pharmacy_id': pharmacyId,
+      final answer = await _client.rpc<dynamic>(
+        'record_sale_return',
+        params: <String, dynamic>{
+          'p_payload': <String, dynamic>{
             'sale_id': saleId,
-            'customer_id': sale.customerId,
             'return_date': Formatters.dateIso(returnDate),
             'reason': _trimmedOrNull(reason),
             'refund_mode': refundMode.dbValue,
+            // Sent as a literal, never omitted: `stock_restore_on_sale_return()` reads a
+            // missing `restock` as false, so an absence here would write off goods the
+            // operator meant to put back on the shelf.
             'restock': restock,
             'sub_total': totals.subTotal,
             'tax_total': totals.taxTotal,
             'grand_total': totals.grandTotal,
-          })
-          .select()
-          .single();
-      final returnId = headerRow['id'] as String;
-
-      await _client.from('sale_return_items').insert(<Map<String, dynamic>>[
-        for (final payload in payloads)
-          <String, dynamic>{
-            ...payload,
-            'pharmacy_id': pharmacyId,
-            'sale_return_id': returnId,
+            'items': payloads,
           },
-      ]);
+        },
+      );
 
-      return SaleReturn.fromJson(headerRow);
+      return WriteOutcome.fromJson(
+        answer as Map<String, dynamic>,
+        SaleReturn.fromJson,
+      );
     } on sb.PostgrestException catch (error) {
       throw mapPostgrestException(
         error,

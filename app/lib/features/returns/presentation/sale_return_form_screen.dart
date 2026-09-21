@@ -16,6 +16,7 @@ import 'package:app/core/widgets/loading_view.dart';
 import 'package:app/core/widgets/section_card.dart';
 import 'package:app/data/models/sale.dart';
 import 'package:app/data/models/sale_return.dart';
+import 'package:app/features/approvals/presentation/sent_to_owner.dart';
 import 'package:app/features/returns/application/sale_return_form_controller.dart';
 import 'package:app/features/returns/data/sale_return_totals.dart';
 import 'package:app/features/returns/data/sale_returns_repository.dart';
@@ -207,7 +208,7 @@ class _SaleReturnFormScreenState extends ConsumerState<SaleReturnFormScreen> {
     }
 
     try {
-      final saved = await ref
+      final outcome = await ref
           .read(saleReturnFormControllerProvider.notifier)
           .createReturn(
             saleId: saleId,
@@ -222,7 +223,15 @@ class _SaleReturnFormScreenState extends ConsumerState<SaleReturnFormScreen> {
       }
       // The bill is the context for a return, and there is no return screen of its
       // own: opening the sale shows both what was sold and what came back.
-      context.go(Routes.saleDetail(saved.saleId));
+      //
+      // Unless the return is a REQUEST, which for anybody but the owner it is: then
+      // nothing was written, so there is nothing new to see on the bill and the work
+      // is in the owner's queue.
+      if (outcome.document case final saved?) {
+        context.go(Routes.saleDetail(saved.saleId));
+        return;
+      }
+      showSentToOwnerNotice(context, message: sentForApprovalMessage);
     } on Object {
       // The controller has already put the failure in its state, which the
       // `ref.listen` above turns into a SnackBar.
