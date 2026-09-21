@@ -82,13 +82,27 @@ class LedgerRepository {
     }
   }
 
-  /// Records a payment and its ledger entry, in one transaction.
+  /// Takes a payment and posts its ledger entry, in one transaction.
   ///
   /// An RPC rather than two inserts, because the two rows have to agree: a payment
   /// that recorded the cash and failed to post the ledger would leave a party
-  /// looking in debt after they had paid. `record_payment()` (migration
-  /// 20260918000020) takes the pharmacy from the caller's identity and refuses a
-  /// party from another tenant.
+  /// looking in debt after they had paid.
+  ///
+  /// **It goes through `collect_payment()` (migration 20260920000037), not
+  /// `record_payment()` directly, and that is the point.** `collect_payment` writes the
+  /// receipt through `record_payment` *and* its allocations in the same transaction, so
+  /// a receipt is one thing however it is taken. Passing **no allocations** is a real
+  /// collection with a complete answer: the receipt stands on its own and its whole
+  /// amount stays an **unallocated deposit** - which is exactly what this sheet has
+  /// always meant, and what a counter holding an advance means.
+  ///
+  /// **One path rather than two, deliberately.** `record_payment` alone writes a
+  /// receipt that settles nothing, so a bill paid through it reads as **unpaid** once
+  /// balances are computed from allocations (the divergence D-075 warns about: *"every
+  /// paid bill would read as unpaid once balances are computed from allocations"*) -
+  /// the ledger and the account disagreeing while both look internally consistent.
+  /// `record_payment` remains the server's own step inside `collect_payment`, and
+  /// **nothing in Dart calls it directly any more**.
   ///
   /// The direction is the function's business, not this one's: a supplier payment
   /// debits and a customer payment credits.
@@ -109,12 +123,15 @@ class LedgerRepository {
 
     try {
       await _client.rpc<dynamic>(
-        'record_payment',
+        'collect_payment',
         params: <String, dynamic>{
           'p_party_type': partyType.dbValue,
           'p_party_id': partyId,
           'p_amount': amount,
           'p_mode': mode.dbValue,
+          // No allocations: a receipt on its own, whose whole amount is a deposit.
+          // The function's own `coalesce` treats this exactly as an empty list.
+          'p_allocations': null,
           'p_reference_no': referenceNo?.trim().isEmpty ?? true
               ? null
               : referenceNo!.trim(),

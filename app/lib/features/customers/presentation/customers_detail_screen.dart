@@ -12,10 +12,13 @@ import 'package:app/core/widgets/error_view.dart';
 import 'package:app/core/widgets/loading_view.dart';
 import 'package:app/core/widgets/section_card.dart';
 import 'package:app/core/widgets/status_badge.dart';
+import 'package:app/data/models/admission.dart';
 import 'package:app/data/models/customer.dart';
 import 'package:app/data/models/party_balance.dart';
+import 'package:app/features/balances/presentation/widgets/patient_balance_card.dart';
 import 'package:app/features/customers/application/customers_detail_controller.dart';
 import 'package:app/features/customers/application/customers_form_controller.dart';
+import 'package:app/features/customers/application/patient_lookup.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -118,6 +121,12 @@ class CustomersDetailScreen extends ConsumerWidget {
             ),
           ),
           const SizedBox(height: 16),
+          // The account before the ledger: "what is owed" is the figure a counter opens
+          // this screen for, and the entries behind it are the detail under it.
+          PatientBalanceCard(customerId: customerId),
+          const SizedBox(height: 16),
+          _AdmissionsCard(patientId: customerId),
+          const SizedBox(height: 16),
           _LedgerCard(data: data),
           const SizedBox(height: 16),
           SectionCard(
@@ -191,6 +200,105 @@ const AppBackButton _backToCustomers = AppBackButton(
   location: Routes.customers,
   tooltip: 'Back to customers',
 );
+
+/// The patient's episodes, each one a door to its own account.
+///
+/// The drill-down the admission screen is reached from. One patient has many episodes
+/// and their balances never mix (D-074), so **which** one is being asked about is chosen
+/// here rather than assumed - and a discharged episode is listed too, because a stay
+/// that has ended still has an account.
+class _AdmissionsCard extends ConsumerWidget {
+  const _AdmissionsCard({required this.patientId});
+
+  /// The patient whose episodes these are.
+  final String patientId;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final admissions = ref.watch(patientAdmissionsProvider(patientId));
+
+    if (admissions.hasError && !admissions.hasValue) {
+      return SectionCard(
+        title: 'Admissions',
+        child: ErrorView(
+          message: describeError(admissions.error!),
+          onRetry: () => ref.invalidate(patientAdmissionsProvider(patientId)),
+        ),
+      );
+    }
+
+    final rows = admissions.value;
+    if (rows == null) {
+      return const SectionCard(
+        title: 'Admissions',
+        child: Text('Loading admissions…'),
+      );
+    }
+
+    if (rows.isEmpty) {
+      return const SectionCard(
+        title: 'Admissions',
+        trailing: StatusBadge(label: 'None recorded'),
+        child: Text(
+          'No IPD episode has been recorded for this patient. An episode is created '
+          'when an IPD sale names one, or registered on its own from the counter.',
+        ),
+      );
+    }
+
+    return SectionCard(
+      title: 'Admissions',
+      trailing: StatusBadge(
+        label: rows.length == 1 ? '1 episode' : '${rows.length} episodes',
+      ),
+      child: Column(
+        children: <Widget>[
+          for (var index = 0; index < rows.length; index++) ...<Widget>[
+            _AdmissionRow(admission: rows[index]),
+            if (index < rows.length - 1) const Divider(height: 20),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+/// One episode, tapping through to its account.
+class _AdmissionRow extends StatelessWidget {
+  const _AdmissionRow({required this.admission});
+
+  /// The episode.
+  final Admission admission;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return InkWell(
+      onTap: () => context.go(Routes.admission(admission.id)),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 6),
+        child: Row(
+          children: <Widget>[
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  Text(admission.admissionNo, style: theme.textTheme.bodyLarge),
+                  Text(
+                    '${Formatters.dateDdMmYyyy(admission.admittedOn)}'
+                    '${admission.dischargedOn == null ? ' · active' : ' · discharged'}',
+                    style: theme.textTheme.bodySmall,
+                  ),
+                ],
+              ),
+            ),
+            const Icon(Icons.chevron_right),
+          ],
+        ),
+      ),
+    );
+  }
+}
 
 /// What this customer owes, read from their ledger.
 ///

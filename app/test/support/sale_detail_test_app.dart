@@ -11,6 +11,7 @@ import 'package:app/data/models/pharmacy.dart';
 import 'package:app/data/models/product.dart';
 import 'package:app/data/repositories/pharmacy_repository.dart';
 import 'package:app/features/auth/application/pharmacy_scope.dart';
+import 'package:app/features/balances/data/balances_repository.dart';
 import 'package:app/features/products/data/products_repository.dart';
 import 'package:app/features/purchase/data/purchase_totals.dart';
 import 'package:app/features/sales/application/sale_detail_controller.dart';
@@ -23,6 +24,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 
+import 'fake_balances_repository.dart';
 import 'fake_products_repository.dart';
 import 'fake_sales_repository.dart';
 
@@ -102,6 +104,7 @@ Future<GoRouter> pumpSaleDetailApp(
   required FakeSalesRepository repository,
   FakeProductsRepository? products,
   FakePharmacyRepository? pharmacy,
+  FakeBalancesRepository? balances,
   FakeInvoicePrinter? printer,
   TaxSplit split = TaxSplit.intraState,
   String saleId = 'sale-1',
@@ -131,6 +134,13 @@ Future<GoRouter> pumpSaleDetailApp(
         ),
         productsRepositoryProvider.overrideWithValue(
           products ?? FakeProductsRepository(products: const <Product>[]),
+        ),
+        // The bill shows what has been applied to it, which is a server aggregate. Left
+        // unstubbed it would reach a real client, and the card would render its own
+        // error - which is how a screen can read a live repository in a test without
+        // failing, and is exactly what this override is for.
+        balancesRepositoryProvider.overrideWithValue(
+          balances ?? FakeBalancesRepository(),
         ),
       ],
       child: MaterialApp.router(routerConfig: router),

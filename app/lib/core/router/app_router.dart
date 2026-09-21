@@ -14,6 +14,7 @@ import 'package:app/features/auth/data/auth_repository.dart';
 import 'package:app/features/auth/presentation/login_screen.dart';
 import 'package:app/features/auth/presentation/register_screen.dart';
 import 'package:app/features/auth/presentation/splash_screen.dart';
+import 'package:app/features/balances/presentation/admission_account_screen.dart';
 import 'package:app/features/chatbot/presentation/chatbot_screen.dart';
 import 'package:app/features/customers/presentation/customers_detail_screen.dart';
 import 'package:app/features/customers/presentation/customers_form_screen.dart';
@@ -196,6 +197,13 @@ final appRouterProvider = Provider<GoRouter>((ref) {
             name: 'customerDetail',
             builder: (context, state) => CustomersDetailScreen(
               customerId: state.pathParameters['customerId']!,
+            ),
+          ),
+          GoRoute(
+            path: Routes.admissionPattern,
+            name: 'admissionAccount',
+            builder: (context, state) => AdmissionAccountScreen(
+              admissionId: state.pathParameters['admissionId']!,
             ),
           ),
           GoRoute(

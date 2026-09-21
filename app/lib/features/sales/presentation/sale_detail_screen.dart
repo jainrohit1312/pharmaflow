@@ -17,6 +17,7 @@ import 'package:app/data/models/sale.dart';
 import 'package:app/data/models/sale_item.dart';
 import 'package:app/data/repositories/pharmacy_repository.dart';
 import 'package:app/features/auth/application/pharmacy_scope.dart';
+import 'package:app/features/balances/presentation/widgets/sale_allocations_card.dart';
 import 'package:app/features/purchase/data/purchase_totals.dart';
 import 'package:app/features/sales/application/sale_detail_controller.dart';
 import 'package:app/features/sales/application/sale_tax_split.dart';
@@ -24,6 +25,7 @@ import 'package:app/features/sales/presentation/widgets/sale_status_badge.dart';
 import 'package:app/services/invoice_printer.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
 /// The invoice for one sale: what was sold, what it came to, and how it was paid.
 ///
@@ -184,6 +186,24 @@ class SaleDetailScreen extends ConsumerWidget {
               ],
             ),
           ),
+          const SizedBox(height: 16),
+          // What has actually been applied to this bill, which is a different question
+          // from what was handed over: money that was never aimed at a bill stays an
+          // unapplied deposit on the party's account.
+          SaleAllocationsCard(saleId: saleId),
+          if (sale.admissionId != null) ...<Widget>[
+            const SizedBox(height: 16),
+            SectionCard(
+              title: 'Admission',
+              child: AppButton.text(
+                label: 'Open the admission account',
+                icon: Icons.local_hospital_outlined,
+                expand: false,
+                onPressed: () =>
+                    context.go(Routes.admission(sale.admissionId!)),
+              ),
+            ),
+          ],
           const SizedBox(height: 24),
           AppButton.outlined(
             label: 'Back to sales',

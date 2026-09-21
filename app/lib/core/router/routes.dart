@@ -92,6 +92,16 @@ abstract final class Routes {
   /// Path of the detail screen for [customerId].
   static String customerDetail(String customerId) => '/customers/$customerId';
 
+  /// Route pattern for one admission episode's account.
+  ///
+  /// Top-level rather than nested under the customer, because an episode is reached
+  /// from two places that are not its parent - the patient's detail and the bill a stay
+  /// was charged to - and a nested path would tie it to one of them.
+  static const String admissionPattern = '/admissions/:admissionId';
+
+  /// Path of the account for [admissionId].
+  static String admission(String admissionId) => '/admissions/$admissionId';
+
   /// Stock, reorder levels and expiry. Also the shell's Inventory destination.
   static const String inventory = '/inventory';
 
