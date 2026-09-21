@@ -421,17 +421,24 @@ class _PosCartLineState extends State<PosCartLine> {
         'exp ${date == null ? 'unknown' : Formatters.monthYearShort(date)}';
   }
 
-  // The traversal orders, all explicit because the tree's own order is not the
-  // counter's: every line's quantity sorts before every line's details, so Tab walks
-  // down the quantities - which is what "Tab from qty to the next line" means. The
-  // bands are far apart so a basket of any realistic length cannot collide.
-  double get _qtyOrder => widget.order * 100;
-  double get _toggleOrder => 500000 + widget.order.toDouble();
-  double get _removeOrder => 900000 + widget.order.toDouble();
+  // The traversal bands, all explicit because the tree's own order is not the counter's.
+  //
+  // **Every quantity sorts above every one of a line's own controls**, and that is what
+  // makes Tab walk the quantities and then *leave the basket*: from the last quantity this
+  // group has nothing left above it, so the next stop is the payment card - which is where
+  // a counter wants to be when it has finished ringing lines up. A line's own controls (the
+  // details toggle, the remove button, the rate/discount/GST fields) sit in the bands below,
+  // so Tab never falls into them; they stay reachable by Shift+Tab and by tap.
+  //
+  // It used to be the other way round, and the last quantity's Tab landed on that line's
+  // details toggle instead of the money.
+  double get _qtyOrder => 1000000 + widget.order * 100;
+  double get _toggleOrder => 100000 + widget.order.toDouble();
+  double get _removeOrder => 200000 + widget.order.toDouble();
 
   /// The order of this line's [index]-th detail field (`0` rate, `1` disc, `2` GST).
   double _detailOrder(int index) =>
-      600000 + widget.order * 10 + index.toDouble();
+      300000 + widget.order * 10 + index.toDouble();
 }
 
 /// Formats [value] for a text field, leaving off a trailing `.0`.

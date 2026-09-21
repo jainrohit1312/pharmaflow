@@ -758,6 +758,36 @@ void main() {
       );
       expect(qtyAt(tester).text, '1');
     });
+
+    testWidgets('Tab from the last quantity leaves the basket for payment', (
+      tester,
+    ) async {
+      await pumpCounter(tester, FakeSalesRepository());
+      await _addLine(tester);
+      expect(
+        FocusManager.instance.primaryFocus?.debugLabel,
+        'pos cart quantity',
+      );
+
+      await _key(tester, LogicalKeyboardKey.tab);
+
+      expect(
+        tester.widget<EditableText>(qtyEditable()).focusNode.hasFocus,
+        isFalse,
+        reason: 'there is no next quantity, so the basket is done with',
+      );
+      // The payment card's mode chips are its first controls, so this says the caret left
+      // the basket and landed in the money - rather than on the line's own details toggle,
+      // which is where it used to go.
+      expect(
+        FocusManager.instance.primaryFocus?.context
+            ?.findAncestorWidgetOfExactType<Wrap>()
+            ?.children
+            .length,
+        PaymentMode.values.length,
+        reason: 'the next stop past the last quantity is the payment card',
+      );
+    });
   });
 
   group('the confirmation', () {
