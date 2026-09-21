@@ -4335,4 +4335,144 @@ perfectly answerable.
 - **`sale_edit`/`sale_cancel`'s asks are refreshed rather than stacked**, unchanged: the same
   document keeps one undecided question per action type.
 
+---
+
+## D-089 — The Chatbot's Answers Are Readable, They Lead With What Was Asked, and They Describe the Query That Ran
+
+**Date:** 2026-09-22
+
+**Status:** Active (the owner's chatbot brief, Phase A — built in three commits: `f9be7d1`
+(the emphasis marker, and the low-stock wording), `83cecc6` (a summary leads with its subject) and
+`a4022d1` (the sentence is written from the query that ran))
+
+**Decision:** The owner's report on this feature was two sentences long — *the answers are
+monotonous, and the important words and numbers are not bold* — and the three parts of Phase A
+below are what they turned out to mean. **No migration, no new dependency, and no change to the
+five reports' signatures**; the whole of it is `chat-sql-agent`'s own source and one new file in
+the app.
+
+**This is a deliberate reorder.** The owner's recorded sequence had Phase 6.5b (the receiver app)
+next, and `context/chat3v-opening-prompt.md` was written to open with it. The chatbot brief
+(`context/chatbot-owner-brief.md`) is taken up first instead, because it is the owner's own
+immediate problem and because it is the only workstream whose first slice needs nothing but the
+code already in the tree.
+
+### 1. One emphasis marker, written by the server
+
+A sentence marks the part worth pointing at with `**...**` — the figure an owner would circle, the
+product or batch it belongs to, and any exception ("already expired 6 days ago"). **The server
+writes it and only the server writes it**: the words and the figures are still `answer.ts`'s, and
+`answer_emphasis.dart` turns a marker into a bold run and decides nothing else, which is what keeps
+D-053 true (the model never produces a numeral, and the client never composes a sentence) while the
+answer becomes readable.
+
+A **general markdown renderer was rejected**: it is a new package for one marker's worth of job, and
+this project does not change its pinned dependencies casually. The reader understands `**` and
+nothing else, and its failure direction is stated and tested — a single `*`, an unclosed marker and
+an empty pair are all ordinary text, so the worst case is a sentence that renders as the words it is
+made of. A sentence with **nothing** to point at carries no marker at all, so a marker always means
+*there is a finding here*.
+
+**A question is never markup.** `MessageBubble` renders an answer as a `Text.rich` whose runs come
+from the parser, and a question as the plain `Text` it always was — a distinction that is structural
+and already there (`response == null`). That is the whole safety property: nothing a user types can
+reach the answer's styling.
+
+The marker travels with the sentence, so the conversation history the classifier is handed carries
+it. That is deliberate rather than overlooked: the history is context, the model returns only a
+choice and its parameters, and stripping the marker for one reader while rendering it for another
+would be a second copy of the sentence waiting to drift.
+
+**Consequences:**
+
+- `answer.ts` owns the marker, and `answer_test.ts` pins its contract **both ways** (every marker a
+  finding sentence writes is closed and brackets something; none of the four "nothing" sentences nor
+  either fixed failure carries one).
+- **Card text in the rest of the app is untouched**, and four doc comments in the alerts feature
+  (`alert_payloads.dart`, `alert_providers.dart`, `notifications_repository.dart`,
+  `notifications_screen.dart`) still describe the low-stock rule as "at or below". They are comments
+  rather than user-facing copy, so no screen misstates the rule — and they were left alone rather
+  than edited from outside the files this chunk touches.
+
+### 2. The low-stock sentence says what the report does
+
+`low_stock_products` filters `total_qty < min_stock_level` (migration 00027), deliberately strict: a
+product AT its level is where the pharmacy meant to act, and it is *not* on the list. The sentence
+said "at or below", claiming a row the report does not return. It says "below" now. **Copy only** —
+the threshold behaviour is untouched, because the brief that found this said in as many words not to
+change it.
+
+### 3. A summary leads with what the question named
+
+`report_summary` answers with five sections in one round trip (migration 00021) and the sentence read
+four figures out of `sales` and one out of `stock` for **every** question put to it: `sales.sub_total`,
+`sales.tax_total`, `returns` and `expenses` had never been opened by any sentence. "Monotonous" was
+the symptom; four fifths of the answer being unreachable was the cause.
+
+The model now declares **`subject`** — `sales`, `purchases`, `returns`, `expenses`, `stock`, or
+`everything` — and the sentence is chosen by it. This is **one more parameter, not one more report**:
+the call is the same call and the envelope is the same envelope, and what changes is which part of it
+a reader is shown. It is the rule the system instruction already applied between reports ("choose the
+one whose subject the question names") applied inside one. `everything` is the broad question and
+**the default, and its sentence is byte-identical to the one this file always wrote**, so a classifier
+that names no subject changes nothing.
+
+**The period belongs only where there is one**: sales, purchases, returns and expenses happened *in*
+it, while `stock` is what is on the shelf **now** and takes no period at all — prefixing it with a
+date range would say the shelf is where it was in September. A period with nothing in it is a
+sentence ("Nothing was billed"), not a row of zeroes, and a zero-bill day deliberately does not claim
+the shop was shut.
+
+**The subject never travels to the database**, and cannot: `paramsFor` drops it, and the envelope's
+`params` — "the arguments the report actually ran with" (D-053) — is right to omit it. Both are
+pinned.
+
+**A product-level question stays out of it.** Adding `stock` to the enum carries a real risk, because
+*"Dolo 650 ka stock kitna hai?"* is a question about ONE product and this report cannot answer it.
+The prompt says what a summary's `stock` is — the pharmacy's whole stock, valued — and says in as
+many words that a question about one product is `unsupported`. A summary that answered a
+product-level question with a group total would be the most confidently wrong answer this feature
+could give.
+
+### 4. The sentence is written from the query that ran
+
+Two defects, one cause: the arguments were defaulted where they were built while the sentence was
+written from the **declared** parameters. A capped list (`low_stock_products` clamps `p_limit`) was
+read as a total, and a model that asked for a 5000-day horizon got a report clamped to 3650 and a
+sentence that said 5000.
+
+`effectiveParams(rpc, params)` now resolves every default and every out-of-range value into **the
+parameters the report will actually run with**, `paramsFor` is a pure mapper of that object, and
+`renderAnswer` is handed the same object. **The arguments and the sentence can no longer come to
+describe different queries.** A horizon or a cap the reports cannot have used is **replaced by the
+default rather than forwarded to be clamped** — a 5000-day horizon is not a horizon the caller meant —
+and the counting list sentences say **"At least N"** when the page came back exactly at its cap, N
+when it came back short.
+
+The ranges the reports accept are repeated in `answer.ts` beside the defaults that were **already**
+repeated there (`EXPIRING_DEFAULT_DAYS = 90` has mirrored migration 00027 since it was written); that
+seam now does more work, because it is what lets this file state a horizon that is true. The reports
+keep their own clamp as the backstop for a caller that does not come through the handler.
+
+`top_products` takes **no** cap, on purpose: its sentence claims no total, so it needs none.
+
+**Consequences:**
+
+- **The client is untouched by parts 3 and 4.** Its provenance line now names the cap
+  (`at most 50 rows`) where it previously said nothing, because the cap really is named now.
+- **The reports still return no exact `total_count`**, so a full page says "at least" rather than
+  "exactly N of M". That needs the two 00027 functions to answer in the `{meta, rows}` shape
+  `top_products` and `dead_stock` already carry — and that is a change to a **live RPC's contract**
+  which has to ship together with the alert screens that read it
+  (`notifications_repository.dart`, `inventory_repository.dart` and their models), so it is a chunk of
+  its own rather than a tail on this one. This is the brief's own "preserve compatibility or add
+  explicitly versioned envelopes", resolved in favour of compatibility for now.
+- **What is left of Phase A**: the language (`en` / `hi` / `hinglish`) templates, the follow-up
+  chips, and that totals envelope. What is left of the brief: everything from Phase B onward
+  (`context/chatbot-owner-brief.md`).
+- **Nothing is deployed.** The function's source is committed; the **deployed** `chat-sql-agent` still
+  answers with the old sentences until someone runs `supabase functions deploy`, and the app has to
+  be rebuilt to render the markers. No migration was pushed, so hosted still reads 49 = 49.
+
+
 

@@ -189,6 +189,45 @@ this slice did not re-run because it changed **no Dart file** (SQL, docs and one
 **Re-measured 2026-09-20 after Phase 7a's Flutter slices: 758 at the start, 898 after C1b, 926
 after C2, 0 failures** — the count is the gate's own output each time, not a running total.
 
+**The chatbot's owner-intelligence work — Phase A (2026-09-22), and it is NOT one of the plan's
+phases.** The owner pasted a third-party brief (`context/chatbot-owner-brief.md`, pinned 60 commits
+back) whose complaint was two sentences long: *the answers are monotonous, and the important words and
+numbers are not bold*. **Taken up before Phase 6.5b on purpose** — D-089 records the reorder as well as
+the decisions. Phase A is **partly done, in three commits, none pushed and none deployed**:
+
+- **`f9be7d1` — an answer points at its own finding, and the low-stock sentence stops claiming a row the
+  report drops.** A sentence marks the part worth pointing at with `**...**`, **written by the server and
+  read by a hand-written parser** (no markdown dependency, and the failure direction is tested); a
+  question is never markup, which is the whole safety property — nothing a user types can reach the
+  answer's styling. The low-stock copy said "at or below" while `low_stock_products` filters
+  `total_qty < min_stock_level`; it says "below" now, **copy only**.
+- **`83cecc6` — a summary leads with what was asked.** `report_summary`'s envelope carried five sections
+  and the sentence read four figures out of `sales` for every question put to it (`sub_total`,
+  `tax_total`, `returns` and `expenses` had never been read by any sentence). The model now declares a
+  `subject` — sales / purchases / returns / expenses / stock / everything — and the sentence is chosen by
+  it. **One more parameter, not one more report**, and `everything` is byte-identical to the old
+  sentence, so a classifier that names no subject changes nothing. **`stock` takes no period**: it is
+  what is on the shelf *now*, and saying so is the sentence's job.
+- **`a4022d1` — a sentence is written from the query that ran.** The arguments and the sentence used to
+  be derived separately, so a capped list was read as a total and a 5000-day horizon was announced to the
+  caller while the report queried 3650. `effectiveParams()` resolves every default and every out-of-range
+  value into **one object** that both the call and the sentence are built from; an unusable horizon or cap
+  becomes the report's own default rather than being forwarded to be clamped, and a page that came back
+  full says **"at least N"**. (D-089)
+- **Not done, and named so it is not mistaken for done**: the **exact** `total_count` (it needs the two
+  `00027` reports to answer in the `{meta, rows}` shape `top_products` and `dead_stock` already carry —
+  a **live RPC's contract**, which must ship together with the alert screens that read it), the language
+  templates (`en` / `hi` / `hinglish`), and the follow-up chips. **Nothing is deployed**: the committed
+  function source is not what `chat-sql-agent` serves until `supabase functions deploy` runs, and the app
+  must be rebuilt to render the marker.
+
+**Verified at `a4022d1` (2026-09-22):** `dart format lib test` clean, `build_runner` no tracked output
+changed, `dart run custom_lint` no issues, `flutter analyze` no issues, **`flutter test` 1085 passing, 0
+failures** (1074 at the handoff), **`deno test supabase/functions` 203 passed, 0 failed** (181 at the
+handoff), and the five `deno check` entry points clean. **No migration was written or pushed**, so hosted
+still reads **49 = 49** and the committed SQL suite is untouched (17 files with a SUMMARY line, 0 FAIL,
+none `ABORTED` at the 49-migration state).
+
 **Last Updated:** 2026-09-22
 **Current Phase:** **PHASE 7a IS DONE, and PHASE 6.5c IS COMPLETE.** Chunk 6 (`d0a9639`, `55ad192`,
 `0fbfc25`; migrations `00048` and `00049`) is pushed to hosted (**49 = 49**), each migration
@@ -204,8 +243,14 @@ it. **ONE NAMED GAP REMAINS INSIDE 6.5c's POLICY, and it is not a regression:** 
 is not yet re-routed — `customer_edit` is already the action type that chunk will raise, and it must
 change the form in the same migration. **The owner's own sequence says the receiver app is next:**
 Phase 6.5b (`context/chat3r-opening-prompt.md` is answered; **PHASE 7b — hospital profit sharing —
-and 7c — the reports — follow it**). **PHASE 6.5a DONE** (2026-09-20 — the opening stock import,
-D-065/D-066). **PHASE 6 IN PROGRESS** (chunk 3 of n, done; `context/chat3n-summary.md`).
+and 7c — the reports — follow it**). **The owner set that aside on 2026-09-22 to take up the chatbot
+brief first** (`context/chatbot-owner-brief.md`, D-089): Phase A of it is **partly done** in
+`f9be7d1`, `83cecc6` and `a4022d1` — readable answers, a summary that leads on what was asked, and
+all three of the brief's wording/count/horizon defects closed — **none of it pushed and none of it
+deployed**, with the language templates, the follow-up chips and the exact-totals envelope still to
+come. **The receiver app is still what the plan's sequence names next.**
+**PHASE 6.5a DONE** (2026-09-20 — the opening stock import, D-065/D-066). **PHASE 6 IN PROGRESS**
+(chunk 3 of n, done; `context/chat3n-summary.md`).
 **Overall Status:** Phases 0-5 done and gated; Phase 6 chunks 1-3 done and gated; **Phase 6.5c
 COMPLETE (chunks 1-6), pushed and verified on hosted (49 = 49)**; **Phase 7a COMPLETE** (durable
 layer on hosted, Flutter side C1, C2, C3/1–3, C3/4a, C3/4b and the deposit-application sheet built
