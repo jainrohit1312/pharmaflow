@@ -54,6 +54,16 @@ begin
   v_log := v_log || case when v_allowed then 'PASS' else 'FAIL' end
     || ': full_name is still updatable by authenticated (expected true, got ' || v_allowed || ')' || chr(10);
 
+  -- Granted by migration 20260922000048, beside the phone it is the other half of: the address the
+  -- notification rail reaches this user at is his own to correct. The ROW set is unchanged - it is
+  -- still 00012's pair of policies (a user's own row, and an owner's over his pharmacy) - so this
+  -- adds a column to the ones a caller may change on a row he could already reach, and reaches no
+  -- row he could not.
+  v_allowed := has_column_privilege('authenticated', 'public.profiles', 'email', 'UPDATE');
+  v_log := v_log || case when v_allowed then 'PASS' else 'FAIL' end
+    || ': email is updatable by authenticated, so a user can correct the address he is told at '
+    || '(expected true, got ' || v_allowed || ')' || chr(10);
+
   v_allowed := has_function_privilege(
     'anon',
     'public.onboard_pharmacy(text, text, text, text, text, text, text)',

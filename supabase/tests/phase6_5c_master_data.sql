@@ -42,7 +42,10 @@
 --       refreshed rather than two stacked.
 --   8.  A recorded expense TELLS the owner in-app and queues the delivery log of every channel it
 --       can address - and queues none for a channel it cannot, because that would be a claim to
---       have tried.
+--       have tried. Both halves are asserted with FIXTURE values: the email leg was the channel the
+--       account could not be addressed on until chunk 6 put an address on the profile (00048), and
+--       migration 00048 backfilled it from auth.users.email, so a fixture that read the environment
+--       would pass locally and fail on the hosted project.
 --   9.  The enum's own comment says which action types are retired, so the type cannot read as
 --       "a chunk is coming" for the three that will never have one.
 
@@ -905,15 +908,23 @@ begin
     || coalesce(v_msg, 'NULL') || ')');
 
   -- ============================================ 10. the expense notification
-  -- The fixture gives the owner a number so the WhatsApp leg is deterministic, then takes it away
-  -- again to pin the other half of the rule: a channel with no destination is not queued at all.
-  -- It is set as the OWNER, because `profiles_update_self` is what permits it - nobody else may
-  -- rewrite his row - and read straight back, so a fixture that quietly did nothing is a FAIL here
-  -- rather than a puzzling count three assertions later.
+  -- The fixture gives the owner a number so the WhatsApp leg is deterministic, and takes his ADDRESS
+  -- away for the same reason - then reverses both to pin the other half of the rule: a channel with
+  -- no destination is not queued at all. It is set as the OWNER, because `profiles_update_self` is
+  -- what permits it - nobody else may rewrite his row - and read straight back, so a fixture that
+  -- quietly did nothing is a FAIL here rather than a puzzling count three assertions later.
+  --
+  -- The address is a fixture value because migration 20260922000048 BACKFILLED `profiles.email`
+  -- from `auth.users.email`: on the hosted project the owner''s profile already carries his real
+  -- address, so an assertion about the email leg that read the environment would pass locally and
+  -- fail there. This block writes the state it asserts, both ways.
   perform set_config('request.jwt.claims', json_build_object('sub', v_owner::text)::text, true);
   perform set_config('request.jwt.claim.sub', v_owner::text, true);
 
-  update public.profiles p set phone = '9000000059' where p.id = v_owner;
+  update public.profiles p
+     set phone = '9000000059',
+         email = null
+   where p.id = v_owner;
 
   select p.phone into v_owner_phone from public.profiles p where p.id = v_owner;
 
@@ -972,15 +983,21 @@ begin
     || ': 10. alongside the in-app delivery log the row points at (expected 1, got ' || v_rows || ')');
 
   -- A channel the account cannot be addressed on is not queued: that would record an attempt that
-  -- could never happen. This is what pins the email leg''s absence.
+  -- could never happen. The fixture left his profile with no address above, so this is the email
+  -- leg's absence - and the block below gives him one, which is that same rule's other half.
   select count(*) into v_rows from public.notification_logs l
    where l.pharmacy_id = v_pharmacy and l.channel = 'email' and l.body like '%ZZTEST 59 tea%';
   v_log := array_append(v_log, case when v_rows = 0 then 'PASS' else 'FAIL' end
     || ': 10. and no email row, because the profile carries no address for him (expected 0, got '
     || v_rows || ')');
 
-  -- Take his number away: the in-app row still lands, the WhatsApp row does not.
-  update public.profiles p set phone = null where p.id = v_owner;
+  -- Take his number away and give him an address: the in-app row still lands, the WhatsApp row does
+  -- not, and the EMAIL leg is the one that now is - which is the positive half of the rule the
+  -- assertion above pins negatively, and the leg chunk 6 added.
+  update public.profiles p
+     set phone = null,
+         email = 'zztest-59-owner@example.invalid'
+   where p.id = v_owner;
 
   insert into public.expenses (pharmacy_id, category, amount, expense_date, payment_mode)
   values (v_pharmacy, 'ZZTEST 59 no number', 40, current_date, 'cash');
@@ -996,6 +1013,17 @@ begin
      and l.body like '%ZZTEST 59 no number%';
   v_log := array_append(v_log, case when v_rows = 0 then 'PASS' else 'FAIL' end
     || ': 10. and no WhatsApp row is claimed for a destination that does not exist (expected 0, got '
+    || v_rows || ')');
+
+  select count(*) into v_rows from public.notification_logs l
+   where l.pharmacy_id = v_pharmacy
+     and l.channel = 'email'
+     and l.destination = 'zztest-59-owner@example.invalid'
+     and l.subject = 'Expense recorded'
+     and l.status = 'queued'
+     and l.body like '%ZZTEST 59 no number%';
+  v_log := array_append(v_log, case when v_rows = 1 then 'PASS' else 'FAIL' end
+    || ': 10. while the email leg IS queued to the address it now carries, subject and all (expected 1, got '
     || v_rows || ')');
 
   -- An edit and a deletion tell him too: the other two acts D-085 retired.
