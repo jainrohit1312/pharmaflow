@@ -133,6 +133,13 @@ begin
   );
 
   -- A cancelled sale, which must count for nothing.
+  --
+  -- Written as postgres: since Phase 6.5c chunk 5d a session cannot write `sales` at all
+  -- (`checkout_sale()` and the two sale acts are the only doors), and this file is about
+  -- `report_summary` excluding a cancelled bill, not about how one becomes cancelled. The role is
+  -- put back immediately, so every assertion below still measures what it measured before.
+  execute 'reset role';
+
   insert into public.sales (
     pharmacy_id, invoice_no, status, payment_mode, sale_date,
     sub_total, tax_total, grand_total, amount_paid, balance_due
@@ -140,6 +147,8 @@ begin
     v_pharmacy, 'ZZTEST-REPORT-CANCELLED', 'cancelled', 'cash', now(),
     1000, 120, 1120, 0, 0
   );
+
+  execute 'set local role authenticated';
 
   -- A received purchase inside the window, and a draft one outside it.
   --

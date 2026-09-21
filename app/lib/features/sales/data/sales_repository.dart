@@ -15,6 +15,8 @@ import 'package:app/data/datasources/postgrest_error_mapper.dart';
 import 'package:app/data/datasources/supabase_client.dart';
 import 'package:app/data/models/sale.dart';
 import 'package:app/data/models/sale_item.dart';
+import 'package:app/data/models/write_outcome.dart';
+import 'package:app/features/sales/data/sale_act_payload.dart';
 import 'package:app/features/sales/data/sale_checkout.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart' as sb;
@@ -452,6 +454,81 @@ class SalesRepository {
         message: 'Unable to record that sale.',
         cause: error,
       );
+    }
+  }
+
+  /// Cancels a posted bill, or - for anybody but the owner - asks him to.
+  ///
+  /// The status flip is the whole act (Phase 6.5c chunk 5d, D-087): the goods are not returned and
+  /// the money the bill moved is not reversed, which is why the server only accepts a bill NOTHING
+  /// has happened to - no return against it, no receipt applied to it since it was raised, nothing
+  /// still owed - and refuses anything else in a sentence naming the sale return that can correct
+  /// it. The refusal arrives here as a `ValidationException` carrying the server's own words.
+  Future<WriteOutcome<Sale>> cancel({
+    required String saleId,
+    String? reason,
+    String? idempotencyKey,
+  }) => _act(
+    rpc: 'cancel_sale',
+    payload: SaleActPayload.cancel(
+      saleId: saleId,
+      reason: reason,
+      idempotencyKey: idempotencyKey,
+    ),
+    fallbackMessage: 'Unable to cancel that bill.',
+  );
+
+  /// Corrects a posted bill's printed identity, or asks the owner to.
+  ///
+  /// The five fields are snapshots taken at checkout, so this rewrites the paper and never the
+  /// master, the money or the stock. A key outside that set is refused by the server, by name.
+  Future<WriteOutcome<Sale>> editIdentity({
+    required String saleId,
+    String? patientName,
+    String? patientMobile,
+    String? patientAddress,
+    String? doctorName,
+    String? hospitalReference,
+  }) => _act(
+    rpc: 'save_sale_identity',
+    payload: SaleActPayload.editIdentity(
+      saleId: saleId,
+      patientName: patientName,
+      patientMobile: patientMobile,
+      patientAddress: patientAddress,
+      doctorName: doctorName,
+      hospitalReference: hospitalReference,
+    ),
+    fallbackMessage: 'Unable to correct that bill.',
+  );
+
+  /// Runs one sale act and reads the envelope it answers with.
+  ///
+  /// The RPC is named by the caller rather than guessed from the payload's keys: two acts with two
+  /// documents should not be told apart by a heuristic, and a heuristic is exactly what would drift
+  /// the day a third act arrives.
+  Future<WriteOutcome<Sale>> _act({
+    required String rpc,
+    required Map<String, dynamic> payload,
+    required String fallbackMessage,
+  }) async {
+    try {
+      final answer = await _client.rpc<dynamic>(
+        rpc,
+        params: <String, dynamic>{'p_payload': payload},
+      );
+
+      return WriteOutcome.fromJson(
+        answer as Map<String, dynamic>,
+        Sale.fromJson,
+      );
+    } on sb.PostgrestException catch (error) {
+      throw mapPostgrestException(error, fallbackMessage: fallbackMessage);
+    } on Object catch (error) {
+      if (error is AppException) {
+        rethrow;
+      }
+      throw ServerException(message: fallbackMessage, cause: error);
     }
   }
 }

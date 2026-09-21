@@ -9,6 +9,7 @@ import 'package:app/core/widgets/app_back_button.dart';
 import 'package:app/core/widgets/app_button.dart';
 import 'package:app/core/widgets/app_empty_view.dart';
 import 'package:app/core/widgets/app_scaffold.dart';
+import 'package:app/core/widgets/confirm_dialog.dart';
 import 'package:app/core/widgets/error_view.dart';
 import 'package:app/core/widgets/loading_view.dart';
 import 'package:app/core/widgets/section_card.dart';
@@ -16,11 +17,14 @@ import 'package:app/data/models/product.dart';
 import 'package:app/data/models/sale.dart';
 import 'package:app/data/models/sale_item.dart';
 import 'package:app/data/repositories/pharmacy_repository.dart';
+import 'package:app/features/approvals/presentation/sent_to_owner.dart';
 import 'package:app/features/auth/application/pharmacy_scope.dart';
 import 'package:app/features/balances/presentation/widgets/sale_allocations_card.dart';
 import 'package:app/features/purchase/data/purchase_totals.dart';
+import 'package:app/features/sales/application/sale_acts_controller.dart';
 import 'package:app/features/sales/application/sale_detail_controller.dart';
 import 'package:app/features/sales/application/sale_tax_split.dart';
+import 'package:app/features/sales/presentation/widgets/sale_identity_sheet.dart';
 import 'package:app/features/sales/presentation/widgets/sale_status_badge.dart';
 import 'package:app/services/invoice_printer.dart';
 import 'package:flutter/material.dart';
@@ -90,6 +94,25 @@ class SaleDetailScreen extends ConsumerWidget {
       title: 'Bill ${sale.invoiceNo}',
       leading: _backToSales,
       actions: <Widget>[
+        // The two acts a posted bill allows (Phase 6.5c chunk 5d). Offered here and gated on the
+        // SERVER: for anybody but the owner each is a request that writes nothing, and what comes
+        // back says which - so there is no role check on this screen, and no button that promises
+        // an approval that does not exist.
+        //
+        // A cancelled bill has neither: it is not editable and it cannot be cancelled twice, and
+        // offering either would be offering a question the server refuses.
+        if (sale.status != SaleStatus.cancelled) ...<Widget>[
+          IconButton(
+            icon: const Icon(Icons.edit_note_outlined),
+            tooltip: 'Correct the printed details',
+            onPressed: () => _correctDetails(context, ref, sale),
+          ),
+          IconButton(
+            icon: const Icon(Icons.cancel_outlined),
+            tooltip: 'Cancel this bill',
+            onPressed: () => _cancelBill(context, ref, sale),
+          ),
+        ],
         IconButton(
           icon: const Icon(Icons.print_outlined),
           tooltip: 'Print this bill',
@@ -215,6 +238,110 @@ class SaleDetailScreen extends ConsumerWidget {
         ],
       ),
     );
+  }
+
+  /// Corrects the bill's printed details, or asks the owner to.
+  ///
+  /// A staged act wrote nothing, so the detail screen is not re-read and the sentence says where
+  /// the work went - a refresh would show the unchanged bill and read as a correction.
+  Future<void> _correctDetails(
+    BuildContext context,
+    WidgetRef ref,
+    Sale sale,
+  ) async {
+    final edits = await showSaleIdentitySheet(context, sale: sale);
+    if (edits == null || !context.mounted) {
+      return;
+    }
+
+    try {
+      final outcome = await ref
+          .read(saleActsControllerProvider.notifier)
+          .editIdentity(
+            saleId: sale.id,
+            patientName: edits.patientName,
+            patientMobile: edits.patientMobile,
+            patientAddress: edits.patientAddress,
+            doctorName: edits.doctorName,
+            hospitalReference: edits.hospitalReference,
+          );
+
+      if (!context.mounted) {
+        return;
+      }
+      if (outcome.isStaged) {
+        showSentToOwnerNotice(context, message: sentForApprovalMessage);
+        return;
+      }
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          const SnackBar(content: Text('The bill now prints those details.')),
+        );
+    } on Object catch (error, stackTrace) {
+      _reportFailure(context, 'Correcting a bill failed', error, stackTrace);
+    }
+  }
+
+  /// Cancels the bill, or asks the owner to.
+  ///
+  /// The confirmation says what a cancellation does NOT do, because that is the whole of the act:
+  /// the status flips and nothing else moves. It is the same fact the owner's own ask carries, so
+  /// nobody decides on a different understanding of it.
+  Future<void> _cancelBill(
+    BuildContext context,
+    WidgetRef ref,
+    Sale sale,
+  ) async {
+    final confirmed = await showConfirmDialog(
+      context,
+      title: 'Cancel bill ${sale.invoiceNo}?',
+      message:
+          'The bill stops counting, and nothing else moves: the goods stay out '
+          'of stock and the money it moved is not reversed. This is only accepted '
+          'for a bill with nothing against it - and anything else is corrected '
+          'with a sale return, which the owner also approves.',
+      confirmLabel: 'Cancel the bill',
+      isDestructive: true,
+    );
+    if (!confirmed || !context.mounted) {
+      return;
+    }
+
+    try {
+      final outcome = await ref
+          .read(saleActsControllerProvider.notifier)
+          .cancel(saleId: sale.id);
+
+      if (!context.mounted) {
+        return;
+      }
+      if (outcome.isStaged) {
+        showSentToOwnerNotice(context, message: sentForApprovalMessage);
+        return;
+      }
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(const SnackBar(content: Text('The bill is cancelled.')));
+    } on Object catch (error, stackTrace) {
+      _reportFailure(context, 'Cancelling a bill failed', error, stackTrace);
+    }
+  }
+
+  /// Shows a failed act's sentence, or logs it when the screen is gone.
+  void _reportFailure(
+    BuildContext context,
+    String message,
+    Object error,
+    StackTrace stackTrace,
+  ) {
+    appLogger.w(message, error: error, stackTrace: stackTrace);
+    if (!context.mounted) {
+      return;
+    }
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text(describeError(error))));
   }
 
   /// Renders the bill and hands it to the platform.

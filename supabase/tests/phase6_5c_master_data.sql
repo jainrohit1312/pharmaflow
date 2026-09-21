@@ -252,9 +252,14 @@ begin
      and not public.approval_has_executor('expense_delete') then 'PASS' else 'FAIL' end
     || ': 1. and never for the three expense types D-085 retired');
 
+  -- The example of "an action type this build cannot execute" is the retired trio above, and it
+  -- stays there. This pair is the other half of the rule: chunk 5d built `sale_cancel` and
+  -- `sale_edit`, so from that chunk on **no declared action type is left without a chunk** - every
+  -- value in the enum is either implemented or retired, which is what the type's own comment says.
   v_log := array_append(v_log, case
-    when not public.approval_has_executor('sale_cancel') then 'PASS' else 'FAIL' end
-    || ': 1. and still no for an action type whose act does not exist yet (sale_cancel)');
+    when public.approval_has_executor('sale_cancel')
+     and public.approval_has_executor('sale_edit') then 'PASS' else 'FAIL' end
+    || ': 1. and yes for the two sale acts chunk 5d built, so no declared type is left without one');
 
   -- The ask for a retired type is refused in words, naming it.
   v_msg := null;

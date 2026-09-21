@@ -8,6 +8,7 @@ import 'dart:async';
 import 'package:app/core/errors/app_exception.dart';
 import 'package:app/data/models/sale.dart';
 import 'package:app/data/models/sale_item.dart';
+import 'package:app/data/models/write_outcome.dart';
 import 'package:app/features/purchase/data/purchase_totals.dart';
 import 'package:app/features/sales/data/sale_checkout.dart';
 import 'package:app/features/sales/data/sales_repository.dart';
@@ -30,6 +31,11 @@ Sale buildSale({
   double balanceDue = 0,
   DateTime? saleDate,
   String? customerId,
+  String? patientName,
+  String? patientMobile,
+  String? patientAddress,
+  String? doctorName,
+  String? hospitalReference,
 }) => Sale(
   id: id,
   pharmacyId: 'ph-1',
@@ -45,6 +51,11 @@ Sale buildSale({
   amountPaid: amountPaid,
   balanceDue: balanceDue,
   customerId: customerId,
+  patientName: patientName,
+  patientMobile: patientMobile,
+  patientAddress: patientAddress,
+  doctorName: doctorName,
+  hospitalReference: hospitalReference,
 );
 
 /// Builds a sold line with only the fields a test cares about.
@@ -108,15 +119,103 @@ SaleDocumentLine buildSaleDocumentLine({
 /// cannot be constructed without an initialised backend.
 class FakeSalesRepository implements SalesRepository {
   /// Creates a fake over [sales] and [items].
-  FakeSalesRepository({List<Sale>? sales, List<SaleItem>? items})
-    : sales = List<Sale>.of(sales ?? const <Sale>[]),
-      items = List<SaleItem>.of(items ?? const <SaleItem>[]);
+  ///
+  /// [isOwner] defaults to `true`, because most tests care about what a bill screen shows rather
+  /// than about who may act on it; a test that drives the owner-approval rail passes `false`.
+  FakeSalesRepository({
+    List<Sale>? sales,
+    List<SaleItem>? items,
+    this.isOwner = true,
+  }) : sales = List<Sale>.of(sales ?? const <Sale>[]),
+       items = List<SaleItem>.of(items ?? const <SaleItem>[]);
 
   /// The sales the fake holds.
   final List<Sale> sales;
 
   /// Every sold line the fake holds, for every sale.
   final List<SaleItem> items;
+
+  /// Whether a sale act LANDS or is only asked for.
+  ///
+  /// `true` is the owner: `cancel_sale()` / `save_sale_identity()` perform the act and the envelope
+  /// says `recorded`. `false` is everybody else, whose act raises one approval request and moves
+  /// nothing.
+  bool isOwner;
+
+  /// How many acts were STAGED rather than performed.
+  int stagedSubmissions = 0;
+
+  /// The cancellation payloads the fake was handed, in order.
+  final List<String> cancelledSaleIds = <String>[];
+
+  /// The identity payloads the fake was handed, in order.
+  final List<Map<String, dynamic>> identityEdits = <Map<String, dynamic>>[];
+
+  /// Replaces the row a landed act wrote, so a re-read sees the act.
+  void _replace(Sale saved) {
+    final index = sales.indexWhere((row) => row.id == saved.id);
+    if (index >= 0) {
+      sales[index] = saved;
+    } else {
+      sales.add(saved);
+    }
+  }
+
+  @override
+  Future<WriteOutcome<Sale>> cancel({
+    required String saleId,
+    String? reason,
+    String? idempotencyKey,
+  }) async {
+    cancelledSaleIds.add(saleId);
+
+    final existing = sales.where((row) => row.id == saleId).firstOrNull;
+    if (!isOwner) {
+      stagedSubmissions++;
+      return const WriteOutcome<Sale>.staged('ask-sale-cancel');
+    }
+
+    final saved = (existing ?? buildSale(id: saleId)).copyWith(
+      status: SaleStatus.cancelled,
+    );
+    _replace(saved);
+    return WriteOutcome<Sale>.recorded(saved);
+  }
+
+  @override
+  Future<WriteOutcome<Sale>> editIdentity({
+    required String saleId,
+    String? patientName,
+    String? patientMobile,
+    String? patientAddress,
+    String? doctorName,
+    String? hospitalReference,
+  }) async {
+    identityEdits.add(<String, dynamic>{
+      'sale_id': saleId,
+      if (patientName != null) 'patient_name': patientName,
+      if (patientMobile != null) 'patient_mobile': patientMobile,
+      if (patientAddress != null) 'patient_address': patientAddress,
+      if (doctorName != null) 'doctor_name': doctorName,
+      if (hospitalReference != null) 'hospital_reference': hospitalReference,
+    });
+
+    if (!isOwner) {
+      stagedSubmissions++;
+      return const WriteOutcome<Sale>.staged('ask-sale-edit');
+    }
+
+    final existing = sales.where((row) => row.id == saleId).firstOrNull;
+    final saved = (existing ?? buildSale(id: saleId)).copyWith(
+      patientName: patientName ?? existing?.patientName,
+      patientMobile: patientMobile ?? existing?.patientMobile,
+      patientAddress: patientAddress ?? existing?.patientAddress,
+      doctorName: doctorName ?? existing?.doctorName,
+      hospitalReference: hospitalReference ?? existing?.hospitalReference,
+    );
+    _replace(saved);
+    return WriteOutcome<Sale>.recorded(saved);
+  }
 
   /// Offsets `list` was asked for, in order.
   final List<int> requestedOffsets = <int>[];
