@@ -3884,3 +3884,121 @@ make that refusal look like a bug in the screen.
 
 
 
+
+---
+
+## D-083 — A Staff GRN Is a Pending Document, and the Tables Stop Taking Writes
+
+**Date:** 2026-09-21
+
+**Status:** Active (Phase 6.5c chunk 3 — built; commit `a8b7711`, migration `20260921000044`, pushed to hosted)
+
+**Decision:** The purchase document is behind the owner's approval, as **one status, one write path and
+one decision path**:
+
+- **`purchase_status` gains `pending_approval`.** A staff write lands there whatever it asked for; the
+  status the write *wanted* rides on the request as `resume_status`, so approving is "give the document
+  the status it was written with" and rejecting is "put it back".
+- **`save_purchase(jsonb)` is the ONE write path** — the header, the lines, and (when the goods are
+  being booked in) the batches the lines come out of, in the order the client used to make those three
+  calls: batches **without `qty`**, then lines, then the status, so `stock_apply_purchase()` owns the
+  posting exactly as it does for a direct write.
+- **The owner is not gated, and his route is the same one.** He gets the status he asked for; anybody
+  else gets a staged document and one ask. The branching is on `get_my_role()`, server-side, and
+  nowhere in the client.
+- **`decide_approval()` carries the decision out**, through one dispatch (`approval_execute()`).
+  Approving a receipt is the single update that fires `stock_apply_purchase()` and
+  `ledger_auto_entry_purchase()` — the very triggers a direct write fired, with no second copy of
+  their logic. Refusing restores the document from the pre-image a staged save recorded, or
+  soft-deletes it when the refused ask is the one that created it.
+- **A cancellation is a question, not an edit.** It moves the status and touches nothing else, so it
+  neither rewrites nor stages the document — staging a received document as `pending_approval` would
+  describe posted stock as unposted — and for staff it is a `purchase_delete` ask with the document
+  left exactly where it is until he answers.
+- **`purchases` and `purchase_items` lose INSERT/UPDATE/DELETE to `authenticated`** in the same
+  migration as the request path, never before it.
+
+**Rationale:** a purchase is the one gated document with a *life* — it is drafted, ordered, received —
+and the owner's own answer named the state it waits in ("the GRN is saved as `pending_approval`").
+Staging the row is also the truer of the two states: the document exists, its lines exist, the batches
+it will come out of exist, the staff can keep working on it, and the owner reads **the document
+itself** rather than a copy of it that could differ from what the row would have been. What approving
+then has to do is exactly one thing — move the status — which is why the posting path cannot drift
+from the direct one.
+
+The money is **not recomputed**: `grand_total` is what the supplier's invoice says is payable and what
+the ledger posts, and a purchase is that paper transcribed. The one guard added is that the document
+has to add up (`grand_total = sub_total + tax_total` within a paisa), or the ledger would hold a
+payable the document itself contradicts.
+
+**Consequences:**
+
+- **`product_batches` keeps its grants on purpose.** The product form writes batches for the master,
+  which is chunk 5's to gate; revoking it here would break a screen whose chunk has not landed. The
+  hole that leaves — a session can still move a batch's `qty` by hand — is chunk 5's to close.
+- **The revoke is per-role, so it covers the owner too.** He writes "directly" through the same
+  function, which does exactly what his direct write did and asks him nothing. His **authority** is
+  what is gated, never his route.
+- **A rejected pending GRN leaves its zero-quantity batch rows behind.** They are created at request
+  time because the stock trigger joins on `purchase_items.batch_id`; they hold no stock, and they are
+  the rows a later receipt of the same batch would use anyway.
+- **An ask about a purchase is refreshed, not stacked**: `request_approval()` updates the undecided ask
+  about the same document in place, keeping its action type, so a cashier refining a GRN leaves one
+  question in the owner's list.
+- **The installed app must be rebuilt to match.** An older client writes the two tables directly, which
+  this migration revoked — the same transitional cost 00038 had. The owner's own route is the RPC.
+
+---
+
+## D-084 — A Return and a Stock Correction Are REQUESTED, and Nothing Is Written Until He Answers
+
+**Date:** 2026-09-21
+
+**Status:** Active (Phase 6.5c chunk 4 — built; commit `3668b72`, migration `20260921000045`, pushed to hosted)
+
+**Decision:** Purchase returns, sale returns and stock adjustments go behind the same rail, and — unlike
+a purchase — **the request is the staging**: the whole document travels in `payload`, nothing is
+written, and approving runs the very inserts the client used to run.
+
+- **Three write RPCs** — `record_purchase_return()`, `record_sale_return()`,
+  `record_stock_adjustment()` — are the only door to their five tables, which lose
+  INSERT/UPDATE/DELETE to `authenticated` in the same migration.
+- **Each answers with an envelope**: `{"outcome": "recorded"|"staged", "document": {...}|null,
+  "request_id": "..."|null}`. The owner's own write comes back `recorded` with his document; anybody
+  else's comes back `staged`, and the caller says so instead of navigating to a document that does not
+  exist.
+- **One dispatch, two appliers.** `approval_execute()` routes a purchase to
+  `purchase_apply_decision()` (against its staged row), a contra document to
+  `document_apply_decision()` (against the payload), the discount to nothing (the sale *is* its
+  execution), and refuses an action type with no writer rather than stamping it approved.
+- **One shape check, called twice.** `document_payload_problem()` is what `request_approval()` refuses
+  an unactionable ask with, and what each `record_*()` holds the owner's own write to — because the
+  first version of this migration validated only the ask path, and the test that writes one **as the
+  owner** found that a return with no lines was writable by him.
+
+**Rationale:** a return and an adjustment are single events — written once, corrected by a contra
+document, never edited — and they have no status a screen knows how to show. Staging one as a row would
+put a document in the returns list that has **moved no stock and posted no ledger row**, under a screen
+with no notion of "waiting": a lie about money rather than a state anybody can act on. Requesting the
+whole document also means **no committed stock or ledger trigger is touched by this migration** — the
+executor performs the same inserts the client made, so the triggers fire identically.
+
+**Consequences:**
+
+- **The person who raised it sees no document until it is approved.** What they see instead is the
+  sentence the write path returns ("Sent to the owner. Nothing has been recorded until he approves
+  it.") and their own ask on the approvals screen — which is the screen chunk 2 built for exactly this.
+- **A write that cannot land is refused, and the request stays pending.** Approving a return of more
+  units than the batch holds raises in `stock_update_on_purchase_return()`'s own words, and the request
+  is left undecided rather than stamped approved — the write and the decision are one transaction.
+- **A stock adjustment now has a row model** (`StockAdjustment`), against that file's own earlier note
+  that one would be dead code: `record_stock_adjustment()` answers with the row it wrote, so the answer
+  has a type. Nothing else reads the table back, and the note says so.
+- **The returns and adjustment forms do not mint a submission key.** The server accepts one and the
+  counter uses one; these forms have no submission identity to hang it on, so a retried submit whose
+  response was lost raises a second ask (or writes a second return for the owner). That is the property
+  these flows had before this chunk — the direct insert had no key either — and it is recorded here
+  rather than papered over. Adding it is a small, separate piece of work.
+- **Two older assertions were RE-EXPRESSED, not deleted**: "an action type this build cannot execute is
+  refused" moved its example from `purchase` (chunk 3) and then `purchase_return` (this chunk) to
+  `product_create`, the action type whose chunk has not landed. The rule asserted is unchanged.

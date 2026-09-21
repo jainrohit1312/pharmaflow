@@ -1,5 +1,40 @@
 # PharmaFlow — Progress Tracker
 
+**Phase 6.5c status (2026-09-21) — chunks 1, 2a-c, 3 and 4 are done; chunks 5 and 6 remain.** The
+approval RBAC the owner settled on 2026-09-21 ("only sale bill is allowed without approval") is now
+real over the whole counter's neighbourhood: the mechanism, the owner's queue, the counter's ask
+flow, the **purchase document** and the **contra documents** (purchase returns, sale returns, stock
+adjustments).
+
+- **Chunk 1** (`6bea1b2`, migration `00043`, applied to hosted): `approval_requests`, the 16-action
+  enum, `request_approval()` / `decide_approval()`, `sales.discount_above_limit_request_id`, and the
+  discount wired to it.
+- **Chunk 2a/2b/2c** (`60e0a61`, `1af220f`, `6de6e85`, and `a1f6ea3` finishing what 2b left): the
+  owner's queue at `/settings/approvals`, the counter's "Ask the owner" flow with its waiting state,
+  and the widget test that drove it end to end — which found a real defect (the cart carried the
+  approval through only two of the ten copies that must keep it).
+- **Chunk 3** (`a8b7711`, migration `00044`, pushed to hosted): **a staff GRN is a PENDING
+  document.** `purchase_status` gains `pending_approval`; `save_purchase()` is the one write path for
+  a purchase (batches without `qty`, then lines, then the status, so the posting trigger owns it);
+  the owner is not gated and writes through the same function; `decide_approval()` carries the
+  decision out, refusing a document that has moved on; `purchases` and `purchase_items` lose
+  INSERT/UPDATE/DELETE to `authenticated` in the same migration. See **D-083**.
+- **Chunk 4** (`3668b72`, migration `00045`, pushed to hosted): **a return and a stock correction are
+  REQUESTED.** `record_purchase_return()` / `record_sale_return()` / `record_stock_adjustment()` are
+  the only door to five tables, each answering `{outcome, document, request_id}` so a screen can tell
+  a document it can open from one the owner has not answered; approving runs the same inserts the
+  client used to run, so no committed stock or ledger trigger is touched. See **D-084**.
+- **Chunk 5 (master data) and chunk 6 (notify the owner, and decide whether a stale request expires)
+  are what remain.** Chunk 5 has two questions for the owner recorded below.
+
+**Verified, and where.** Both chunks are green on every gate and pushed: **1038 Flutter tests, 181
+Deno tests, all passing**; `dart format`, `custom_lint` and `flutter analyze` clean; the committed
+SQL suite is **21 files, 0 FAIL** against a fresh 45-migration database; and the three Phase 6.5c
+suites were re-run **against the hosted project** (30/30, 91/91 and 61/61 assertions) after each
+push, per D-082's lesson. The Phase 6.5c chunk-3 and chunk-4 assertions that changed were
+re-expressed, never weakened: "an action type this build cannot execute is refused" moved its
+example from `purchase` (chunk 3) and then `purchase_return` (chunk 4) to `product_create`.
+
 **Phase 7a status, in four parts (2026-09-20)** — kept distinct on purpose, because "implemented",
 "verified", "in the app" and "deployed" are four different things here:
 
@@ -87,18 +122,24 @@ this slice did not re-run because it changed **no Dart file** (SQL, docs and one
 after C2, 0 failures** — the count is the gate's own output each time, not a running total.
 
 **Last Updated:** 2026-09-21
-**Current Phase:** **PHASE 7a — C1, C2, C3/1–3, C3/4a and C3/4b's SQL half are done; the
-deposit-application sheet itself is what remains.** The durable layer is on hosted, **41 = 41**
-(above); the app's C1a, C1b, C2, C3/1 (the receipt's read), C3/2 (the receipt), C3/3 (the payment),
-C3/4a (the balance views and the one collection path) and C3/4b's `open_bills` are committed locally
-as `925630c`, `c8fa615`, `fe8bd3a`, `1ef2234`, `d8b6335`, `ed4e177`, `d2c0990`, `6804d10`, `0f8ad77`,
-`be05756`, `bfe6928` and `dbeb023`, each with its own full gate run, **none pushed**. **Next: the
-sheet** — reading a party's open bills (`open_bills`) and their receipts with money still unapplied,
-and applying one with `allocate_payment`. See `context/chat3q-summary.md` and
-`context/chat3r-opening-prompt.md`.
-**Before that:** **PHASE 6.5a DONE** (2026-09-20 — the opening stock import, D-065/D-066; see
-below). **PHASE 6 IN PROGRESS** (chunk 3 of n, done; `context/chat3n-summary.md`). Phase 5 is complete. Phase 6 chunk 1 closed everything needing no account (W-1, A-1, I-1, N-5, T-3/T-4/T-5/T-6, the printer and bill-screen coverage, R-1, `docs/`); chunk 2 shipped the **Android APK** and settled **N-7**/**N-8**; **chunk 3 wrote the Vercel deploy** (`app/vercel.json` + `docs/DEPLOY_VERCEL.md` — configured and **not run**) and **exposed the re-read** the N-8 fix made safe (D-062), and then **implemented I-3** in a commit of its own (D-064) once it turned out the chunk-2 message had claimed it against no diff at all. Next: **import the repo into Vercel and run the first deploy** (the account exists; the project does not), then the credentials behind D-046/D-052/N-1, N-9's re-measurement, and the manual's screenshot pass (`context/chat3o-opening-prompt.md`)
-**Overall Status:** Phases 0-5 done and gated; Phase 6 chunks 1-3 done and gated; **Phase 7a's durable layer is on hosted (41 = 41) and its Flutter side's C1, C2, C3/1–3, C3/4a and C3/4b's reader are built and gated** — Phase 5 closed with its database substrate, **five deployed Edge Functions**, a bill that reads and saves end to end, a matcher that suggests and learns, a backfilled catalogue with a measured similarity floor, its alert sources, the notification function and inbox, and a chatbot a person can type into. Phase 6 added one migration since Phase 5 closed (the alias key, N-5), the Android sideload APK (D-061), a Vercel build config for the web app, the bill re-read with its three-read limit (D-062), and the purchase picker's three-way search (I-3, D-064) — **954 Flutter tests, 181 Deno tests**
+**Current Phase:** **PHASE 6.5c — chunks 1, 2a-c, 3 and 4 are done and pushed; chunks 5 (master
+data) and 6 (polish) remain.** Chunk 3 (`a8b7711`, migration `00044`) and chunk 4 (`3668b72`,
+migration `00045`) are pushed to hosted (**45 = 45**), each re-verified there with its own SQL test.
+**Chunk 5 is the next chunk**, and it needs two answers from the owner first: **are expenses gated**
+(the brief's table gates them; he never named them), and **what `sale_edit` / `sale_cancel` mean**
+(the app has no sale-edit screen — "modification of a sale" is currently a return plus a cancel). It
+also folds in today's `update_patient` role gate and closes the `product_batches` write hole chunk 3
+left open on purpose. **PHASE 7a's C3/4b deposit-application sheet is still unbuilt** (`open_bills`
+has no Dart caller yet — `context/chat3r-opening-prompt.md` §2). **PHASE 6.5a DONE** (2026-09-20 — the
+opening stock import, D-065/D-066). **PHASE 6 IN PROGRESS** (chunk 3 of n, done;
+`context/chat3n-summary.md`).
+**Overall Status:** Phases 0-5 done and gated; Phase 6 chunks 1-3 done and gated; **Phase 6.5c chunks
+1-4 done, pushed and verified on hosted**; Phase 7a's durable layer is on hosted (45 = 45) and its
+Flutter side's C1, C2, C3/1–3, C3/4a and C3/4b's reader are built and gated — Phase 5 closed with its
+database substrate, **five deployed Edge Functions**, a bill that reads and saves end to end, a
+matcher that suggests and learns, a backfilled catalogue with a measured similarity floor, its alert
+sources, the notification function and inbox, and a chatbot a person can type into. **1038 Flutter
+tests, 181 Deno tests**
 
 **Phase 6.5a — the opening stock import — is DONE (2026-09-20).** The one-time Marg
 migration the owner has been preparing: 314 rows, one product and one batch each, written by
@@ -128,7 +169,7 @@ imported**: the owner runs it from `/settings/import/opening-stock`.
 | 6 | Testing + Deployment + Documentation | IN PROGRESS (chunks 1-3 done) | 2026-09-19 | - |
 | 6.5a | Opening stock import (the Marg import) | COMPLETE | 2026-09-20 | 2026-09-20 |
 | 6.5b | The receiver app | not started | - | - |
-| 6.5c | The approval RBAC (with an `action_type` enum and a `payload` jsonb) | not started | - | - |
+| 6.5c | The approval RBAC (with an `action_type` enum and a `payload` jsonb) | **IN PROGRESS — chunks 1, 2a-c, 3 (the purchase document) and 4 (returns and stock adjustments) done, pushed and verified on hosted (`6bea1b2`, `60e0a61`, `1af220f`, `6de6e85`, `a1f6ea3`, `a8b7711`, `3668b72`); chunk 5 (master data) needs two answers from the owner and is next** | 2026-09-21 | - |
 | 7a | The four sale types + patient/admission identity (patient-first billing) | **durable layer ON HOSTED (41 = 41); Flutter C1, C2, C3/1–3, C3/4a and C3/4b's `open_bills` done locally** (`925630c`, `c8fa615`, `fe8bd3a`, `1ef2234`, `d8b6335`, `ed4e177`, `d2c0990`, `6804d10`, `0f8ad77`, `be05756`, `bfe6928`, `dbeb023`); **the deposit-application sheet remains** | 2026-09-20 | - |
 
 ---
@@ -303,6 +344,16 @@ design time.
   RPC envelopes are read into)
 - Auth flow: splash -> login -> register -> dashboard -> signout
 - Dashboard shell responsive (NavigationBar mobile / NavigationRail desktop)
+- **The owner's approval rail (Phase 6.5c chunks 1-4)**: a gated write either lands or goes to
+  the owner, and every screen says which. The counter asks for an above-cap discount and waits
+  (`PosCart.discountApprovalId` survives every copy that does not move the bill's figures); the
+  owner answers at `/settings/approvals`; a purchase a member of staff saves is a **pending GRN**
+  (`PurchaseStatus.pendingApproval`, a waiting card that reads the ask and says nothing has
+  posted, a filter chip, and the sentence "Sent to the owner. Nothing posts until he approves
+  it."); a purchase return, a sale return and a stock correction are **requests that write
+  nothing** (`WriteOutcome`, so a screen opens the document that exists or says where the work
+  went). No screen guards a gate itself: the tables have no write grant left for a session, and
+  the refusals come from the server in its own words.
 - **The patient-first counter (Phase 7a's C1a/C1b)**: the sale money layer computes on the
   server's tax-inclusive basis with per-type rate helpers and the three pricing refusals
   (`sale_totals.dart`); the cart carries the patient identity, the four sale types, the
