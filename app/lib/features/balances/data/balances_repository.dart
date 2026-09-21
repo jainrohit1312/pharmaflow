@@ -16,6 +16,7 @@ import 'package:app/core/errors/app_exception.dart';
 import 'package:app/data/datasources/postgrest_error_mapper.dart';
 import 'package:app/data/datasources/supabase_client.dart';
 import 'package:app/data/models/account_balance.dart';
+import 'package:app/data/models/party_deposits.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart' as sb;
 
@@ -166,6 +167,89 @@ class BalancesRepository {
       }
       throw ServerException(
         message: 'Unable to apply that money.',
+        cause: error,
+      );
+    }
+  }
+
+  /// The bills this patient still owes something on, oldest first.
+  ///
+  /// `open_bills()` (migration `20260921000040`) computes each bill's outstanding with the SAME
+  /// expressions `allocate_payment()` re-checks under its row lock, so the figure the sheet shows is
+  /// the limit a refusal will name. Only bills with something still owed come back, and a supplier
+  /// answers an empty list by design - a supplier's open documents are purchases, not sales.
+  ///
+  /// The envelope also carries `total_outstanding`, and it is deliberately not read: the patient's
+  /// account already shows their outstanding, and two figures that must agree are one more thing
+  /// that can disagree (D-025).
+  Future<List<OpenBill>> openBills({required String customerId}) async {
+    try {
+      final response = await _client.rpc<dynamic>(
+        'open_bills',
+        params: <String, dynamic>{
+          'p_party_type': 'customer',
+          'p_party_id': customerId,
+        },
+      );
+      final bills = switch (response) {
+        final Map<dynamic, dynamic> envelope => envelope['bills'],
+        _ => null,
+      };
+      return switch (bills) {
+        final List<dynamic> rows =>
+          rows
+              .map(
+                (row) =>
+                    OpenBill.fromJson((row as Map).cast<String, dynamic>()),
+              )
+              .toList(growable: false),
+        _ => const <OpenBill>[],
+      };
+    } on sb.PostgrestException catch (error) {
+      throw mapPostgrestException(
+        error,
+        fallbackMessage: 'Unable to load the bills this money can settle.',
+      );
+    } on Object catch (error) {
+      throw ServerException(
+        message: 'Unable to load the bills this money can settle.',
+        cause: error,
+      );
+    }
+  }
+
+  /// The patient's receipts, with the money each still holds.
+  ///
+  /// One read: `payments` with its `payment_allocations` embedded, so a receipt and what has been
+  /// applied to documents arrive together and no second round trip can disagree with the first. The
+  /// remainder is computed on the way out ([DepositReceipt.held]) - see that class for why this is
+  /// the one subtraction the app performs, and why the party's total is not one of them.
+  Future<List<DepositReceipt>> depositReceipts({
+    required String pharmacyId,
+    required String customerId,
+  }) async {
+    try {
+      final rows = await _client
+          .from('payments')
+          .select(
+            'id, payment_date, mode, reference_no, amount, payment_allocations(amount)',
+          )
+          .eq('pharmacy_id', pharmacyId)
+          .eq('party_type', 'customer')
+          .eq('customer_id', customerId)
+          .order('payment_date', ascending: true);
+      return rows
+          .map(DepositReceipt.fromJson)
+          .where((receipt) => receipt.hasHeld)
+          .toList(growable: false);
+    } on sb.PostgrestException catch (error) {
+      throw mapPostgrestException(
+        error,
+        fallbackMessage: 'Unable to load the money being held.',
+      );
+    } on Object catch (error) {
+      throw ServerException(
+        message: 'Unable to load the money being held.',
         cause: error,
       );
     }

@@ -3,11 +3,14 @@ library;
 
 import 'package:app/core/errors/error_message.dart';
 import 'package:app/core/utils/formatters.dart';
+import 'package:app/core/widgets/app_button.dart';
 import 'package:app/core/widgets/error_view.dart';
 import 'package:app/core/widgets/section_card.dart';
 import 'package:app/core/widgets/status_badge.dart';
+import 'package:app/data/models/account_balance.dart';
 import 'package:app/features/balances/application/balances.dart';
 import 'package:app/features/balances/presentation/widgets/account_figure.dart';
+import 'package:app/features/balances/presentation/widgets/apply_deposit_sheet.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -115,8 +118,45 @@ class PatientBalanceCard extends ConsumerWidget {
             'applied to those bills. Money held unapplied is not counted as settled.',
             style: theme.textTheme.bodySmall,
           ),
+          // The action belongs where the figure is: this is the only place a screen says the
+          // pharmacy is holding money nobody asked for, so it is where applying it starts. Absent
+          // when nothing is held - a button that could only say "there is nothing to apply" is
+          // worse than no button.
+          if (value.hasDeposit) ...<Widget>[
+            const SizedBox(height: 12),
+            AppButton.outlined(
+              label: 'Apply held money',
+              icon: Icons.price_check,
+              onPressed: () => _applyHeld(context, ref, value),
+            ),
+          ],
         ],
       ),
     );
+  }
+
+  /// Opens the application sheet, and says so once money has moved.
+  Future<void> _applyHeld(
+    BuildContext context,
+    WidgetRef ref,
+    PatientAccount account,
+  ) async {
+    final applied = await showApplyDepositSheet(
+      context,
+      customerId: customerId,
+      patientName: account.patientName,
+    );
+    if (!applied || !context.mounted) {
+      return;
+    }
+    // The sheet refreshes the account, the open bills and the receipts itself; what is left is to
+    // say that something happened, because the figures moving is easy to miss on a long screen.
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        const SnackBar(
+          content: Text('The money was applied to the bills you chose.'),
+        ),
+      );
   }
 }
