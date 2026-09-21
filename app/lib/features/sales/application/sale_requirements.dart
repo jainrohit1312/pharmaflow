@@ -30,7 +30,17 @@ import 'package:app/features/sales/data/sale_totals.dart';
 /// before it** - so the counter refuses a discount the server would refuse, with the
 /// sentence it would say, rather than discovering it one round trip later in front of a
 /// customer.
-String? saleRefusal({required PosCart cart, double? packageMarkupPercent}) {
+///
+/// [isOwner] is the one place the counter has to know WHO is asking. The owner is exempt
+/// from the discount cap (owner, 2026-09-21) - his own discount needs nobody's permission
+/// - and every other role may exceed it only against an approval he has signed for these
+/// figures, which is what the cart's `discountApprovalId` records. It defaults to false,
+/// the role that is gated: a caller that forgets it refuses rather than permits.
+String? saleRefusal({
+  required PosCart cart,
+  double? packageMarkupPercent,
+  bool isOwner = false,
+}) {
   for (final line in cart.lines) {
     final refusal = SaleTotals.discountRefusal(
       saleType: cart.saleType,
@@ -59,6 +69,12 @@ String? saleRefusal({required PosCart cart, double? packageMarkupPercent}) {
     saleType: cart.saleType,
     billDiscount: cart.billDiscount,
     billGross: SaleTotals.billGross(cart.lines, saleType: cart.saleType),
+    isOwner: isOwner,
+    // An approval ATTACHED is enough to pass here, and deliberately so: whether it was
+    // really granted, for these figures, and by this pharmacy is `checkout_sale()`'s to
+    // decide, and it decides it against the stored row rather than against anything the
+    // client believes about it.
+    hasApproval: cart.discountApprovalId != null,
   );
   if (billRefusal != null) {
     return billRefusal;

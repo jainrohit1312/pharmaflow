@@ -461,6 +461,8 @@ abstract final class SaleTotals {
     required SaleType saleType,
     required double billDiscount,
     required double billGross,
+    bool isOwner = false,
+    bool hasApproval = false,
   }) {
     if (billDiscount < 0) {
       return 'A discount cannot be negative.';
@@ -475,12 +477,30 @@ abstract final class SaleTotals {
       return 'The discount of ${billDiscount.toStringAsFixed(2)} is larger than '
           'the bill\u2019s ${billGross.toStringAsFixed(2)}.';
     }
-    if (billDiscount > billGross * 0.10) {
-      return 'A discount above 10% needs the owner\u2019s approval, and the '
-          'counter cannot request one yet - bill at 10% or less.';
+    if (billDiscount > billGross * 0.10 && !isOwner && !hasApproval) {
+      return 'A discount above 10% of the bill needs the owner\u2019s approval: '
+          'ask for it, and bill once he has given it.';
     }
     return null;
   }
+
+  /// Whether a bill's discount needs the owner before it can be billed.
+  ///
+  /// The question the counter asks to decide whether to OFFER the ask rather than to
+  /// refuse: [billDiscountRefusal] answers "may this be billed as it stands", and this
+  /// answers "is that the owner's to give" - which is what the discount field shows a
+  /// button for.
+  static bool needsOwnerApproval({
+    required SaleType saleType,
+    required double billDiscount,
+    required double billGross,
+    required bool isOwner,
+  }) =>
+      !isOwner &&
+      saleType.hasDiscount &&
+      billDiscount > 0 &&
+      billDiscount <= billGross &&
+      billDiscount > billGross * 0.10;
 
   /// Why a rate cannot be charged, or `null` when it can.
   ///

@@ -391,6 +391,30 @@ void main() {
       );
       expect(_totals(container).discountTotal, 14.29);
     });
+
+    test('any edit to the bill drops the approval it was waiting on', () {
+      final container = _container();
+      final pos = _pos(container)
+        ..addLine(
+          product: buildProduct('Dolo 650'),
+          batch: buildBatch(),
+          qty: 1,
+        )
+        ..setDiscountApproval('approval-1');
+
+      expect(_cart(container).discountApprovalId, 'approval-1');
+
+      pos.setQty('batch-1', 2);
+
+      expect(
+        _cart(container).discountApprovalId,
+        isNull,
+        reason:
+            'the owner approved a figure on a bill, so a bill that has moved since '
+            'is a different question - and `checkout_sale()` would refuse the mismatch '
+            'anyway, so keeping a stale id could only ever produce a refusal',
+      );
+    });
   });
 
   group('how the sale will be settled', () {
@@ -579,6 +603,7 @@ void main() {
           ..setPaymentMode(PaymentMode.upi)
           ..setTendered(105)
           ..setBillDiscount(46)
+          ..setDiscountApproval('approval-1')
           ..addLine(
             product: buildProduct('Dolo 650'),
             batch: buildBatch(),
@@ -609,6 +634,7 @@ void main() {
           'paymentMode': cart.paymentMode,
           'tendered': cart.tendered,
           'billDiscount': cart.billDiscount,
+          'discountApprovalId': cart.discountApprovalId,
           'saleType': cart.saleType,
           'key': cart.idempotencyKey,
         };
@@ -669,6 +695,10 @@ void main() {
         'setBillDiscount': (
           apply: () => pos.setBillDiscount(9),
           owns: <String>{'billDiscount', 'key'},
+        ),
+        'setDiscountApproval': (
+          apply: () => pos.setDiscountApproval('approval-2'),
+          owns: <String>{'discountApprovalId', 'key'},
         ),
         'setQty': (
           apply: () => pos.setQty('batch-1', 3),

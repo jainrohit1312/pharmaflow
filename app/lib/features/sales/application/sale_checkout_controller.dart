@@ -2,6 +2,7 @@
 library;
 
 import 'package:app/core/errors/app_exception.dart';
+import 'package:app/data/models/profile.dart';
 import 'package:app/data/models/sale.dart';
 import 'package:app/data/models/sale_cart_line.dart';
 import 'package:app/data/repositories/pharmacy_repository.dart';
@@ -101,6 +102,10 @@ class SaleCheckoutController extends _$SaleCheckoutController {
         packageMarkupPercent: await ref.read(
           packageMarkupPercentProvider(cart.saleType).future,
         ),
+        // The cap is the owner's to lift, and he does not need his own permission: the
+        // counter refuses an above-cap discount to everyone else, and the server refuses
+        // it a second time against the stored approval rather than against this.
+        isOwner: ref.read(profileStateProvider).value?.role.isOwner ?? false,
       );
       if (refusal != null) {
         throw ValidationException(message: refusal);
@@ -162,6 +167,7 @@ class SaleCheckoutController extends _$SaleCheckoutController {
         // refuses a sale paid beyond its total.
         amountPaid: paid,
         billDiscount: cart.billDiscount,
+        discountApprovalId: cart.discountApprovalId,
         placeOfSupply: cart.placeOfSupply,
         fromLocation: cart.fromLocation,
         toLocation: cart.toLocation,

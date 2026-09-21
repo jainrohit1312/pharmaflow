@@ -62,6 +62,34 @@ class ApprovalsRepository {
     }
   }
 
+  /// One request by id, or `null` when this caller may not read it.
+  ///
+  /// `null` rather than a throw, for the same reason the table's read policy is a SELECT
+  /// one: another pharmacy's row, somebody else's request and an id that names nothing
+  /// all answer "nothing". That is exactly what the counter's waiting state needs - it is
+  /// asking "has the owner answered this yet", not "does this row exist".
+  Future<ApprovalRequest?> byId(String id) async {
+    try {
+      final row = await _client
+          .from('approval_requests')
+          .select()
+          .eq('id', id)
+          .maybeSingle();
+
+      return row == null ? null : ApprovalRequest.fromJson(row);
+    } on sb.PostgrestException catch (error) {
+      throw mapPostgrestException(
+        error,
+        fallbackMessage: 'Unable to check that approval.',
+      );
+    } on Object catch (error) {
+      throw ServerException(
+        message: 'Unable to check that approval.',
+        cause: error,
+      );
+    }
+  }
+
   /// Raises a request, and answers with the row the server stored.
   ///
   /// The server refuses an action type whose chunk has not landed, and refuses a

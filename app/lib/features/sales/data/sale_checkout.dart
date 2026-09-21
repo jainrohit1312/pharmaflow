@@ -143,6 +143,7 @@ class SaleCheckout {
     this.toLocation,
     this.transferReason,
     this.idempotencyKey,
+    this.discountApprovalId,
   });
 
   /// Its lines, in cart order.
@@ -203,6 +204,13 @@ class SaleCheckout {
   /// The key that makes a retried submit the same sale rather than a second one.
   final String? idempotencyKey;
 
+  /// The owner's approval for this bill's above-cap discount, when the counter has one.
+  ///
+  /// Sent by id: the figures he approved live on the request the server stored, and
+  /// `checkout_sale()` matches this bill against THOSE rather than against anything the
+  /// client repeats here - so an approval cannot be stretched to a bill he never saw.
+  final String? discountApprovalId;
+
   /// The JSON object the RPC reads.
   ///
   /// Document totals are deliberately absent: `checkout_sale()` sums the lines
@@ -227,6 +235,9 @@ class SaleCheckout {
       'bill_discount': billDiscount,
     'place_of_supply': placeOfSupply,
     if (idempotencyKey != null) 'idempotency_key': idempotencyKey,
+    // The owner's approval, when the counter is quoting one. Left out entirely rather than
+    // sent as null, like every other field this document is not made of.
+    if (discountApprovalId != null) 'discount_approval_id': discountApprovalId,
     ..._typeFields(),
     'items': lines.map((line) => line.toPayload()).toList(growable: false),
   };

@@ -663,6 +663,57 @@ void main() {
       expect(priced.totals.grandTotal, 0);
       expect(priced.totals.discountTotal, 0);
     });
+
+    test("the cap is the owner's to lift, and staff ask him for it", () {
+      // The same over-cap figure, three ways: refused to staff with the sentence that
+      // says what to do about it, free for the owner (2026-09-21), and passable for
+      // anyone once an approval is attached - because whether that approval is real is
+      // `checkout_sale()`'s to decide against the stored row, never the client's.
+      String? refusalBy({bool isOwner = false, bool hasApproval = false}) =>
+          SaleTotals.billDiscountRefusal(
+            saleType: SaleType.counter,
+            billDiscount: 100,
+            billGross: 546,
+            isOwner: isOwner,
+            hasApproval: hasApproval,
+          );
+
+      expect(refusalBy(), contains('ask for it'));
+      expect(refusalBy(isOwner: true), isNull);
+      expect(refusalBy(hasApproval: true), isNull);
+    });
+
+    test('and the counter asks whether to OFFER the ask or refuse', () {
+      // The question behind the discount field's button, which is a different one from
+      // "may this be billed": a discount larger than the bill is a refusal, not an ask,
+      // and exactly 10% is the counter's own to give.
+      bool offers({required double billDiscount, bool isOwner = false}) =>
+          SaleTotals.needsOwnerApproval(
+            saleType: SaleType.counter,
+            billDiscount: billDiscount,
+            billGross: 546,
+            isOwner: isOwner,
+          );
+
+      expect(offers(billDiscount: 100), isTrue);
+      expect(
+        offers(billDiscount: 54.6),
+        isFalse,
+        reason: 'exactly 10% is the counter\u2019s own to give',
+      );
+      expect(
+        offers(billDiscount: 100, isOwner: true),
+        isFalse,
+        reason:
+            'he needs nobody\u2019s permission, so there is nothing to offer him',
+      );
+      expect(
+        offers(billDiscount: 600),
+        isFalse,
+        reason:
+            'a discount larger than the bill is a different refusal, not an ask',
+      );
+    });
   });
 
   group("the server's own figures", () {

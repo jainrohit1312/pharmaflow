@@ -19,6 +19,15 @@ Future<List<ApprovalRequest>> pendingApprovals(Ref ref) async {
   return ref.watch(approvalsRepositoryProvider).pending(pharmacyId: pharmacyId);
 }
 
+/// One request's current state, for whoever is waiting on the answer.
+///
+/// A family over the id rather than a watch on the pending list, because once the owner
+/// has answered, the row leaves that list - and "no longer pending" cannot say whether he
+/// allowed it or refused it, which is the whole question the counter is asking.
+@riverpod
+Future<ApprovalRequest?> approvalRequest(Ref ref, String id) =>
+    ref.watch(approvalsRepositoryProvider).byId(id);
+
 /// Raises a request and decides one.
 ///
 /// A command holder rather than a state machine: what the UI needs from it is whether a

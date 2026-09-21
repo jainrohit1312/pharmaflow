@@ -241,6 +241,28 @@ void main() {
       expect(payload['bill_discount'], 46);
     });
 
+    test("carries the owner's approval when the counter is quoting one", () {
+      // What travels is the ID, not the figures: the approved amounts live on the row the
+      // server stored, and `checkout_sale()` matches this bill against those - so an
+      // approval cannot be stretched to a bill the owner never saw by editing the payload.
+      final payload = SaleCheckout(
+        lines: <SaleCheckoutLine>[_line()],
+        billDiscount: 100,
+        discountApprovalId: 'approval-1',
+      ).toPayload();
+
+      expect(payload['discount_approval_id'], 'approval-1');
+    });
+
+    test('and leaves it out when nobody has approved anything', () {
+      final payload = SaleCheckout(
+        lines: <SaleCheckoutLine>[_line()],
+        billDiscount: 46,
+      ).toPayload();
+
+      expect(payload.containsKey('discount_approval_id'), isFalse);
+    });
+
     test('is left out when the bill carries none', () {
       // Not sent as a zero: a payload that names no discount has to be the payload this
       // function sent before the discount existed.

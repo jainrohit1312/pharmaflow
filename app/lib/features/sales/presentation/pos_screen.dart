@@ -12,8 +12,12 @@ import 'package:app/core/widgets/app_scaffold.dart';
 import 'package:app/core/widgets/app_search_field.dart';
 import 'package:app/core/widgets/app_text_field.dart';
 import 'package:app/core/widgets/section_card.dart';
+import 'package:app/data/models/approval_request.dart';
 import 'package:app/data/models/product.dart';
+import 'package:app/data/models/profile.dart';
 import 'package:app/data/models/sale.dart';
+import 'package:app/features/approvals/application/approvals_controller.dart';
+import 'package:app/features/auth/application/pharmacy_scope.dart';
 import 'package:app/features/products/application/product_categories.dart';
 import 'package:app/features/purchase/data/purchase_totals.dart';
 import 'package:app/features/sales/application/pos_controller.dart';
@@ -280,6 +284,34 @@ class _PosScreenState extends ConsumerState<PosScreen> {
       total: totals.grandTotal,
     );
 
+    // The cap is the owner's to lift, and the counter knows which side of it it stands on:
+    // for staff it offers the ASK rather than a bare refusal, and once asked it shows what
+    // the answer was. The owner is exempt, so he is never offered either.
+    final isOwner =
+        ref.watch(profileStateProvider).value?.role.isOwner ?? false;
+    final billGross = SaleTotals.billGross(cart.lines, saleType: cart.saleType);
+    final needsApproval =
+        cart.discountApprovalId == null &&
+        SaleTotals.needsOwnerApproval(
+          saleType: cart.saleType,
+          billDiscount: cart.billDiscount,
+          billGross: billGross,
+          isOwner: isOwner,
+        );
+    final approval = cart.discountApprovalId == null
+        ? null
+        : ref.watch(approvalRequestProvider(cart.discountApprovalId!));
+    final approvalLabel = approval?.when(
+      data: (request) => switch (request?.status) {
+        ApprovalStatus.approved => 'Approved - you can bill this.',
+        ApprovalStatus.rejected => 'The owner refused this discount.',
+        _ => 'Waiting for the owner to answer.',
+      },
+      loading: () => 'Checking with the owner\u2026',
+      error: (error, _) =>
+          'Could not check the approval: ${describeError(error)}',
+    );
+
     ref.listen<AsyncValue<Sale?>>(saleCheckoutControllerProvider, (
       previous,
       next,
@@ -494,6 +526,10 @@ class _PosScreenState extends ConsumerState<PosScreen> {
               change: change,
               discount: _billDiscount,
               onDiscountChanged: pos.setBillDiscount,
+              needsApproval: needsApproval,
+              approvalLabel: approvalLabel,
+              onAskOwner: () => _askOwner(cart),
+              onCheckApproval: () => _checkApproval(cart),
             ),
             const SizedBox(height: 24),
             AppButton.primary(
@@ -577,6 +613,10 @@ class _PosScreenState extends ConsumerState<PosScreen> {
       packageMarkupPercent: await ref.read(
         packageMarkupPercentProvider(cart.saleType).future,
       ),
+      // The counter's own view of who is asking, so an owner is not refused a discount the
+      // server would let him give. The server is still the guard: it refuses an above-cap
+      // discount to anyone else, and matches the bill against the approval it stored.
+      isOwner: ref.read(profileStateProvider).value?.role.isOwner ?? false,
     );
     if (!mounted) {
       return;
@@ -599,6 +639,35 @@ class _PosScreenState extends ConsumerState<PosScreen> {
       _report(paymentRefusal);
       _searchFocus.requestFocus();
       return;
+    }
+
+    // A bill whose above-cap discount is still with the owner cannot be written, and the
+    // counter says so in words a cashier can act on rather than letting the server refuse
+    // it in words meant for a developer. The server is still the control - it matches the
+    // bill against the approval it stored - so this is the courtesy, never the guard.
+    final approvalId = cart.discountApprovalId;
+    if (approvalId != null) {
+      ApprovalRequest? request;
+      try {
+        request = await ref.read(approvalRequestProvider(approvalId).future);
+      } on Object catch (error) {
+        if (mounted) {
+          _report(describeError(error));
+        }
+        return;
+      }
+      if (!mounted) {
+        return;
+      }
+      if (request?.status != ApprovalStatus.approved) {
+        _report(
+          request?.status == ApprovalStatus.rejected
+              ? 'The owner refused this discount.'
+              : 'The owner has not answered yet - the bill waits for him.',
+        );
+        _searchFocus.requestFocus();
+        return;
+      }
     }
 
     // Step one: the counter shows what it is about to write and the operator confirms
@@ -653,6 +722,53 @@ class _PosScreenState extends ConsumerState<PosScreen> {
     }
   }
 
+  /// Asks the owner to allow this bill's above-cap discount, and attaches his request.
+  ///
+  /// The two figures travel with the ask because they are the control: he approves a
+  /// discount ON a bill, and `checkout_sale()` later refuses a bill whose figures are not
+  /// the ones he saw. Attaching the request to the cart is what turns the refusal into a
+  /// wait - and any edit to the bill drops it again, so a changed basket asks afresh.
+  Future<void> _askOwner(PosCart cart) async {
+    final gross = SaleTotals.billGross(cart.lines, saleType: cart.saleType);
+    try {
+      final request = await ref
+          .read(approvalActionsProvider.notifier)
+          .request(
+            actionType: ApprovalActionType.discountAboveLimit,
+            title:
+                'Discount ${Formatters.currency(cart.billDiscount)} on a bill of '
+                '${Formatters.currency(gross)}',
+            summary: cart.patientName == null
+                ? null
+                : 'For ${cart.patientName}',
+            payload: <String, dynamic>{
+              'discount_amount': cart.billDiscount,
+              'bill_gross': gross,
+            },
+          );
+      if (!mounted) {
+        return;
+      }
+      ref.read(posControllerProvider.notifier).setDiscountApproval(request.id);
+      _report('Sent to the owner. The bill waits for his answer.');
+    } on Object catch (error) {
+      if (mounted) {
+        _report(describeError(error));
+      }
+    }
+  }
+
+  /// Re-reads the request this bill is waiting on.
+  ///
+  /// The rail is a table and not a socket, so "has he answered yet" is a question the
+  /// counter asks again rather than one it is told the answer to.
+  void _checkApproval(PosCart cart) {
+    final id = cart.discountApprovalId;
+    if (id != null) {
+      ref.invalidate(approvalRequestProvider(id));
+    }
+  }
+
   /// Shows a message to the user without involving the controller.
   void _report(String message) {
     ScaffoldMessenger.of(context)
@@ -670,6 +786,10 @@ class _TotalsPanel extends StatelessWidget {
     required this.change,
     required this.discount,
     required this.onDiscountChanged,
+    required this.needsApproval,
+    required this.approvalLabel,
+    required this.onAskOwner,
+    required this.onCheckApproval,
   });
 
   /// The document totals for the basket.
@@ -689,6 +809,18 @@ class _TotalsPanel extends StatelessWidget {
 
   /// Called with the discount in rupees, on every keystroke.
   final ValueChanged<double> onDiscountChanged;
+
+  /// Whether this bill's discount is over the cap and nobody has asked yet.
+  final bool needsApproval;
+
+  /// What the owner said about the ask already made, or `null` when there is none.
+  final String? approvalLabel;
+
+  /// Asks the owner for the above-cap discount.
+  final VoidCallback onAskOwner;
+
+  /// Re-reads the request this bill is waiting on.
+  final VoidCallback onCheckApproval;
 
   @override
   Widget build(BuildContext context) {
@@ -741,6 +873,39 @@ class _TotalsPanel extends StatelessWidget {
               ],
             ),
           ),
+          // The cap, and the owner: the ASK when the discount is over it, or the state of
+          // the ask already made. This is the whole difference between "no" and "waiting
+          // for him" at the counter, so it is on the bill rather than in a dialog.
+          if (needsApproval || approvalLabel != null) ...<Widget>[
+            const SizedBox(height: 4),
+            Row(
+              children: <Widget>[
+                Expanded(
+                  child: Text(
+                    needsApproval
+                        ? 'A discount above 10% needs the owner\u2019s approval.'
+                        : approvalLabel!,
+                    style: theme.textTheme.bodySmall,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                if (needsApproval)
+                  AppButton.outlined(
+                    label: 'Ask the owner',
+                    icon: Icons.how_to_reg_outlined,
+                    expand: false,
+                    onPressed: onAskOwner,
+                  )
+                else
+                  AppButton.text(
+                    label: 'Check',
+                    icon: Icons.refresh,
+                    expand: false,
+                    onPressed: onCheckApproval,
+                  ),
+              ],
+            ),
+          ],
           const Divider(height: 20),
           _AmountRow(
             label: 'Total',

@@ -50,6 +50,7 @@ class PosCart {
     this.toLocation,
     this.transferReason,
     this.idempotencyKey,
+    this.discountApprovalId,
   });
 
   /// Its lines, in the order they were added.
@@ -132,6 +133,15 @@ class PosCart {
   /// than comparing payloads: reusing a key after an edit would hand the counter
   /// back the bill it already wrote instead of the one it just rang up.
   final String? idempotencyKey;
+
+  /// The owner's approval that lets this bill's above-cap discount through (D-071).
+  ///
+  /// Set when the counter asks him and he grants it, and **dropped by every edit to the
+  /// basket** - like [idempotencyKey], and for the same class of reason: the approval is
+  /// for a figure on a bill, so a bill that has moved since is a different question.
+  /// `checkout_sale()` matches the bill against the approved figures itself and refuses a
+  /// mismatch, so a stale id on the cart could only ever produce a refusal.
+  final String? discountApprovalId;
 
   /// Whether nothing has been rung up yet.
   bool get isEmpty => lines.isEmpty;
@@ -502,6 +512,10 @@ class PosCart {
   /// The one copy that carries the key, because minting it is the whole point: it
   /// is set once a submission starts so a retry is the same sale, and every other
   /// `with…` clears it so an edit cannot reuse it.
+  ///
+  /// It **does** carry [discountApprovalId] forward, unlike every other copy but
+  /// [withDiscountApproval]: stamping a submission is not an edit to the bill, and a
+  /// retry of the same bill has to quote the approval the first attempt carried.
   PosCart withIdempotencyKey(String? value) => PosCart(
     lines: lines,
     customerId: customerId,
@@ -521,6 +535,37 @@ class PosCart {
     toLocation: toLocation,
     transferReason: transferReason,
     idempotencyKey: value,
+    discountApprovalId: discountApprovalId,
+  );
+
+  /// A copy with the owner's approval for this bill's above-cap discount attached.
+  ///
+  /// The one copy that sets it, and like every other edit it does **not** carry
+  /// [idempotencyKey] forward: what the bill will be has changed, so the submission that
+  /// wrote the previous shape is not this one. Every *other* copy drops the approval for
+  /// the same reason - the owner approves a figure on a bill, and a bill that has moved
+  /// since is not the one he looked at (the server checks that too, and refuses a
+  /// mismatch, but a counter that kept a stale approval would offer a bill the server
+  /// would then reject).
+  PosCart withDiscountApproval(String? value) => PosCart(
+    lines: lines,
+    customerId: customerId,
+    patientName: patientName,
+    patientMobile: patientMobile,
+    paymentMode: paymentMode,
+    tendered: tendered,
+    billDiscount: billDiscount,
+    placeOfSupply: placeOfSupply,
+    saleType: saleType,
+    admissionId: admissionId,
+    admissionNo: admissionNo,
+    doctorId: doctorId,
+    doctorName: doctorName,
+    hospitalReference: hospitalReference,
+    fromLocation: fromLocation,
+    toLocation: toLocation,
+    transferReason: transferReason,
+    discountApprovalId: value,
   );
 }
 
@@ -706,6 +751,13 @@ class PosController extends _$PosController {
   /// the basket clears it, because the server answers a repeated key with the
   /// original sale rather than comparing payloads.
   void setIdempotencyKey(String? key) => state = state.withIdempotencyKey(key);
+
+  /// Records the owner's approval for this bill's above-cap discount, or clears it.
+  ///
+  /// Set by the counter once he grants it, and cleared by any edit to the bill - which
+  /// the cart does itself, so no caller has to remember to.
+  void setDiscountApproval(String? id) =>
+      state = state.withDiscountApproval(id);
 
   /// Records what the customer handed over.
   void setTendered(double amount) => state = state.withTendered(amount);
