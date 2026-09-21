@@ -44,11 +44,15 @@ figure stays self-consistent:
   `total_amount` from its discounted inclusive total, with the slab it already has.
 - **`discount_total`** then equals the sum of the lines' discounts (the bill discount's share plus
   any per-line discount), so the receipt's `Discount -Rs 46.00` line is the stored figure.
-- **Refuse** a discount larger than the bill, and keep a cap. **The 10% cap (D-071) is currently a
-  per-line `discount_percent` check and cannot stay as it is**: with a rupee discount the natural
-  rule is that the bill discount may not exceed **10% of the bill's total**, by refusal, with the
-  same sentence the counter already uses ("A discount above 10% needs the owner's approval…").
-  Confirm this wording with the owner if it differs from what he expects.
+- **Refuse a discount larger than the bill**, and hold the 10% cap (D-071) on the bill's
+  **tax-inclusive** total. **The over-cap case is no longer a refusal, though** — the owner asked
+  on 2026-09-21 for a **"request approval"** offer instead of the counter saying no. That is
+  D-071's own approved design and it is **blocked on Phase 6.5c**; read the next section before
+  writing anything about the cap.
+  Until 6.5c lands, this work ships the **within-cap** case and the over-cap case keeps refusing,
+  with the sentence already in `SaleTotals.discountRefusal` ("A discount above 10% needs the
+  owner's approval, and the approval workflow is not built yet - bill at 10% or less."). **Keep
+  that sentence truthful** rather than promising a workflow that does not exist.
 - **Idempotency and the legacy seam are untouched**: a payload that names no discount behaves
   exactly as it does today, and `sales_payment_check` still refuses an over-payment.
 
@@ -71,6 +75,37 @@ and a payload with no discount is unchanged. **Then run it against hosted too** 
 
 **Then push it** (the owner authorises migrations per brief; ask, as the last two were pushed on
 his word), and verify live as `00039`/`00040` were.
+
+## The approval requirement (owner, 2026-09-21) — this is Phase 6.5c, not a commit
+
+> "COUNTER MNA NA KARE REQUEST APPROVAL OPTION AAJAYE ISKE UPAR DISCOUNT KRNE PAR"
+
+An over-cap discount should not be refused; it should be **requested**, and the sale should wait
+for the owner. That is exactly what D-071 already records (the flow is **blocking**: "the sale
+cannot be recorded until the approval exists"), so this is not a new design — it is a **missing
+phase**, and nothing in this work can substitute for it:
+
+- **`approval_requests` does not exist.** The table, its RLS and its states (`pending` /
+  `approved` / `rejected`) are **Phase 6.5c**, and the phase table in `PROGRESS.md` reads **"not
+  started"**. `MASTER_PLAN.md`'s Phase 7 states it outright: *"`approval_requests` does not exist
+  yet, and Phase 7a cannot be built before Phase 6.5c lands."*
+- **`sales.discount_above_limit_request_id` is deliberately absent** from the Phase 7a migrations
+  for that reason, and it is a **real foreign key** to `approval_requests(id)`, not a soft
+  reference (D-071). The hosted verification on 2026-09-20 confirmed it is absent "as designed".
+- **The list of action types is still the owner's to supply** — *"the exact list of action types is
+  still to come from the owner"* (`MASTER_PLAN.md`, Phase 6.5). A discount approval is one entry
+  in it. A discount-only approval mechanism built here would be a **second, competing** mechanism
+  that 6.5c would then have to absorb — the thing these briefs repeatedly forbid.
+
+**Put to the owner, in this order:**
+
+1. **Build 6.5c as its own phase** — it is already sequenced (Phase 7a *uses* its approval for the
+   discount cap). Make the discount its first `action_type`, and the counter's flow becomes:
+   over-cap → *request approval* → the sale waits → the owner approves in the app → the sale
+   proceeds. One mechanism, every action.
+2. **Until then**, ship the within-cap bill discount — which is what a counter needs every working
+   day — and keep the over-cap refusal with the truthful sentence.
+3. **Do not** ship a discount-only approval table; it would be thrown away.
 
 ## Step 2 — the client (after the migration is on hosted)
 
