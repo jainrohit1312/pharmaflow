@@ -217,11 +217,26 @@ begin
     || ': 2. the party has two open bills (got '
     || jsonb_array_length(v_bills -> 'bills') || ')');
 
+  -- The date alone cannot order these: `now()` is the **transaction start time**, so every sale
+  -- this test writes shares one `sale_date`. The order that has to hold is therefore the **invoice
+  -- number** - the document's own sequence - which is what migration 00041 fixed, after this
+  -- assertion passed locally for the wrong reason (the uuid tiebreak in 00040 happened to come out
+  -- the expected way) and failed on hosted.
+  v_log := array_append(v_log, case
+    when (v_bills -> 'bills' -> 0 ->> 'sale_date')
+         = (v_bills -> 'bills' -> 1 ->> 'sale_date')
+      then 'PASS' else 'FAIL' end
+    || ': 2. the two bills really do share a sale_date, so the order cannot come from the date '
+    || '(got ' || coalesce(v_bills -> 'bills' -> 0 ->> 'sale_date', 'NULL') || ' and '
+    || coalesce(v_bills -> 'bills' -> 1 ->> 'sale_date', 'NULL') || ')');
+
   v_log := array_append(v_log, case
     when v_bills -> 'bills' -> 0 ->> 'sale_id' = v_sale_a1.id::text
      and v_bills -> 'bills' -> 1 ->> 'sale_id' = v_sale_a2.id::text
+     and (v_bills -> 'bills' -> 0 ->> 'invoice_no')
+         < (v_bills -> 'bills' -> 1 ->> 'invoice_no')
       then 'PASS' else 'FAIL' end
-    || ': 2. and they come oldest first (got '
+    || ': 2. and they come in a real order - oldest first by invoice number (got '
     || coalesce(v_bills -> 'bills' -> 0 ->> 'invoice_no', 'NULL') || ' then '
     || coalesce(v_bills -> 'bills' -> 1 ->> 'invoice_no', 'NULL') || ')');
 
