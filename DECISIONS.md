@@ -4063,3 +4063,79 @@ module exists because that is precisely what he does not want staff doing unaske
 - **The two sale action types stop being "declared for completeness".** They are the only ones whose
   chunk has work behind it that does not exist yet, which makes them the last real piece of 6.5c
   rather than a formality.
+
+---
+
+## D-086 — The Product Master Is REQUESTED, the Customer Master Absorbs the Pharmacist Gate, and a Batch Stopped Taking Writes
+
+**Date:** 2026-09-21
+
+**Status:** Active (Phase 6.5c chunk 5 — built; commit `fb1998c`, migration `20260921000046`, pushed to
+hosted, which now reads 46 = 46)
+
+**Decision:** The master data goes behind the same rail, on the module's second shape, and one
+question the brief left open is settled here:
+
+- **The product master is REQUESTED, not staged**, for all four acts. A new product *cannot* be
+  staged — nothing can reference a product that does not exist, so "exists but unapproved" is not a
+  state this schema can express — and an edit of a product that has history has no status to wait in
+  either: staging one would have to write the new values onto the live row (making the change real
+  before the owner answered) or keep a second copy of the product somewhere. Requesting the whole
+  document makes a refusal a **no-op**, which for an edit of a row with history is better than the
+  purchase's pre-image restore rather than a compromise on it. **No third shape was invented.**
+- **`save_product()` is ONE door to three tables, and it DERIVES the action type** from the document
+  instead of accepting one: no `product_id` is a `product_create`, deactivating an active product is a
+  `product_delete`, and everything else is a `product_edit`. A client cannot name a gentler act than
+  the change it is asking for, and an **alias is a document of its own** — the server refuses a payload
+  that mixes it with the product's fields, because one approval cannot carry two documents.
+- **`update_patient()` absorbs migration 00038's rule.** The owner's policy supersedes the pharmacist
+  half, so a pharmacist is gated exactly like a cashier, and the function answers the
+  `{outcome, document, request_id}` envelope every other gated write answers with. It has no Dart
+  caller, so only this repository's SQL tests moved.
+- **The customers form's eight granted columns are deliberately NOT gated.** A revoke ships WITH its
+  request path; revoking columns a committed Phase 1 screen writes, with no replacement for that
+  screen in this migration, would leave staff unable to edit a customer at all.
+- **`product_batches` loses INSERT/UPDATE/DELETE and gets no request path**, because nothing in the
+  application writes it — every legitimate writer is a SECURITY DEFINER function, which a revoke does
+  not touch. This closes the hole D-083 recorded without taking a door away.
+- **An expense is free and TELLS the owner**, through a TRIGGER on `expenses` rather than a call in
+  the app's write path, firing on INSERT, UPDATE and DELETE — the three acts D-085 retired from the
+  enum, and the three a session can still perform on that table.
+- **The enum's own comment now names the RETIRED types**, so the type cannot read as "a chunk is
+  coming" for three that will never have one.
+
+**Rationale:** the module had two honest shapes and the brief named both, so the choice was which case
+each fits. A purchase has a *life* and a status to wait in; a return is a single event; a product is
+neither — it has no status at all — so the request-is-the-document shape is the only one in which
+"waiting" is a real state rather than a claim about a half-written row. Deriving the action type
+server-side is the same reasoning as `checkout_sale()` owning the discount cap: a control that lives
+in the screen is a suggestion.
+
+For expenses the owner's own model decides it: the counter is free and the paperwork is not, but an
+expense is paperwork he *bears the cost of and wants to see*, not an act he wants to authorise — a
+notification is the right control, and gating it would spend his attention on every tea bill. A
+trigger rather than a call in the write path because the rule is "every expense tells him" and a
+screen can be bypassed by a session holding a token.
+
+**Consequences:**
+
+- **The revoke is the same migration as the request path**, so this is the chunk that closes the
+  `product_batches` hole and the third and fourth pairs of tables that stopped taking session writes.
+  An older deployed client cannot write a product, a batch or an alias any more — expected, since the
+  app is not live.
+- **A gap is named rather than hidden.** A session can still set a customer's `is_active` (a soft
+  delete) and `opening_balance` (money) through the customers form, because that form is not this
+  phase's to change. `customer_edit` is already the action type the chunk that closes it will raise;
+  the migration's own comment says so.
+- **The WhatsApp leg of the expense notification is queued; the email leg is not.** `profiles` carries
+  a phone but no address for him, and a log row for a channel that cannot be addressed would claim an
+  attempt that could never happen. `send-notification` is the seam, and it is already deployed.
+- **Two files had been ERRORING undeclared since chunks 3 and 4.** `phase4_report_summary.sql` and
+  `phase7a_sale_types.sql` still wrote revoked tables directly as `authenticated`, so they never
+  reached their own summary — and a run that counts `FAIL` lines reads that as green. Their fixtures
+  are written as postgres now, both files run to completion, and a baseline arm built from migrations
+  `00001`–`00045` is what proved the damage predated this chunk.
+- **`sale_edit` and `sale_cancel` are now the only action types declared without a chunk**, and both
+  their acts have to be BUILT before they can be gated: nothing writes `sales.status = 'cancelled'`,
+  so what a cancel does to already-posted stock and money is still the question put to the owner.
+
