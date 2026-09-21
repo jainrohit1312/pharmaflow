@@ -2,6 +2,7 @@
 library;
 
 import 'package:app/data/models/approval_request.dart';
+import 'package:app/features/approvals/application/approval_readers.dart';
 import 'package:app/features/approvals/data/approvals_repository.dart';
 import 'package:app/features/auth/application/pharmacy_scope.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
@@ -87,6 +88,17 @@ class ApprovalActions extends _$ApprovalActions {
   }
 
   /// Records the owner's answer, and returns the decided request.
+  ///
+  /// **One answer moves more than the queue**, which is what this used to get wrong: it invalidated
+  /// the pending list and nothing else, so a screen holding the document the answer had just written
+  /// kept showing the state before it - and the counter's own label on a bill it had asked about kept
+  /// reading *waiting for the owner*. Both are refreshed here, through the one place that knows which
+  /// reads an answer feeds.
+  ///
+  /// [request] deliberately keeps its narrower refresh. An ask writes nothing for the gated families -
+  /// the document is untouched until the owner answers - and the one write it can make, a document
+  /// staged as `pending_approval`, is refreshed by the screen that made it, which re-reads its own
+  /// document and list as part of reporting where the work went.
   Future<ApprovalRequest> decide({
     required String id,
     required bool approve,
@@ -97,7 +109,7 @@ class ApprovalActions extends _$ApprovalActions {
       final decided = await ref
           .read(approvalsRepositoryProvider)
           .decide(id: id, approve: approve, note: note);
-      ref.invalidate(pendingApprovalsProvider);
+      refreshApprovalReaders(ref);
       state = AsyncData<ApprovalRequest?>(decided);
       return decided;
     } on Object catch (error, stackTrace) {
