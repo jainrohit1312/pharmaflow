@@ -237,6 +237,15 @@ abstract final class Routes {
   /// Application and pharmacy settings (Phase 1 placeholder).
   static const String settings = '/settings';
 
+  /// The approvals waiting for the owner (Phase 6.5c): everything a member of staff has
+  /// asked to do that only he may allow.
+  ///
+  /// Nested under [settings] rather than given a top-level path, for the reason
+  /// [openingStockImport] records: it is not a destination of its own, and the shell
+  /// lights a destination by prefix, so a path matching none of them would leave the rail
+  /// sitting on Dashboard while the owner was working through his queue.
+  static const String approvals = '/settings/approvals';
+
   /// The one-time opening stock import (Phase 6.5a): a CSV of the pharmacy's
   /// existing stock, read into products and batches.
   ///

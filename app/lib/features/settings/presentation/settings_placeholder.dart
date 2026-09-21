@@ -44,6 +44,18 @@ class SettingsPlaceholder extends ConsumerWidget {
             const SizedBox(height: 24),
             Card(
               child: ListTile(
+                leading: const Icon(Icons.how_to_reg_outlined),
+                title: const Text('Approvals'),
+                subtitle: const Text(
+                  'Everything your staff has asked to do, waiting for your answer.',
+                ),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () => context.go(Routes.approvals),
+              ),
+            ),
+            const SizedBox(height: 12),
+            Card(
+              child: ListTile(
                 leading: const Icon(Icons.upload_file),
                 title: const Text('Opening stock import'),
                 subtitle: const Text(

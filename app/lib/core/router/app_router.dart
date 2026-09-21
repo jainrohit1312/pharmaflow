@@ -9,6 +9,7 @@ library;
 import 'package:app/core/router/routes.dart';
 import 'package:app/core/widgets/error_view.dart';
 import 'package:app/data/models/profile.dart';
+import 'package:app/features/approvals/presentation/approvals_screen.dart';
 import 'package:app/features/auth/application/auth_controller.dart';
 import 'package:app/features/auth/data/auth_repository.dart';
 import 'package:app/features/auth/presentation/login_screen.dart';
@@ -348,6 +349,14 @@ final appRouterProvider = Provider<GoRouter>((ref) {
             path: Routes.settings,
             name: 'settings',
             builder: (context, state) => const SettingsPlaceholder(),
+          ),
+          // A child of the settings destination, declared right after it, for the
+          // same reason as the import below: they share a prefix, so the rail stays
+          // on Settings while the owner works through his queue.
+          GoRoute(
+            path: Routes.approvals,
+            name: 'approvals',
+            builder: (context, state) => const ApprovalsScreen(),
           ),
           // A child of the settings destination, declared right after it: the
           // two share a prefix, so the rail stays on Settings while the owner is
