@@ -5,12 +5,18 @@
 /// the printer that a test can check without a print channel. The layout gets one
 /// test of its own - that it builds, and builds a PDF - because everything past
 /// that would be a PDF parser's opinion rather than the app's.
+///
+/// The batch and the expiry on every line come from `sale_document()` (migration
+/// 20260920000039) rather than from a join this app does, so the fixtures describe a
+/// **document** - a stored line plus the pack it came out of - and the default pack is
+/// an **undated** one, because 145 of the owner's opening-stock batches carry no date.
 library;
 
 import 'package:app/data/models/pharmacy.dart';
 import 'package:app/data/models/sale_item.dart';
 import 'package:app/features/purchase/data/purchase_totals.dart';
 import 'package:app/features/sales/application/sale_detail_controller.dart';
+import 'package:app/features/sales/data/sales_repository.dart';
 import 'package:app/services/invoice_printer.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -37,12 +43,21 @@ Pharmacy _pharmacy() => Pharmacy(
 /// 19.20 tax, 179.20 due - and so the tax is an *even* number of paise, which is
 /// the easy case for the split. `taxTotal` and `item` are parameters for the cases
 /// that are not.
+///
+/// [batchNo], [expiryDate] and [isUnknownBatch] are the line's **pack**, which the
+/// document carries beside the stored line. The defaults are a numbered pack with no
+/// expiry recorded, which is what most of this catalogue actually holds.
 SaleDetailData _bill({
   double taxTotal = 19.2,
   SaleItem? item,
+  String batchNo = 'ZZTEST-39-A',
+  DateTime? expiryDate,
+  bool isUnknownBatch = false,
   double? amountPaid,
   double? balanceDue,
   String? customerId,
+  String? patientName,
+  String? patientCode,
   double discountTotal = 40,
 }) {
   final grandTotal = PurchaseTotals.round2(160 + taxTotal);
@@ -55,18 +70,27 @@ SaleDetailData _bill({
     amountPaid: amountPaid ?? grandTotal,
     balanceDue: balanceDue ?? 0,
     customerId: customerId,
-  ).copyWith(discountTotal: discountTotal);
+  ).copyWith(discountTotal: discountTotal, patientName: patientName);
+
+  final stored =
+      item ??
+      buildSaleItem(
+        taxAmount: taxTotal,
+        totalAmount: grandTotal,
+      ).copyWith(discountPercent: 20);
 
   return SaleDetailData(
     sale: sale,
-    items: <SaleItem>[
-      item ??
-          buildSaleItem(
-            taxAmount: taxTotal,
-            totalAmount: grandTotal,
-          ).copyWith(discountPercent: 20),
+    lines: <SaleDocumentLine>[
+      buildSaleDocumentLine(
+        item: stored,
+        batchNo: batchNo,
+        expiryDate: expiryDate,
+        isUnknownBatch: isUnknownBatch,
+      ),
     ],
     productNames: const <String, String>{'product-1': 'Dolo 650'},
+    patientCode: patientCode,
   );
 }
 
@@ -143,6 +167,44 @@ void main() {
     });
   });
 
+  group('the patient', () {
+    test('names the patient and the code the pharmacy minted for them', () {
+      final sheet = printer.buildSheet(
+        data: _bill(patientName: 'Rohit Jain', patientCode: 'PT-00001'),
+        pharmacy: _pharmacy(),
+      );
+
+      expect(
+        sheet.patient,
+        'Rohit Jain · PT-00001',
+        reason:
+            'the code is the one sale_document() joined, and a Drug-Rules bill is '
+            'traceable to the person it was dispensed to',
+      );
+    });
+
+    test('prints a dash when the pharmacy has no code for the party', () {
+      final sheet = printer.buildSheet(
+        data: _bill(patientName: 'Package patient'),
+        pharmacy: _pharmacy(),
+      );
+
+      // A package bill's party is the hospital's account row, and a customer
+      // registered before Phase 7a has no code until they are first billed (D-079).
+      expect(sheet.patient, 'Package patient · ${InvoicePrinter.unknownMark}');
+    });
+
+    test('prints no patient line on a sale that names nobody', () {
+      final sheet = printer.buildSheet(data: _bill(), pharmacy: _pharmacy());
+
+      expect(
+        sheet.patient,
+        isNull,
+        reason: 'a transfer moves stock; it is not dispensed to anyone',
+      );
+    });
+  });
+
   group('the lines', () {
     test('names each line, how it was priced, and what it came to', () {
       final sheet = printer.buildSheet(data: _bill(), pharmacy: _pharmacy());
@@ -152,6 +214,56 @@ void main() {
       expect(line.name, 'Dolo 650');
       expect(line.detail, '2 x Rs 100.00 less 20% + 12% GST');
       expect(line.amount, 'Rs 179.20');
+    });
+
+    test('prints the pack each line came out of, and when it expires', () {
+      final sheet = printer.buildSheet(
+        data: _bill(batchNo: 'ZZTEST-39-B', expiryDate: DateTime(2027, 9, 20)),
+        pharmacy: _pharmacy(),
+      );
+
+      final line = sheet.lines.single;
+      expect(
+        line.batch,
+        'ZZTEST-39-B',
+        reason:
+            'a number of its own rather than the fixture default, so the assertion '
+            'cannot pass by the two agreeing by accident',
+      );
+      expect(
+        line.expiry,
+        '09/27',
+        reason:
+            'a thermal roll has 32 columns, so the month and the year are enough',
+      );
+    });
+
+    test('prints a dash for a pack whose expiry nobody recorded', () {
+      final sheet = printer.buildSheet(data: _bill(), pharmacy: _pharmacy());
+
+      expect(
+        sheet.lines.single.expiry,
+        InvoicePrinter.unknownMark,
+        reason:
+            '145 of the opening-stock batches this catalogue holds carry no date, so '
+            'an undated pack is the ordinary case - and a plausible-looking date would '
+            'be a claim the pharmacy cannot stand behind',
+      );
+    });
+
+    test('prints a dash for a pack whose number nobody recorded', () {
+      final sheet = printer.buildSheet(
+        data: _bill(batchNo: '', isUnknownBatch: true),
+        pharmacy: _pharmacy(),
+      );
+
+      final line = sheet.lines.single;
+      expect(line.batch, InvoicePrinter.unknownMark);
+      expect(
+        line.batch,
+        isNot(anyOf(isEmpty, contains('OPENING'))),
+        reason: 'never the raw blank, and never an invented batch number',
+      );
     });
 
     test('leaves off the discount and the GST clause when there are none', () {
@@ -171,7 +283,9 @@ void main() {
       final sheet = printer.buildSheet(
         data: SaleDetailData(
           sale: _bill().sale,
-          items: <SaleItem>[buildSaleItem(productId: null)],
+          lines: <SaleDocumentLine>[
+            buildSaleDocumentLine(item: buildSaleItem(productId: null)),
+          ],
           productNames: const <String, String>{},
         ),
         pharmacy: _pharmacy(),
@@ -302,6 +416,19 @@ void main() {
 
     test('draws a bill whose pharmacy could not be read', () async {
       final document = printer.buildDocument(data: _bill(), pharmacy: null);
+
+      expect(await document.save(), isNotEmpty);
+    });
+
+    test('draws the dash a pack with no number or date prints', () async {
+      // The em dash is not ASCII, and the built-in PDF fonts are why this printer
+      // spells money `Rs` rather than printing the rupee sign - so the one thing worth
+      // proving here is that a bill which *has* to print a dash still draws. That is
+      // the ordinary bill at this counter, not an edge case.
+      final document = printer.buildDocument(
+        data: _bill(batchNo: '', isUnknownBatch: true),
+        pharmacy: _pharmacy(),
+      );
 
       expect(await document.save(), isNotEmpty);
     });

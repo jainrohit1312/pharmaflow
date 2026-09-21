@@ -45,6 +45,8 @@ class InvoiceLine {
     required this.name,
     required this.detail,
     required this.amount,
+    required this.batch,
+    required this.expiry,
   });
 
   /// What the product is called.
@@ -55,6 +57,19 @@ class InvoiceLine {
 
   /// What the line came to.
   final String amount;
+
+  /// Which pack it came out of, or [InvoicePrinter.unknownMark].
+  ///
+  /// A Drug-Rules bill has to name the batch the goods came out of. This is the only
+  /// place it is knowable: `sale_items` records a `batch_id`, so the number comes from
+  /// the document `sale_document()` returns and never from a join the client does.
+  final String batch;
+
+  /// When that pack expires as `MM/yy`, or [InvoicePrinter.unknownMark].
+  ///
+  /// `MM/yy` rather than a full date because the roll is 80mm and the batch and the
+  /// expiry share one line.
+  final String expiry;
 }
 
 /// One label and amount.
@@ -98,6 +113,7 @@ class InvoiceSheet {
     required this.totals,
     required this.payment,
     required this.footer,
+    this.patient,
   });
 
   /// The seller's block: the pharmacy's name first, then the details it has.
@@ -117,6 +133,14 @@ class InvoiceSheet {
 
   /// When it was raised, as `18/09/2026 14:05`.
   final String issuedAt;
+
+  /// Who it is for, as `Rohit Jain · PT-00001`, or `null` when the sale records nobody.
+  ///
+  /// The name is the sale's own snapshot and the code is the one `sale_document()`
+  /// joined. A sale whose party has no code prints a dash rather than a code - a
+  /// package bill, whose party is the hospital's account row, and anyone registered
+  /// before Phase 7a until `save_patient()` first touches them.
+  final String? patient;
 
   /// What was sold.
   final List<InvoiceLine> lines;
@@ -139,6 +163,14 @@ class InvoicePrinter {
   /// The sentence printed at the foot of every bill.
   static const String footerNote =
       'Goods once sold are not returnable without the bill.';
+
+  /// What a bill prints where a value was never recorded.
+  ///
+  /// An **em dash**, never a plausible stand-in. 145 of the owner's opening-stock
+  /// batches have no expiry date and 138 have no batch number, so "not recorded" is the
+  /// common case at this counter rather than a corner - and a bill that invented
+  /// `OPENING-…` or a date would be stating something the pharmacy cannot stand behind.
+  static const String unknownMark = '\u2014';
 
   /// The bill's content. Pure: no PDF, no platform, no clock.
   ///
@@ -167,12 +199,20 @@ class InvoicePrinter {
       title: 'TAX INVOICE',
       reference: 'Bill ${sale.invoiceNo}',
       issuedAt: _dateTime(sale.saleDate),
+      patient: _patient(sale, data.patientCode),
+      // Iterated over the document's **lines** rather than its items, because a bill
+      // has to name the pack each line came out of and the batch detail lives beside
+      // the line rather than on it (`SaleDocumentLine`).
       lines: <InvoiceLine>[
-        for (final item in data.items)
+        for (final line in data.lines)
           InvoiceLine(
-            name: data.nameOf(item),
-            detail: _lineDetail(item),
-            amount: _money(item.totalAmount),
+            name: data.nameOf(line.item),
+            detail: _lineDetail(line.item),
+            amount: _money(line.item.totalAmount),
+            batch: line.hasKnownBatch ? line.batchNo.trim() : unknownMark,
+            expiry: line.hasKnownExpiry
+                ? Formatters.monthYearShort(line.expiryDate!)
+                : unknownMark,
           ),
       ],
       totals: <InvoiceRow>[
@@ -257,6 +297,13 @@ class InvoicePrinter {
                   style: const pw.TextStyle(fontSize: 8),
                 ),
                 pw.Text(sheet.issuedAt, style: const pw.TextStyle(fontSize: 8)),
+                if (sheet.patient != null) ...<pw.Widget>[
+                  pw.SizedBox(height: 2),
+                  pw.Text(
+                    sheet.patient!,
+                    style: const pw.TextStyle(fontSize: 8),
+                  ),
+                ],
               ],
             ),
             pw.SizedBox(height: 6),
@@ -306,6 +353,13 @@ class InvoicePrinter {
       crossAxisAlignment: pw.CrossAxisAlignment.start,
       children: <pw.Widget>[
         pw.Text(line.name, style: const pw.TextStyle(fontSize: 9)),
+        // The batch and its expiry on a row of their own: a number and a date do not fit
+        // beside the pricing detail at 80mm, and they describe the pack the customer is
+        // taking home rather than how it was priced.
+        pw.Text(
+          'Batch ${line.batch} · exp ${line.expiry}',
+          style: const pw.TextStyle(fontSize: 8),
+        ),
         pw.Row(
           mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
           children: <pw.Widget>[
@@ -339,6 +393,23 @@ class InvoicePrinter {
   /// The rounded value rather than `taxTotal / 2`, so that subtracting it gives the
   /// state half exactly and the two add back up to the stored total.
   static double _cgst(double taxTotal) => PurchaseTotals.round2(taxTotal / 2);
+
+  /// Who the bill is for as `Rohit Jain · PT-00001`, or `null` when it records nobody.
+  ///
+  /// The name is the sale's own snapshot; the code is the one `sale_document()` joined
+  /// on `sales.customer_id`. A dash stands in when the pharmacy has none - a package
+  /// bill's party is the hospital's account row, and a customer registered before
+  /// Phase 7a has none until `save_patient()` first touches them (D-079) - so the
+  /// receipt never prints a code it was not given. A sale that names nobody at all (a
+  /// transfer) prints no patient line rather than an empty one.
+  static String? _patient(Sale sale, String? patientCode) {
+    final name = _present(sale.patientName) ? sale.patientName!.trim() : null;
+    final hasCode = _present(patientCode);
+    if (name == null && !hasCode) {
+      return null;
+    }
+    return '${name ?? 'Patient'} · ${hasCode ? patientCode!.trim() : unknownMark}';
+  }
 
   /// How one line was priced.
   static String _lineDetail(SaleItem item) =>

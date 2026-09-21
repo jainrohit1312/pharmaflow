@@ -77,6 +77,24 @@ SaleItem buildSaleItem({
   productId: productId,
 );
 
+/// Builds a document line: the stored line plus the pack it came out of.
+///
+/// The batch detail is what `sale_document()` adds to a `sale_items` row. Its defaults
+/// are a pack with a number and **no expiry** on purpose: 145 of the owner's
+/// opening-stock batches carry no date, so an undated pack is the ordinary case here
+/// rather than a corner, and a fixture that wants a date asks for one.
+SaleDocumentLine buildSaleDocumentLine({
+  SaleItem? item,
+  String batchNo = 'batch-1',
+  DateTime? expiryDate,
+  bool isUnknownBatch = false,
+}) => SaleDocumentLine(
+  item: item ?? buildSaleItem(),
+  batchNo: batchNo,
+  expiryDate: expiryDate,
+  isUnknownBatch: isUnknownBatch,
+);
+
 /// An in-memory [SalesRepository].
 ///
 /// `checkout` sums the payload's own lines into the document it returns, which is
@@ -137,6 +155,47 @@ class FakeSalesRepository implements SalesRepository {
   /// Holds a write open, which is the only way to look at the window between a tap
   /// and its answer - the window a second tap arrives in.
   Completer<void>? checkoutGate;
+
+  /// The patient code the document read answers with.
+  ///
+  /// `null` by default, which is the honest default: a package bill's party is the
+  /// hospital's account row and a customer registered before Phase 7a has no code, so a
+  /// fixture that wants one asks for it.
+  String? patientCode;
+
+  /// The batch detail `saleDocument` answers with, by item id.
+  ///
+  /// An item with no entry answers as an undated pack with a number of its own, which is
+  /// what `buildSaleDocumentLine` defaults to.
+  final Map<String, SaleDocumentLine> documentLines =
+      <String, SaleDocumentLine>{};
+
+  @override
+  Future<SaleDocument?> saleDocument({required String saleId}) async {
+    final error = errorToThrow;
+    if (error != null) {
+      throw error;
+    }
+    for (final sale in sales) {
+      if (sale.id == saleId) {
+        return SaleDocument(
+          sale: sale,
+          patientCode: patientCode,
+          // Derived from the held lines, so a test that already has a bill gets a
+          // document for it without describing the same sale twice - and the batch
+          // detail stays overridable per item.
+          lines: <SaleDocumentLine>[
+            for (final item in items)
+              if (item.saleId == saleId)
+                documentLines[item.id] ?? buildSaleDocumentLine(item: item),
+          ],
+        );
+      }
+    }
+    // The real function answers `null` for a sale outside the caller's pharmacy, and
+    // the screen reads that as a bill that is not there rather than as a failure.
+    return null;
+  }
 
   @override
   Future<List<String>> recentlySoldProductIds({

@@ -63,6 +63,117 @@ class SalesQuery {
       SalesQuery(search: search, status: status, from: from, to: to);
 }
 
+/// One line of a sale document, as `sale_document()` returns it.
+///
+/// The batch detail is carried **beside** the stored `sale_items` row rather than
+/// merged into [SaleItem]: `batch_no`, `expiry_date` and `is_unknown_batch` are
+/// columns of `product_batches`, not of the line, and a `SaleItem` that grew three
+/// fields no table has would be a model of nothing.
+class SaleDocumentLine {
+  /// Creates a document line.
+  const SaleDocumentLine({
+    required this.item,
+    required this.batchNo,
+    required this.expiryDate,
+    required this.isUnknownBatch,
+  });
+
+  /// Decodes one element of `sale_document()`'s `lines` array.
+  factory SaleDocumentLine.fromJson(Map<String, dynamic> json) {
+    final item = json['item'];
+    return SaleDocumentLine(
+      item: SaleItem.fromJson((item as Map).cast<String, dynamic>()),
+      batchNo: json['batch_no'] as String? ?? '',
+      expiryDate: parseDateOrNull(json['expiry_date']),
+      isUnknownBatch: json['is_unknown_batch'] as bool? ?? false,
+    );
+  }
+
+  /// The stored sale line.
+  final SaleItem item;
+
+  /// The number of the pack it came out of.
+  final String batchNo;
+
+  /// When that pack expires, or `null` when nobody recorded it.
+  final DateTime? expiryDate;
+
+  /// Whether the batch number itself is unknown.
+  ///
+  /// `product_batches.batch_no` is `not null` (00004), so an opening-stock row whose
+  /// source had no number carries an empty string *and* this flag. The two together
+  /// are what "no batch number" means, and a receipt prints an em dash for it rather
+  /// than the blank.
+  final bool isUnknownBatch;
+
+  /// Whether there is a batch number worth printing.
+  bool get hasKnownBatch => !isUnknownBatch && batchNo.trim().isNotEmpty;
+
+  /// Whether the pack's expiry was recorded at all.
+  ///
+  /// The question to ask, rather than reading [expiryDate] as "not expired": 145 of
+  /// the owner's opening-stock batches carry no date, so this is the common case
+  /// here rather than a corner.
+  bool get hasKnownExpiry => expiryDate != null;
+}
+
+/// One sale as the receipt prints it: the document, its lines and the patient's code.
+///
+/// The shape `sale_document()` returns (migration `20260920000039`), read in **one**
+/// round trip so a receipt cannot be assembled from two reads that disagree. It
+/// carries no product names - the function returns the stored rows and nothing else -
+/// so a screen still resolves those separately.
+class SaleDocument {
+  /// Creates a document.
+  const SaleDocument({
+    required this.sale,
+    required this.patientCode,
+    required this.lines,
+  });
+
+  /// Decodes the object `sale_document()` returns.
+  factory SaleDocument.fromJson(Map<String, dynamic> json) {
+    final sale = json['sale'];
+    final lines = json['lines'];
+    return SaleDocument(
+      sale: Sale.fromJson((sale as Map).cast<String, dynamic>()),
+      patientCode: json['patient_code'] as String?,
+      lines: <SaleDocumentLine>[
+        if (lines is List)
+          for (final line in lines)
+            SaleDocumentLine.fromJson((line as Map).cast<String, dynamic>()),
+      ],
+    );
+  }
+
+  /// The sale's own stored row.
+  final Sale sale;
+
+  /// The patient's code, or `null` when the party has none.
+  ///
+  /// Joined from `customers` on `sales.customer_id`, so a counter or an IPD sale
+  /// answers the patient's own code, while a **package** sale answers none: its party
+  /// is the hospital's account row, and the patient on such a bill is the sale's own
+  /// name-and-mobile snapshot with no patient row of their own. A customer registered
+  /// before Phase 7a has none either, until `save_patient()` first touches them
+  /// (D-074, D-079). A receipt prints a dash rather than a fabricated code.
+  final String? patientCode;
+
+  /// Its lines, in insertion order.
+  final List<SaleDocumentLine> lines;
+}
+
+/// Parses a Postgres `date` (or `timestamp`) into a [DateTime], or `null`.
+///
+/// Tolerant on purpose: `expiry_date` is nullable and a batch whose source had no date
+/// is a real row, so an absent or unparseable value is an answer rather than an error.
+DateTime? parseDateOrNull(Object? value) {
+  if (value is! String || value.trim().isEmpty) {
+    return null;
+  }
+  return DateTime.tryParse(value);
+}
+
 /// Data access for `sales` and `sale_items`.
 class SalesRepository {
   /// Creates a repository backed by the shared Supabase client.
@@ -180,6 +291,44 @@ class SalesRepository {
         message: 'Unable to load the lines of that sale.',
         cause: error,
       );
+    }
+  }
+
+  /// One sale as the receipt prints it, or `null` when it is not in this pharmacy.
+  ///
+  /// One RPC, because the per-line batch and expiry are not on the sale: `sale_items`
+  /// records `batch_id` alone, and the client must not join `sale_items` to
+  /// `product_batches` itself (D-079) - a mis-join there would print one pack's number
+  /// and date against another pack's line, on a document a customer keeps.
+  ///
+  /// **No `pharmacyId` argument**, unlike every other read here: `sale_document()`
+  /// derives the tenant from `get_my_pharmacy_id()` and is `security invoker`, so the
+  /// caller's own RLS applies on top of that guard. A tenant filter sent from the
+  /// client would be ignored by the function, and one ignored parameter is worse than
+  /// none. An id outside the caller's pharmacy answers `null` rather than someone
+  /// else's document.
+  Future<SaleDocument?> saleDocument({required String saleId}) async {
+    try {
+      final response = await _client.rpc<dynamic>(
+        'sale_document',
+        params: <String, dynamic>{'p_sale_id': saleId},
+      );
+      // The function returns one jsonb value rather than a set, so a `null` body is
+      // how it answers "no such sale in this pharmacy" - not an empty list.
+      if (response is! Map) {
+        return null;
+      }
+      return SaleDocument.fromJson(response.cast<String, dynamic>());
+    } on sb.PostgrestException catch (error) {
+      throw mapPostgrestException(
+        error,
+        fallbackMessage: 'Unable to load that bill.',
+      );
+    } on Object catch (error) {
+      if (error is AppException) {
+        rethrow;
+      }
+      throw ServerException(message: 'Unable to load that bill.', cause: error);
     }
   }
 
