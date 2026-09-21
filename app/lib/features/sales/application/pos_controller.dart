@@ -256,6 +256,7 @@ class PosCart {
   /// identity is a different thing to print - the patient step sets all three
   /// together through [withPatient].
   PosCart withCustomer(String? value) => PosCart(
+    discountApprovalId: discountApprovalId,
     lines: lines,
     customerId: value,
     // Stated rather than left to the constructor's defaults: clearing them is what
@@ -281,6 +282,7 @@ class PosCart {
 
   /// A copy with the patient's printed name and mobile replaced, or cleared.
   PosCart withPatientDetails({String? name, String? mobile}) => PosCart(
+    discountApprovalId: discountApprovalId,
     lines: lines,
     customerId: customerId,
     patientName: name,
@@ -305,6 +307,7 @@ class PosCart {
   /// An IPD bill needs either this or the hospital's own number, and it takes the
   /// number from the episode it finds, so the reference travels with the id.
   PosCart withAdmission(Admission? value) => PosCart(
+    discountApprovalId: discountApprovalId,
     lines: lines,
     customerId: customerId,
     patientName: patientName,
@@ -326,6 +329,7 @@ class PosCart {
 
   /// A copy with the hospital's OPD/IPD case reference replaced, or cleared.
   PosCart withHospitalReference(String? value) => PosCart(
+    discountApprovalId: discountApprovalId,
     lines: lines,
     customerId: customerId,
     patientName: patientName,
@@ -351,6 +355,7 @@ class PosCart {
   /// bill prints; a name with no id is a prescriber the master has never heard of,
   /// which the server accepts and records (D-072).
   PosCart withDoctor({String? id, String? name}) => PosCart(
+    discountApprovalId: discountApprovalId,
     lines: lines,
     customerId: customerId,
     patientName: patientName,
@@ -375,6 +380,7 @@ class PosCart {
   /// One method rather than three setters, so a form that edits all three can
   /// report its whole state at once instead of racing three partial writes.
   PosCart withTransfer({String? from, String? to, String? reason}) => PosCart(
+    discountApprovalId: discountApprovalId,
     lines: lines,
     customerId: customerId,
     patientName: patientName,
@@ -396,6 +402,7 @@ class PosCart {
 
   /// A copy with the place of supply replaced, or cleared by passing `null`.
   PosCart withPlaceOfSupply(String? value) => PosCart(
+    discountApprovalId: discountApprovalId,
     lines: lines,
     customerId: customerId,
     patientName: patientName,
@@ -417,6 +424,7 @@ class PosCart {
 
   /// A copy with the payment mode replaced.
   PosCart withPaymentMode(PaymentMode value) => PosCart(
+    discountApprovalId: discountApprovalId,
     lines: lines,
     customerId: customerId,
     patientName: patientName,

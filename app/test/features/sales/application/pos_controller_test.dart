@@ -603,12 +603,18 @@ void main() {
           ..setPaymentMode(PaymentMode.upi)
           ..setTendered(105)
           ..setBillDiscount(46)
-          ..setDiscountApproval('approval-1')
           ..addLine(
             product: buildProduct('Dolo 650'),
             batch: buildBatch(),
             qty: 1,
           )
+          // Both are set AFTER the line, and the key after the approval, and the order
+          // matters: `addLine` clears both, and attaching an approval clears the key
+          // because it changes the payload. With either of them set earlier, the fields
+          // below would be null before every setter ran and the assertions would pass
+          // vacuously - which is what let the cart drop the approval on eight copies it
+          // should have carried.
+          ..setDiscountApproval('approval-1')
           ..setIdempotencyKey('key-1');
       }
 
@@ -694,7 +700,9 @@ void main() {
         ),
         'setBillDiscount': (
           apply: () => pos.setBillDiscount(9),
-          owns: <String>{'billDiscount', 'key'},
+          // The approval goes with it, and must: the owner approved a FIGURE, so a bill
+          // whose discount moved is a different question.
+          owns: <String>{'billDiscount', 'discountApprovalId', 'key'},
         ),
         'setDiscountApproval': (
           apply: () => pos.setDiscountApproval('approval-2'),
@@ -702,11 +710,15 @@ void main() {
         ),
         'setQty': (
           apply: () => pos.setQty('batch-1', 3),
-          owns: <String>{'lines', 'key'},
+          // A line change moves the bill's total, which is half of what the owner
+          // approved - so the approval goes too.
+          owns: <String>{'lines', 'discountApprovalId', 'key'},
         ),
         'setSaleType': (
           apply: () => pos.setSaleType(SaleType.ipdAdmission),
-          owns: <String>{'saleType', 'key'},
+          // The pricing basis moves with the type, so the approved figures no longer
+          // describe this bill.
+          owns: <String>{'saleType', 'discountApprovalId', 'key'},
         ),
         'setIdempotencyKey': (
           apply: () => pos.setIdempotencyKey('key-2'),

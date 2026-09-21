@@ -441,6 +441,10 @@ void main() {
       searchResults: <Product>[buildProduct('Dolo 650')],
       batches: <BatchStatus>[_batch()],
       customers: <Customer>[_patient()],
+      // The counter re-reads stock before it writes, so a bill of two needs the batch to
+      // hold them.
+      products: FakeProductsRepository(products: const <Product>[])
+        ..batchQuantities['batch-1'] = 10,
       initialLocation: Routes.pos,
     );
     await _addLine(tester);
@@ -477,12 +481,23 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Approved - you can bill this.'), findsOneWidget);
 
-    // The write half of this loop - bill it, and check the payload carried the approval -
-    // is NOT driven here yet: through this harness the sale never reaches the fake
-    // repository, and the cause is not yet known. The wire itself is asserted in
-    // `sale_checkout_test.dart` (the key travels and is left out), so what is missing is
-    // the SCREEN-level proof that an approved discount can be billed at all - recorded for
-    // the next step rather than papered over.
+    // The write: the counter re-reads stock, which is why the harness above gives the
+    // batch ten units - without it the write stops on "Only 0 units are left" and this
+    // half of the test silently proves nothing.
+    await _choosePatient(tester);
+    await _type(tester, 'Received', '300');
+    // Past the ask's SnackBar, which sits over the bottom of the screen - including the
+    // till. Letting it time out is what a cashier does by waiting.
+    await tester.pump(const Duration(seconds: 5));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(ElevatedButton, 'Take payment'));
+    await tester.pumpAndSettle();
+    await _confirm(tester);
+
+    // The approved discount is billed, and the sale carries which approval let it through.
+    expect(sales.checkouts.single.discountApprovalId, asked.id);
+    expect(sales.checkouts.single.billDiscount, 100);
+    expect(sales.sales.single.grandTotal, 300);
   });
 
   testWidgets('a bill whose approval is unanswered cannot be written', (
@@ -499,6 +514,10 @@ void main() {
       searchResults: <Product>[buildProduct('Dolo 650')],
       batches: <BatchStatus>[_batch()],
       customers: <Customer>[_patient()],
+      // The counter re-reads stock before it writes, so a bill of two needs the batch to
+      // hold them.
+      products: FakeProductsRepository(products: const <Product>[])
+        ..batchQuantities['batch-1'] = 10,
       initialLocation: Routes.pos,
     );
     await _addLine(tester);
