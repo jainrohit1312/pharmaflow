@@ -47,35 +47,38 @@ Output a 5-line understanding check:
 
 ## SCOPE — C3/4b: applying a deposit from the UI
 
-### 1. THE QUESTION TO SETTLE FIRST (do not write UI before answering it)
+### 1. ANSWERED: the reader exists (option (a), migrations 00040 and 00041)
 
 A deposit is a receipt whose allocations totalled less than its amount: `unallocated_deposits` on
 `patient_account()`. Applying it means `allocate_payment(p_payment_id, p_allocations)` — which
 **writes only allocation rows** and is limited by what is still owed on each target, under a row lock.
 
-So the sheet needs two lists, and **only one of them exists today**:
+So the sheet needs two lists. **Both are now readable:**
 
-- **The receipts with money still unapplied** — readable: `payments` (columns `id`, `party_type`,
-  `supplier_id`, `customer_id`, `amount`, `mode`, `reference_no`, `payment_date`, `notes`,
-  `created_at`) plus `payment_allocations` for those ids. Each receipt's remainder is
-  `amount − Σ allocations`.
-- **The party's open bills, with what is still owed on each** — **not readable today.** There is no
-  RPC that returns a party's open bills. `patient_account()` and `admission_account()` return five
-  aggregate figures and a balance, not rows, and there is no per-sale outstanding reader.
+- **The party's open bills** — `public.open_bills(p_party_type public.party_type, p_party_id uuid)
+  returns jsonb`, added by **migration `20260921000040`** and pushed to hosted:
+  `{"bills": [{"sale_id", "invoice_no", "sale_date", "sale_type", "grand_total", "returned_total",
+  "allocated_total", "outstanding"}], "total_outstanding"}` — **oldest first**, and **only bills with
+  `outstanding > 0`**. Its arithmetic is `allocate_payment()`'s own expressions restricted to one bill,
+  so **a bill's figure is the limit a refusal will name** (asserted: a slice one paisa larger is
+  refused, and exactly that figure settles it). **`p_party_type` accepts `customer` only** — a supplier
+  answers an empty list, because a supplier's open documents are purchases and this reader is about
+  sales; that is recorded, not a bug, and `allocate_payment` can no more apply a supplier's receipt to
+  a sale than this reader can list one.
+- **The receipts with money still unapplied** — still a plain read, and **the one piece not yet
+  written**: `payments` (`id`, `party_type`, `supplier_id`, `customer_id`, `amount`, `mode`,
+  `reference_no`, `payment_date`, `notes`, `created_at`) plus `payment_allocations` for those ids;
+  each receipt's remainder is `amount − Σ allocations`. The party's **total** is already the
+  server's (`patient_account().unallocated_deposits`) — do not recompute that, only the per-receipt
+  remainder the sheet has to show, and say so where you write it.
 
-Two ways, and **this is the owner's call** — put it to them before writing the sheet:
-
-- **(a) A tiny additive RPC** — one migration, `party_open_documents(p_party_type, p_party_id)` or a
-  `sale_account(p_sale_id)` returning `charges / returns / allocated / outstanding` per bill, in the
-  same shape as the two readers that already exist. The figures would then be the server's, exactly
-  like every other balance in this slice.
-- **(b) A client-side per-bill remainder** — read the party's `sales`, their `sale_returns` and their
-  `payment_allocations`, and subtract in Dart. This **breaks the rule the slice has held to** ("no
-  screen sums rows"), and it is the same arithmetic `allocate_payment` re-checks under a lock — but it
-  is the only option that needs no migration.
-
-Migrations are a "ask before" item in this project (see WORKFLOW RULES): do not write one unasked, and
-do not quietly compute a balance in Dart either. **Ask, with the file:line evidence for what exists.**
+**Read `supabase/migrations/20260921000041_phase7a_open_bills_order.sql`'s header** before touching
+this area: the first version of `open_bills` ordered by `sale_date, id`, and **the hosted run caught
+it** — `now()` is the transaction start time, so two bills raised in one transaction share a
+timestamp and the `id` tiebreak was a random uuid. It is now `sale_date, invoice_no, id`, and the test
+asserts that the two fixture bills genuinely share a date, so the invoice-number assertion cannot
+become vacuous. Two lessons worth carrying: **run the SQL tests against hosted, not only locally**,
+and prefer an order that comes from the document's own sequence over one that comes from a uuid.
 
 ### 2. The sheet itself
 

@@ -3,19 +3,22 @@
 **Phase 7a status, in four parts (2026-09-20)** — kept distinct on purpose, because "implemented",
 "verified", "in the app" and "deployed" are four different things here:
 
-- **Backend implemented: YES.** Seven additive migrations, `20260920000033`…`…000039`: the four sale
+- **Backend implemented: YES.** Nine additive migrations, `20260920000033`…`…000041`: the four sale
   types (D-067), patients and admissions (**D-074**), the tax-inclusive rate basis (**D-075**),
-  allocation integrity under a row lock, a server-gated patient-master edit (**D-076**), and the
-  receipt's one read `sale_document` (**D-079**).
-- **Locally verified: YES.** All **39** migrations apply clean to a fresh Postgres 17 + pgvector
-  container, and the committed SQL suite (16 files) passes with **zero failures** there; the pre-7a →
-  7a upgrade path passes 16/16.
-- **Hosted applied: YES (2026-09-20, and `00039` on 2026-09-21).** Migrations `00033`–`00038` are
+  allocation integrity under a row lock, a server-gated patient-master edit (**D-076**), the receipt's
+  one read `sale_document` (**D-079**), and one party's open bills `open_bills` (**D-082**), whose
+  order `00041` corrects.
+- **Locally verified: YES.** All **41** migrations apply clean to a fresh Postgres 17 + pgvector
+  container, and the committed SQL suite (**17 files**) passes with **zero failures** there. (The
+  pre-7a → 7a upgrade path last ran green at 16/16 on the `00039` state; it has **not** been re-run
+  since `00040`/`00041` were added, so fresh-apply is the signal behind those two.)
+- **Hosted applied: YES (2026-09-20, and `00039`–`00041` on 2026-09-21).** Migrations `00033`–`00038` are
   **pushed to the hosted project** (`supabase db push`, `supabase migration list` now shows 38 = 38);
-  **`00039` (`sale_document`) was pushed on 2026-09-21**, so the list reads **39 = 39**, and the new
-  function was verified live there — its own test **23 PASS / 0 FAIL**, `security invoker` with
-  `search_path` pinned and the grant to `authenticated` only, and `checkout_sale`'s body fingerprint
-  identical to the local database's, so "unchanged" is evidenced rather than asserted. Verified on the
+  **`00039` (`sale_document`) was pushed on 2026-09-21, and `00040`/`00041` (`open_bills`) the same
+  day**, so the list reads **41 = 41**, and each new function was verified live there — `sale_document`'s
+  test 23 PASS / 0 FAIL with `checkout_sale`'s body fingerprint identical to the local database's, and
+  `open_bills`' test 22 PASS / 0 FAIL after `00041` fixed an ordering defect **the hosted run itself
+  found** (see D-082). Verified on the
   hosted database: `sale_type` = `counter, ipd_admission, package, transfer`; `admissions` (16
   columns), `hospitals`, `doctors` and `payment_allocations` all present; `checkout_sale(p_payload
   jsonb)` unchanged in signature; `pharmacies.package_markup_percent` numeric, **nullable, no
@@ -58,10 +61,15 @@
   detail, a new `/admissions/:admissionId` screen reached from that patient's admissions list and from
   a bill, and what settled a bill inside the sale detail. All of them read the server's
   `patient_account` / `admission_account` aggregates, and **no screen sums rows**. Measured:
-  **`flutter test` → 954 passing, 0 failures**, at `be05756`. **Not built: applying a deposit from the
-  UI** — driving `allocate_payment` from a sheet, which needs a per-bill list of what is still owed
-  that no RPC returns today (see `context/chat3r-opening-prompt.md`). See `context/chat3q-summary.md`
-  too.
+  **`flutter test` → 954 passing, 0 failures**, at `be05756`. **C3/4b's SQL half is done too**
+  (`bfe6928`, `dbeb023`): **migration `00040` adds `open_bills`** — a party's open bills with each
+  bill's outstanding, computed with `allocate_payment()`'s own expressions so the figure a refusal
+  names is the figure the list showed — and **`00041` fixes its order** after the hosted run caught
+  `00040` passing locally by luck (`now()` ties every sale in one transaction, and the tiebreak was a
+  random uuid; it is the invoice number now). **Not built: the deposit-application sheet itself**,
+  plus the read of a party's individual receipts with money still unapplied (their *total* is already
+  `patient_account().unallocated_deposits`). See `context/chat3r-opening-prompt.md` §1, which is
+  answered, and §2. See `context/chat3q-summary.md` too.
 
 **Hosted data, observed while verifying (2026-09-20):** ~315 products and ~314 batches, stock value
 at cost ₹6,04,704.48, one sale in the table, no hospitals, doctors, admissions or allocations yet,
@@ -79,17 +87,18 @@ this slice did not re-run because it changed **no Dart file** (SQL, docs and one
 after C2, 0 failures** — the count is the gate's own output each time, not a running total.
 
 **Last Updated:** 2026-09-21
-**Current Phase:** **PHASE 7a — C1, C2, C3/1–3 and C3/4a are done; applying a deposit from the UI is
-what remains.** The durable layer is on hosted, **39 = 39** (above); the app's C1a, C1b, C2, C3/1 (the
-migration), C3/2 (the receipt), C3/3 (the payment) and C3/4a (the balance views and the one collection
-path) are committed locally as `925630c`, `c8fa615`, `fe8bd3a`, `1ef2234`, `d8b6335`, `ed4e177`,
-`d2c0990`, `6804d10`, `0f8ad77` and `be05756`, each with its own full gate run, **none pushed**.
-**Next: C3/4b** — the deposit-application sheet, whose first question is how to list a party's open
-bills, because no RPC returns them today. See `context/chat3q-summary.md` and
+**Current Phase:** **PHASE 7a — C1, C2, C3/1–3, C3/4a and C3/4b's SQL half are done; the
+deposit-application sheet itself is what remains.** The durable layer is on hosted, **41 = 41**
+(above); the app's C1a, C1b, C2, C3/1 (the receipt's read), C3/2 (the receipt), C3/3 (the payment),
+C3/4a (the balance views and the one collection path) and C3/4b's `open_bills` are committed locally
+as `925630c`, `c8fa615`, `fe8bd3a`, `1ef2234`, `d8b6335`, `ed4e177`, `d2c0990`, `6804d10`, `0f8ad77`,
+`be05756`, `bfe6928` and `dbeb023`, each with its own full gate run, **none pushed**. **Next: the
+sheet** — reading a party's open bills (`open_bills`) and their receipts with money still unapplied,
+and applying one with `allocate_payment`. See `context/chat3q-summary.md` and
 `context/chat3r-opening-prompt.md`.
 **Before that:** **PHASE 6.5a DONE** (2026-09-20 — the opening stock import, D-065/D-066; see
 below). **PHASE 6 IN PROGRESS** (chunk 3 of n, done; `context/chat3n-summary.md`). Phase 5 is complete. Phase 6 chunk 1 closed everything needing no account (W-1, A-1, I-1, N-5, T-3/T-4/T-5/T-6, the printer and bill-screen coverage, R-1, `docs/`); chunk 2 shipped the **Android APK** and settled **N-7**/**N-8**; **chunk 3 wrote the Vercel deploy** (`app/vercel.json` + `docs/DEPLOY_VERCEL.md` — configured and **not run**) and **exposed the re-read** the N-8 fix made safe (D-062), and then **implemented I-3** in a commit of its own (D-064) once it turned out the chunk-2 message had claimed it against no diff at all. Next: **import the repo into Vercel and run the first deploy** (the account exists; the project does not), then the credentials behind D-046/D-052/N-1, N-9's re-measurement, and the manual's screenshot pass (`context/chat3o-opening-prompt.md`)
-**Overall Status:** Phases 0-5 done and gated; Phase 6 chunks 1-3 done and gated; **Phase 7a's durable layer is on hosted (39 = 39) and its Flutter side's C1, C2, C3/1–3 and C3/4a are built and gated** — Phase 5 closed with its database substrate, **five deployed Edge Functions**, a bill that reads and saves end to end, a matcher that suggests and learns, a backfilled catalogue with a measured similarity floor, its alert sources, the notification function and inbox, and a chatbot a person can type into. Phase 6 added one migration since Phase 5 closed (the alias key, N-5), the Android sideload APK (D-061), a Vercel build config for the web app, the bill re-read with its three-read limit (D-062), and the purchase picker's three-way search (I-3, D-064) — **954 Flutter tests, 181 Deno tests**
+**Overall Status:** Phases 0-5 done and gated; Phase 6 chunks 1-3 done and gated; **Phase 7a's durable layer is on hosted (41 = 41) and its Flutter side's C1, C2, C3/1–3, C3/4a and C3/4b's reader are built and gated** — Phase 5 closed with its database substrate, **five deployed Edge Functions**, a bill that reads and saves end to end, a matcher that suggests and learns, a backfilled catalogue with a measured similarity floor, its alert sources, the notification function and inbox, and a chatbot a person can type into. Phase 6 added one migration since Phase 5 closed (the alias key, N-5), the Android sideload APK (D-061), a Vercel build config for the web app, the bill re-read with its three-read limit (D-062), and the purchase picker's three-way search (I-3, D-064) — **954 Flutter tests, 181 Deno tests**
 
 **Phase 6.5a — the opening stock import — is DONE (2026-09-20).** The one-time Marg
 migration the owner has been preparing: 314 rows, one product and one batch each, written by
@@ -120,7 +129,7 @@ imported**: the owner runs it from `/settings/import/opening-stock`.
 | 6.5a | Opening stock import (the Marg import) | COMPLETE | 2026-09-20 | 2026-09-20 |
 | 6.5b | The receiver app | not started | - | - |
 | 6.5c | The approval RBAC (with an `action_type` enum and a `payload` jsonb) | not started | - | - |
-| 7a | The four sale types + patient/admission identity (patient-first billing) | **durable layer ON HOSTED (39 = 39); Flutter C1, C2, C3/1–3 and C3/4a done locally** (`925630c`, `c8fa615`, `fe8bd3a`, `1ef2234`, `d8b6335`, `ed4e177`, `d2c0990`, `6804d10`, `0f8ad77`, `be05756`); **the deposit-application sheet (C3/4b) remains** | 2026-09-20 | - |
+| 7a | The four sale types + patient/admission identity (patient-first billing) | **durable layer ON HOSTED (41 = 41); Flutter C1, C2, C3/1–3, C3/4a and C3/4b's `open_bills` done locally** (`925630c`, `c8fa615`, `fe8bd3a`, `1ef2234`, `d8b6335`, `ed4e177`, `d2c0990`, `6804d10`, `0f8ad77`, `be05756`, `bfe6928`, `dbeb023`); **the deposit-application sheet remains** | 2026-09-20 | - |
 
 ---
 

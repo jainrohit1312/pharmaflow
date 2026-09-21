@@ -57,11 +57,26 @@ own row-total was **removed before it landed** for the same reason. `sale_detail
 the `balancesRepositoryProvider` override, without which the bill screen silently read a live
 repository in tests (one test caught it: two `ErrorView`s).
 
-**Not built, and it is the whole of what remains: the deposit-application sheet.** `applyDeposit` and
-`PaymentAllocationTarget` exist in `BalancesRepository` with the server's contract documented, and
-**no screen calls them and no test exercises them yet**. Its first question is §1 of the next opening
-prompt — how to list a party's **open bills**, which no RPC returns today — and the owner has to
-choose between a small additive RPC and a client-side per-bill remainder.
+**C3/4b's SQL half is done too (`bfe6928`, `dbeb023`).** The owner chose **option (a)** — a new
+additive RPC — so a party's open bills are the server's: **migration `00040` adds
+`open_bills(p_party_type, p_party_id)`**, returning the bills oldest-first with each one's
+`outstanding` (computed with `allocate_payment()`'s own expressions, so **the figure a refusal names
+is the figure the list showed** — asserted by having a slice one paisa larger refused, then exactly
+that figure settle it) plus `total_outstanding`, and its test is 22 assertions, 0 FAIL locally **and
+on hosted**. **`00041` fixes its order, and the way it was found is the most useful thing in this
+chunk:** `00040` ordered `sale_date, id`, the local suite passed, and **hosted failed three
+assertions** — because `sales.sale_date` defaults to `now()`, which PostgreSQL fixes at
+**transaction start**, so every sale in one transaction shares a timestamp and the `id` tiebreak was a
+random uuid. It is now `sale_date, invoice_no, id` (the document's own sequence), the test asserts
+that the two fixture bills genuinely share a date so the invoice-order assertion cannot become
+vacuous, and **D-082** records the defect and the lesson. `00040`/`00041` are **pushed to hosted**
+(41 = 41).
+
+**Remaining: the deposit-application sheet itself**, plus one read — a party's individual receipts
+with money still unapplied (their *total* is already `patient_account().unallocated_deposits`).
+`applyDeposit` and `PaymentAllocationTarget` exist in `BalancesRepository` with the server's contract
+documented and **still have no caller and no test**. §1 of the next opening prompt is answered; §2 is
+the sheet.
 
 ## Flutter Files Created (2)
 

@@ -3823,6 +3823,64 @@ list is a complete answer, partial allocation is supported, and it is idempotent
   server's contract documented; no screen calls it. See `context/chat3r-opening-prompt.md`, which
   states the one thing that has to be decided before it can be written.
 
+---
+
+## D-082 — Open Bills Come From the Server, and Their Order Comes From the Document's Own Sequence
+
+**Date:** 2026-09-21
+
+**Status:** Active (Phase 7a, C3/4b — built; migrations `20260921000040` / `…000041`, pushed to hosted)
+
+**Decision:** A screen that applies a deposit reads a party's open bills from
+**`public.open_bills(p_party_type, p_party_id) returns jsonb`** — the bills, each with the outstanding
+the server computes, and their total — rather than subtracting in Dart. The owner chose this on
+2026-09-21 over the alternative, and the reasoning is the slice's own rule:
+
+- **The arithmetic is `allocate_payment()`'s own expressions, restricted to one bill.** The same three
+  sums `patient_account()` aggregates and the write path re-computes **under its lock**:
+  `outstanding = grand_total − returned_total − allocated_total`, where a return counts only when it is
+  not cancelled. Reusing those expressions rather than re-deriving them is the point: **the limit a
+  refusal names is the limit this list showed.** The alternative was reading `sales`, `sale_returns` and
+  `payment_allocations` and subtracting in Dart — the same subtraction, implemented twice, which is how
+  a client comes to display a figure the server will then refuse.
+- **Only bills with `outstanding > 0`.** A settled bill is not something to apply money to and a fully
+  returned one is not a debt.
+- **Ordered `sale_date, invoice_no, id`** — and this is the second half of the decision, recorded
+  because the first version got it wrong. `00040` ordered `sale_date, id`, and the **hosted run caught
+  it**: `sales.sale_date` defaults to `now()`, which in PostgreSQL is the **transaction start time**, so
+  every sale written in one transaction shares a timestamp and the `id` tiebreak was a
+  `gen_random_uuid()` — arbitrary. The local suite had passed because the two fixture bills happened to
+  come back in the expected order. `invoice_no` is the document's own sequence
+  (`next_sale_invoice_no()` bumps a per-pharmacy counter), so two bills raised in the same instant now
+  come out in the order they were **numbered**, with `id` as a final total-order term.
+- **`p_party_type` accepts `customer` only.** It is kept because `collect_payment` /
+  `allocate_payment` take one and a caller assembling a collection has it in hand, but a supplier's
+  open documents are **purchases**, not sales. A `supplier` answers an empty list with a zero total
+  rather than a wrong one, which is also all `allocate_payment` can do with a supplier's receipt today
+  (its only targets are sales and admissions, and a supplier owns neither). Reading a supplier's open
+  purchases is a separate reader for whoever needs it.
+
+**Rationale:** D-025 and D-075 settle that a balance is the server's figure. Applying money is where
+that matters most, because the figure has to survive a lock: the sheet shows a number, the operator
+types against it, and the server refuses anything larger. Two implementations of one subtraction would
+make that refusal look like a bug in the screen.
+
+**Consequences:**
+
+- **A defect was found by running the tests against hosted, not locally** — the first time in this
+  project that the hosted run caught something the local suite could not (hosted's own Phase 5 failures
+  were data-dependent, not code). `00041` re-creates the function rather than editing `00040`, because
+  `00040` was already applied and `supabase db push` would never re-run it; the repo's precedent is
+  `00032` correcting `00031`. **The lesson is recorded: run a new SQL test against hosted, not only on
+  the throwaway harness.**
+- **The test asserts the property, and guards against its own vacuity**: one assertion checks that the
+  two fixture bills genuinely share a `sale_date` (so the order *cannot* come from the date) before the
+  next asserts the invoice numbers ascend.
+- **`open_bills` has no Dart caller yet.** The deposit-application sheet is C3/4b's remaining half, and
+  so is the read of a party's individual receipts with money still unapplied — their *total* is already
+  `patient_account().unallocated_deposits`.
+
+
 
 
 
