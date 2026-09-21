@@ -227,22 +227,23 @@ begin
   -- list that approving would silently do nothing about.
   --
   -- The example was `purchase` until Phase 6.5c chunk 3 built it, then `purchase_return` until
-  -- chunk 4 built that, which is why it is a `product_create` now: the assertion is about the RULE
-  -- - an unimplemented action type is refused, in words naming it - and the rule is unchanged, so
-  -- the example moves to one whose chunk has not landed yet rather than the assertion being
-  -- dropped. That `purchase` itself is now askable is asserted where it is implemented, in
-  -- phase6_5c_purchases.sql.
+  -- chunk 4 built that, then `product_create` until chunk 5 built that. It is an `expense_create`
+  -- now, and it stays one: D-085 RETIRED the three expense action types - the owner wants a
+  -- notification for an expense, not an approval - so no chunk will ever give them an executor and
+  -- this example no longer has to move. The assertion is the RULE - an action type this build
+  -- cannot execute is refused, in words naming it - and the rule is unchanged; that the
+  -- implemented types ARE askable is asserted where each is implemented.
   v_msg := null;
   begin
     v_request := public.request_approval(
-      p_action_type => 'product_create',
-      p_title => 'ZZTEST 43 new product'
+      p_action_type => 'expense_create',
+      p_title => 'ZZTEST 43 an expense the owner never asked to approve'
     );
   exception when feature_not_supported then
     v_msg := sqlerrm;
   end;
   v_log := array_append(v_log, case
-    when v_msg = 'the approval for product_create is not available yet' then 'PASS' else 'FAIL' end
+    when v_msg = 'the approval for expense_create is not available yet' then 'PASS' else 'FAIL' end
     || ': 3. an action type this build cannot execute is refused, named (got '
     || coalesce(v_msg, 'NULL') || ')');
 

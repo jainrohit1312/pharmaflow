@@ -5,6 +5,10 @@ library;
 
 import 'package:app/data/models/batch_status.dart';
 import 'package:app/data/models/product.dart';
+import 'package:app/data/models/product_alias.dart';
+import 'package:app/data/models/product_draft.dart';
+import 'package:app/data/models/product_stock.dart';
+import 'package:app/data/models/write_outcome.dart';
 import 'package:app/features/products/data/products_repository.dart';
 
 /// Builds a product with only the fields a test cares about.
@@ -46,10 +50,39 @@ Product buildProduct(
 /// cannot be constructed without an initialised backend.
 class FakeProductsRepository implements ProductsRepository {
   /// Creates a fake holding [products], already in display order.
-  FakeProductsRepository({required this.products});
+  ///
+  /// [isOwner] defaults to `true`, because most tests care about what a product
+  /// screen shows rather than about who may write it; a test that drives the
+  /// owner-approval rail passes `false`.
+  FakeProductsRepository({required this.products, this.isOwner = true});
 
   /// The rows the fake knows about.
   final List<Product> products;
+
+  /// Whether a write LANDS or is only asked for.
+  ///
+  /// `true` is the owner: `save_product()` performs the write and the envelope says
+  /// `recorded`. `false` is everybody else - a pharmacist and a cashier alike since D-085 -
+  /// whose write raises one approval request and moves nothing.
+  bool isOwner;
+
+  /// How many writes were STAGED rather than performed.
+  int stagedSubmissions = 0;
+
+  /// The drafts the form handed to the write path, in order.
+  final List<ProductDraft> writtenDrafts = <ProductDraft>[];
+
+  /// The product id the last write named.
+  String? lastProductId;
+
+  /// The active flag the last toggle asked for.
+  bool? lastActiveAsk;
+
+  /// The invoice text the last alias write carried.
+  String? lastAliasRawName;
+
+  /// The alias id the last removal named.
+  String? lastRemovedAliasId;
 
   /// Offsets the controller asked for, in order.
   final List<int> requestedOffsets = <int>[];
@@ -148,6 +181,171 @@ class FakeProductsRepository implements ProductsRepository {
     for (final id in productIds)
       if (batchesByProduct.containsKey(id)) id: batchesByProduct[id]!,
   };
+
+  /// The aliases [aliasesFor] answers with, by product id.
+  final Map<String, List<ProductAlias>> aliasesByProduct =
+      <String, List<ProductAlias>>{};
+
+  @override
+  Future<Product?> byId({
+    required String pharmacyId,
+    required String productId,
+  }) async => products.where((row) => row.id == productId).firstOrNull;
+
+  @override
+  Future<List<BatchStatus>> batchesFor({
+    required String pharmacyId,
+    required String productId,
+  }) async => batchesByProduct[productId] ?? const <BatchStatus>[];
+
+  @override
+  Future<List<ProductAlias>> aliasesFor({
+    required String pharmacyId,
+    required String productId,
+  }) async => aliasesByProduct[productId] ?? const <ProductAlias>[];
+
+  @override
+  Future<ProductStock?> stockFor({
+    required String pharmacyId,
+    required String productId,
+  }) async => null;
+
+  @override
+  Future<WriteOutcome<Product>> create({
+    required ProductDraft draft,
+    String? idempotencyKey,
+  }) async {
+    writtenDrafts.add(draft);
+    if (!isOwner) {
+      stagedSubmissions++;
+      return const WriteOutcome<Product>.staged('ask-product-create');
+    }
+
+    final saved = buildProduct(
+      draft.name,
+      scheduleType: draft.scheduleType,
+      isActive: draft.isActive,
+    );
+    // The row the write produced is the row the catalogue now holds, so a screen that
+    // navigates to it - which is exactly what the owner's write does - can read it back.
+    products.add(saved);
+    return WriteOutcome<Product>.recorded(saved);
+  }
+
+  @override
+  Future<WriteOutcome<Product>> update({
+    required String productId,
+    required ProductDraft draft,
+  }) async {
+    lastProductId = productId;
+    writtenDrafts.add(draft);
+    if (!isOwner) {
+      stagedSubmissions++;
+      return const WriteOutcome<Product>.staged('ask-product-edit');
+    }
+
+    final saved = buildProduct(
+      draft.name,
+      id: productId,
+      scheduleType: draft.scheduleType,
+      isActive: draft.isActive,
+    );
+    _replace(saved);
+    return WriteOutcome<Product>.recorded(saved);
+  }
+
+  @override
+  Future<WriteOutcome<Product>> setActive({
+    required String productId,
+    required bool isActive,
+  }) async {
+    lastProductId = productId;
+    lastActiveAsk = isActive;
+    if (!isOwner) {
+      stagedSubmissions++;
+      return const WriteOutcome<Product>.staged('ask-product-delete');
+    }
+
+    final existing = products.where((row) => row.id == productId).firstOrNull;
+
+    final saved = buildProduct(
+      existing?.name ?? 'unknown',
+      id: productId,
+      scheduleType: existing?.scheduleType ?? ScheduleType.otc,
+      isActive: isActive,
+      gstPercent: existing?.gstPercent,
+      category: existing?.category,
+    );
+    _replace(saved);
+    return WriteOutcome<Product>.recorded(saved);
+  }
+
+  /// Puts [saved] where the row it replaced was, so a re-read sees the write.
+  void _replace(Product saved) {
+    final index = products.indexWhere((row) => row.id == saved.id);
+    if (index >= 0) {
+      products[index] = saved;
+    } else {
+      products.add(saved);
+    }
+  }
+
+  @override
+  Future<WriteOutcome<ProductAlias>> addAlias({
+    required String productId,
+    required String rawName,
+    String? supplierId,
+  }) async {
+    lastProductId = productId;
+    lastAliasRawName = rawName;
+    if (!isOwner) {
+      stagedSubmissions++;
+      return const WriteOutcome<ProductAlias>.staged('ask-alias-add');
+    }
+
+    return WriteOutcome<ProductAlias>.recorded(
+      _alias(
+        id: 'alias-1',
+        productId: productId,
+        rawName: rawName,
+        supplierId: supplierId,
+      ),
+    );
+  }
+
+  @override
+  Future<WriteOutcome<ProductAlias>> removeAlias({
+    required String productId,
+    required String aliasId,
+  }) async {
+    lastProductId = productId;
+    lastRemovedAliasId = aliasId;
+    if (!isOwner) {
+      stagedSubmissions++;
+      return const WriteOutcome<ProductAlias>.staged('ask-alias-remove');
+    }
+
+    return WriteOutcome<ProductAlias>.recorded(
+      _alias(id: aliasId, productId: productId, rawName: 'removed'),
+    );
+  }
+
+  /// An alias row, with the fields a test does not care about filled in.
+  ProductAlias _alias({
+    required String id,
+    required String productId,
+    required String rawName,
+    String? supplierId,
+  }) => ProductAlias(
+    id: id,
+    pharmacyId: 'ph-1',
+    productId: productId,
+    rawName: rawName,
+    normalizedName: rawName.toLowerCase(),
+    supplierId: supplierId,
+    createdAt: DateTime(2026),
+    updatedAt: DateTime(2026),
+  );
 
   @override
   dynamic noSuchMethod(Invocation invocation) => throw UnimplementedError(

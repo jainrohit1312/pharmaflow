@@ -134,9 +134,21 @@ class ProductsDetailScreen extends ConsumerWidget {
     }
 
     try {
-      await ref
+      final outcome = await ref
           .read(productsFormControllerProvider.notifier)
           .setProductActive(productId: product.id, isActive: !deactivating);
+      if (!context.mounted) {
+        return;
+      }
+
+      // A staged write moved NOTHING: the product is still active (or still inactive), so the
+      // detail is deliberately not re-read - a refresh would show the unchanged row and read as a
+      // deactivation that had happened.
+      if (outcome.isStaged) {
+        showSentToOwnerNotice(context, message: sentForApprovalMessage);
+        return;
+      }
+
       ref.invalidate(productDetailControllerProvider(productId));
     } on Object catch (error, stackTrace) {
       appLogger.w(
@@ -557,9 +569,18 @@ class _AliasesTab extends ConsumerWidget {
     }
 
     try {
-      await ref
+      final outcome = await ref
           .read(productDetailControllerProvider(productId).notifier)
           .addAlias(rawName: rawName);
+      if (!context.mounted) {
+        return;
+      }
+
+      // The alias was only ASKED for: nothing was recorded, so the tab is not refreshed and the
+      // sentence says where the ask went.
+      if (outcome.isStaged) {
+        showSentToOwnerNotice(context, message: sentForApprovalMessage);
+      }
     } on Object catch (error, stackTrace) {
       appLogger.w(
         'Adding an alias failed',
@@ -594,9 +615,16 @@ class _AliasesTab extends ConsumerWidget {
     }
 
     try {
-      await ref
+      final outcome = await ref
           .read(productDetailControllerProvider(productId).notifier)
           .removeAlias(alias.id);
+      if (!context.mounted) {
+        return;
+      }
+
+      if (outcome.isStaged) {
+        showSentToOwnerNotice(context, message: sentForApprovalMessage);
+      }
     } on Object catch (error, stackTrace) {
       appLogger.w(
         'Removing an alias failed',

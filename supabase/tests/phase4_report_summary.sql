@@ -142,6 +142,14 @@ begin
   );
 
   -- A received purchase inside the window, and a draft one outside it.
+  --
+  -- They are FIXTURES, and since Phase 6.5c chunk 3 a session cannot write `purchases` at all:
+  -- `save_purchase()` is the only door. A fixture is written as postgres - the way
+  -- phase5_chat_aggregates.sql and phase7a_open_bills.sql already write theirs - because this file
+  -- is about `report_summary`'s arithmetic, and the DOOR is what phase6_5c_purchases.sql tests. The
+  -- role is put back immediately, so every assertion below still measures what it measured before.
+  execute 'reset role';
+
   insert into public.purchases (
     pharmacy_id, supplier_id, invoice_no, invoice_date, status,
     sub_total, tax_total, grand_total
@@ -162,17 +170,25 @@ begin
     900, 108, 1008
   );
 
+  execute 'set local role authenticated';
+
   insert into public.expenses (
     pharmacy_id, category, amount, expense_date, payment_mode
   ) values (
     v_pharmacy, 'ZZTEST rent', 250, current_date, 'bank'
   );
 
+  -- A sale return is a fixture for the same reason: since chunk 4 the client cannot write
+  -- `sale_returns`, and `record_sale_return()` is its only door.
+  execute 'reset role';
+
   insert into public.sale_returns (
     pharmacy_id, sale_id, customer_id, return_date, restock, grand_total
   ) values (
     v_pharmacy, v_sale2.id, v_customer, current_date, true, 112
   );
+
+  execute 'set local role authenticated';
 
   -- ------------------------------------------------------------- the summary
   v_summary := public.report_summary(v_from, v_to);

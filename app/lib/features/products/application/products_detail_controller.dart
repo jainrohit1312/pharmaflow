@@ -6,6 +6,7 @@ import 'package:app/data/models/batch_status.dart';
 import 'package:app/data/models/product.dart';
 import 'package:app/data/models/product_alias.dart';
 import 'package:app/data/models/product_stock.dart';
+import 'package:app/data/models/write_outcome.dart';
 import 'package:app/features/auth/application/pharmacy_scope.dart';
 import 'package:app/features/products/data/products_repository.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
@@ -93,25 +94,34 @@ class ProductDetailController extends _$ProductDetailController {
   }
 
   /// Records invoice text as an alias of this product, then refreshes.
-  Future<void> addAlias({required String rawName, String? supplierId}) async {
-    final pharmacyId = ref.read(requirePharmacyIdProvider);
-    await ref
+  ///
+  /// Only a landed write refreshes: a staged one recorded nothing, so re-reading the aliases would
+  /// show the same list and quietly imply the alias had been saved.
+  Future<WriteOutcome<ProductAlias>> addAlias({
+    required String rawName,
+    String? supplierId,
+  }) async {
+    final outcome = await ref
         .read(productsRepositoryProvider)
         .addAlias(
-          pharmacyId: pharmacyId,
           productId: productId,
           rawName: rawName,
           supplierId: supplierId,
         );
-    ref.invalidateSelf();
+    if (!outcome.isStaged) {
+      ref.invalidateSelf();
+    }
+    return outcome;
   }
 
-  /// Removes an alias, then refreshes.
-  Future<void> removeAlias(String aliasId) async {
-    final pharmacyId = ref.read(requirePharmacyIdProvider);
-    await ref
+  /// Removes an alias, then refreshes - unless the removal was only asked for.
+  Future<WriteOutcome<ProductAlias>> removeAlias(String aliasId) async {
+    final outcome = await ref
         .read(productsRepositoryProvider)
-        .removeAlias(pharmacyId: pharmacyId, aliasId: aliasId);
-    ref.invalidateSelf();
+        .removeAlias(productId: productId, aliasId: aliasId);
+    if (!outcome.isStaged) {
+      ref.invalidateSelf();
+    }
+    return outcome;
   }
 }

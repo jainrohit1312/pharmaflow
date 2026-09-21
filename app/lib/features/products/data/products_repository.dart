@@ -10,6 +10,8 @@ import 'package:app/data/models/product.dart';
 import 'package:app/data/models/product_alias.dart';
 import 'package:app/data/models/product_draft.dart';
 import 'package:app/data/models/product_stock.dart';
+import 'package:app/data/models/write_outcome.dart';
+import 'package:app/features/products/data/product_payload.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart' as sb;
 
@@ -258,92 +260,57 @@ class ProductsRepository {
     }
   }
 
-  /// Inserts a new product owned by [pharmacyId].
-  Future<Product> create({
-    required String pharmacyId,
+  /// Inserts a new product.
+  ///
+  /// The write goes through `save_product()`, the ONE door to the master (Phase 6.5c chunk 5):
+  /// `products` no longer takes a write from a session at all, because a gate that lived in the form
+  /// would have been a suggestion. The owner's write lands and answers with the row; anybody else's
+  /// raises one `product_create` approval request and writes nothing.
+  ///
+  /// No `pharmacyId`: the tenant is the server's own, from `get_my_pharmacy_id()` - the same reason
+  /// the returns and the GRN take none, and the one part of this payload a caller must not be able
+  /// to name.
+  Future<WriteOutcome<Product>> create({
     required ProductDraft draft,
-  }) async {
-    try {
-      final row = await _client
-          .from('products')
-          .insert(<String, dynamic>{
-            ...draft.toJson(),
-            'pharmacy_id': pharmacyId,
-          })
-          .select(projection)
-          .single();
-      return Product.fromJson(row);
-    } on sb.PostgrestException catch (error) {
-      throw mapPostgrestException(
-        error,
-        fallbackMessage: 'Unable to save that product.',
-        uniqueViolationMessage: 'A product with those details already exists.',
-      );
-    } on Object catch (error) {
-      throw ServerException(
-        message: 'Unable to save that product.',
-        cause: error,
-      );
-    }
-  }
+    String? idempotencyKey,
+  }) => _write(
+    payload: ProductPayload.create(
+      draft: draft,
+      idempotencyKey: idempotencyKey,
+    ),
+    fallbackMessage: 'Unable to save that product.',
+    uniqueViolationMessage: 'A product with those details already exists.',
+    decode: Product.fromJson,
+  );
 
   /// Overwrites the writable columns of an existing product.
-  Future<Product> update({
-    required String pharmacyId,
+  ///
+  /// The whole draft travels, so a later ask about this product is a revision of the earlier one
+  /// rather than a rival to it - the server refreshes an undecided ask instead of stacking a second.
+  Future<WriteOutcome<Product>> update({
     required String productId,
     required ProductDraft draft,
-  }) async {
-    try {
-      final row = await _client
-          .from('products')
-          .update(draft.toJson())
-          .eq('pharmacy_id', pharmacyId)
-          .eq('id', productId)
-          .select(projection)
-          .single();
-      return Product.fromJson(row);
-    } on sb.PostgrestException catch (error) {
-      throw mapPostgrestException(
-        error,
-        fallbackMessage: 'Unable to save that product.',
-        uniqueViolationMessage: 'A product with those details already exists.',
-      );
-    } on Object catch (error) {
-      throw ServerException(
-        message: 'Unable to save that product.',
-        cause: error,
-      );
-    }
-  }
+  }) => _write(
+    payload: ProductPayload.edit(productId: productId, draft: draft),
+    fallbackMessage: 'Unable to save that product.',
+    uniqueViolationMessage: 'A product with those details already exists.',
+    decode: Product.fromJson,
+  );
 
   /// Enables or disables a product.
   ///
   /// Deactivation is the supported "delete": a product that has ever been
   /// purchased or dispensed is referenced by history, so removing the row would
-  /// cascade into its batches and detach its purchase lines.
-  Future<void> setActive({
-    required String pharmacyId,
+  /// cascade into its batches and detach its purchase lines. For anybody but the owner it is a
+  /// `product_delete` REQUEST, and the row stays active until the owner answers.
+  Future<WriteOutcome<Product>> setActive({
     required String productId,
     required bool isActive,
-  }) async {
-    try {
-      await _client
-          .from('products')
-          .update(<String, dynamic>{'is_active': isActive})
-          .eq('pharmacy_id', pharmacyId)
-          .eq('id', productId);
-    } on sb.PostgrestException catch (error) {
-      throw mapPostgrestException(
-        error,
-        fallbackMessage: 'Unable to update that product.',
-      );
-    } on Object catch (error) {
-      throw ServerException(
-        message: 'Unable to update that product.',
-        cause: error,
-      );
-    }
-  }
+  }) => _write(
+    payload: ProductPayload.active(productId: productId, isActive: isActive),
+    fallbackMessage: 'Unable to update that product.',
+    decode: Product.fromJson,
+  );
 
   /// Batches of [productId] in FEFO order (first expiry, first out).
   Future<List<BatchStatus>> batchesFor({
@@ -593,89 +560,80 @@ class ProductsRepository {
 
   /// Records that supplier-invoice text [rawName] means [productId].
   ///
-  /// `normalized_name` comes from the database's own `normalize_product_name()`
-  /// rather than being reimplemented here, because that is the function the GIN
-  /// trigram index and (in Phase 5) the matching engine both run against.
+  /// `normalized_name` is NOT sent: the database's own `normalize_product_name()` computes it
+  /// inside `save_product()`, which is the function the GIN trigram index and the matching engine
+  /// both run against - so there is one normalization rather than a copy of it here.
   ///
-  /// Re-adding text that already exists re-points the alias at [productId]
-  /// instead of failing, which is what the unique key on
-  /// (pharmacy_id, supplier_id, normalized_name) is for - including when
-  /// [supplierId] is null, because that key is NULLS NOT DISTINCT (migration
-  /// 20260919000030, which closed N-5). Before that migration the second
-  /// pharmacy-wide add inserted a duplicate row and reported success, so the
-  /// doc here described a behaviour the index did not have.
-  Future<ProductAlias> addAlias({
-    required String pharmacyId,
+  /// Re-adding text that already exists re-points the alias at [productId] instead of failing,
+  /// which is what the unique key on (pharmacy_id, supplier_id, normalized_name) is for - including
+  /// when [supplierId] is null, because that key is NULLS NOT DISTINCT (migration 20260919000030,
+  /// which closed N-5).
+  ///
+  /// For anybody but the owner this is a `product_edit` REQUEST carrying the alias, and nothing is
+  /// recorded until the owner answers.
+  Future<WriteOutcome<ProductAlias>> addAlias({
     required String productId,
     required String rawName,
     String? supplierId,
-  }) async {
+  }) {
     final trimmed = rawName.trim();
     if (trimmed.isEmpty) {
       throw const ValidationException(message: 'Enter the invoice text first.');
     }
 
-    try {
-      final normalized = await _client.rpc<String>(
-        'normalize_product_name',
-        params: <String, dynamic>{'p_input': trimmed},
-      );
-      if (normalized.trim().isEmpty) {
-        throw const ValidationException(
-          message: 'That alias needs at least one letter or digit.',
-        );
-      }
+    return _write(
+      payload: ProductPayload.alias(
+        productId: productId,
+        rawName: trimmed,
+        supplierId: supplierId,
+      ),
+      fallbackMessage: 'Unable to save that alias.',
+      uniqueViolationMessage: 'That alias is already recorded.',
+      decode: ProductAlias.fromJson,
+    );
+  }
 
-      final row = await _client
-          .from('product_aliases')
-          .upsert(<String, dynamic>{
-            'pharmacy_id': pharmacyId,
-            'product_id': productId,
-            'raw_name': trimmed,
-            'normalized_name': normalized,
-            'supplier_id': supplierId,
-          }, onConflict: 'pharmacy_id,supplier_id,normalized_name')
-          .select()
-          .single();
-      return ProductAlias.fromJson(row);
+  /// Removes one alias from a product.
+  ///
+  /// The product is named as well as the alias, because the document the owner reads - and the
+  /// server's own shape check - wants both: an alias id alone would not say whose alias it is.
+  Future<WriteOutcome<ProductAlias>> removeAlias({
+    required String productId,
+    required String aliasId,
+  }) => _write(
+    payload: ProductPayload.removeAlias(productId: productId, aliasId: aliasId),
+    fallbackMessage: 'Unable to remove that alias.',
+    decode: ProductAlias.fromJson,
+  );
+
+  /// Runs one `save_product()` call and reads the envelope it answers with.
+  ///
+  /// One helper for five writes on purpose: they are one door on the server, so a second client-side
+  /// shape for them would be the second mechanism this module keeps refusing to grow.
+  Future<WriteOutcome<T>> _write<T>({
+    required Map<String, dynamic> payload,
+    required String fallbackMessage,
+    required T Function(Map<String, dynamic>) decode,
+    String? uniqueViolationMessage,
+  }) async {
+    try {
+      final answer = await _client.rpc<dynamic>(
+        'save_product',
+        params: <String, dynamic>{'p_payload': payload},
+      );
+
+      return WriteOutcome.fromJson(answer as Map<String, dynamic>, decode);
     } on sb.PostgrestException catch (error) {
       throw mapPostgrestException(
         error,
-        fallbackMessage: 'Unable to save that alias.',
-        uniqueViolationMessage: 'That alias is already recorded.',
+        fallbackMessage: fallbackMessage,
+        uniqueViolationMessage: uniqueViolationMessage,
       );
     } on Object catch (error) {
       if (error is AppException) {
         rethrow;
       }
-      throw ServerException(
-        message: 'Unable to save that alias.',
-        cause: error,
-      );
-    }
-  }
-
-  /// Removes an alias.
-  Future<void> removeAlias({
-    required String pharmacyId,
-    required String aliasId,
-  }) async {
-    try {
-      await _client
-          .from('product_aliases')
-          .delete()
-          .eq('pharmacy_id', pharmacyId)
-          .eq('id', aliasId);
-    } on sb.PostgrestException catch (error) {
-      throw mapPostgrestException(
-        error,
-        fallbackMessage: 'Unable to remove that alias.',
-      );
-    } on Object catch (error) {
-      throw ServerException(
-        message: 'Unable to remove that alias.',
-        cause: error,
-      );
+      throw ServerException(message: fallbackMessage, cause: error);
     }
   }
 }

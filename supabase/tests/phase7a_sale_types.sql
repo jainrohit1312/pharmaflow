@@ -67,9 +67,11 @@
 --   18. A patient master's identity columns are not directly writable by a client, and the
 --       columns the customers form owns still are - so no existing screen changes what it can
 --       do (N-17(a), migration 00038).
---   19. A patient master edit is gated server-side: the owner and a pharmacist may, a cashier
---       is refused whatever any screen shows, and a cashier cannot change the pharmacy's own
---       package markup either (the pharmacies policy is owner-only).
+--   19. A patient master edit is gated server-side: the owner writes it and is answered with the
+--       row, while a cashier AND a pharmacist are answered with an approval request that writes
+--       nothing (Phase 6.5c chunk 5; D-085 supersedes 00038's owner-or-pharmacist rule), and a
+--       cashier cannot change the pharmacy's own package markup either (the pharmacies policy is
+--       owner-only).
 --   20. Allocations cannot over-settle a document, a refused collection leaves no receipt
 --       behind, one patient's money cannot settle another patient's admission, and applying a
 --       deposit settles a bill WITHOUT writing a second receipt (migration 00037).
@@ -89,6 +91,7 @@ declare
   v_allowed         boolean;
   v_patient         public.customers;
   v_second          public.customers;
+  v_json            jsonb;
   v_legacy          uuid;
   v_patient_code    text;
   v_doctor          uuid;
@@ -630,11 +633,20 @@ begin
   v_log := array_append(v_log, v_outcome);
 
   -- A 100 return against the first admission bill.
+  --
+  -- Written as postgres, like this file's section-20 fixture: since Phase 6.5c chunk 4 a session
+  -- cannot write `sale_returns` at all (`record_sale_return()` is its only door, and that door is
+  -- what phase6_5c_returns.sql tests). The assertion below is about the LEDGER trigger a return
+  -- fires and the admission aggregate it moves, and the fixture is a fixture.
+  execute 'reset role';
+
   insert into public.sale_returns (
     pharmacy_id, sale_id, customer_id, sub_total, tax_total, grand_total
   ) values (
     v_pharmacy, v_sale.id, v_patient.id, 100, 0, 100
   ) returning id into v_return_id;
+
+  execute 'set local role authenticated';
 
   -- The owner's worked example, before the collection: 800 charges less 100 returned.
   select a.charges, a.returns_credits into v_amount, v_amount2
@@ -933,10 +945,19 @@ begin
   v_log := array_append(v_log, v_outcome);
 
   -- ============================ 17. a patient master edit is permission-controlled
-  -- N-17(a). The gate is on the server: the same call is refused for a cashier whatever any
-  -- screen happens to show, and it is refused by the RPC rather than by a column privilege
-  -- the RPC could be bypassed around.
-  v_second := public.update_patient(
+  -- N-17(a), re-expressed for Phase 6.5c chunk 5. The gate is still on the server and still
+  -- enforced by the RPC rather than by a column privilege anything could be routed around, but
+  -- what a gated caller gets changed: `update_patient()` now answers the same
+  -- {outcome, document, request_id} envelope every other gated write answers with, so the owner
+  -- writes and reads his row out of `document`, while everybody else's edit becomes a
+  -- `customer_edit` approval request that writes NOTHING.
+  --
+  -- The old assertion that "a pharmacist may edit a patient master" is now the assertion that he
+  -- may not: D-085 supersedes migration 00038's owner-or-pharmacist rule, and a pharmacist is
+  -- gated exactly like a cashier. That is a change of the RULE by the owner, not a weakened check -
+  -- the gate is asserted in both directions, and phase6_5c_master_data.sql asserts that approving
+  -- the resulting ask writes the master.
+  v_json := public.update_patient(
     p_patient_id => v_patient.id,
     p_name => 'ZZTEST 7a patient one',
     p_mobile => '9876543210',
@@ -945,27 +966,30 @@ begin
     p_notes => 'ZZTEST edited by the owner'
   );
   v_log := array_append(v_log, case
-    when v_second.age_years = 36 and v_second.notes = 'ZZTEST edited by the owner'
+    when v_json ->> 'outcome' = 'recorded'
+     and (v_json #>> '{document,age_years}')::int = 36
+     and v_json #>> '{document,notes}' = 'ZZTEST edited by the owner'
       then 'PASS' else 'FAIL' end
-    || ': 17. the owner may edit a patient master');
+    || ': 17. the owner may edit a patient master, and is answered with the row he wrote');
 
   v_log := array_append(v_log, case
-    when v_second.patient_code is not null then 'PASS' else 'FAIL' end
+    when nullif(v_json #>> '{document,patient_code}', '') is not null then 'PASS' else 'FAIL' end
     || ': 17. an edit leaves the patient code alone (identity belongs to the counter)');
 
   perform set_config('request.jwt.claim.sub', v_cashier::text, true);
 
-  v_outcome := 'FAIL: 17. a cashier edited a patient master';
-  begin
-    perform public.update_patient(
-      p_patient_id => v_patient.id,
-      p_name => 'ZZTEST 7a cashier rename',
-      p_mobile => '9876543210'
-    );
-  exception when insufficient_privilege then
-    v_outcome := 'PASS: 17. a cashier''s patient edit is refused server-side';
-  end;
-  v_log := array_append(v_log, v_outcome);
+  v_json := public.update_patient(
+    p_patient_id => v_patient.id,
+    p_name => 'ZZTEST 7a cashier rename',
+    p_mobile => '9876543210'
+  );
+  v_log := array_append(v_log, case
+    when v_json ->> 'outcome' = 'staged'
+     and (v_json ->> 'request_id') is not null
+     and v_json ->> 'document' is null
+     and (select c.name from public.customers c where c.id = v_patient.id) = 'ZZTEST 7a patient one'
+      then 'PASS' else 'FAIL' end
+    || ': 17. a cashier''s patient edit is a REQUEST that writes nothing (master unchanged)');
 
   -- The pharmacy's own settings are the owner's: a cashier may not set the package markup.
   update public.pharmacies p set package_markup_percent = 99 where p.id = v_pharmacy;
@@ -976,15 +1000,19 @@ begin
 
   perform set_config('request.jwt.claim.sub', v_pharmacist::text, true);
 
-  v_second := public.update_patient(
+  v_json := public.update_patient(
     p_patient_id => v_patient.id,
     p_name => 'ZZTEST 7a patient one',
     p_mobile => '9876543210',
     p_age_years => 37,
     p_sex => 'female'
   );
-  v_log := array_append(v_log, case when v_second.age_years = 37 then 'PASS' else 'FAIL' end
-    || ': 17. a pharmacist may edit a patient master');
+  v_log := array_append(v_log, case
+    when v_json ->> 'outcome' = 'staged'
+     and (select c.age_years from public.customers c where c.id = v_patient.id) = 36
+      then 'PASS' else 'FAIL' end
+    || ': 17. a PHARMACIST is gated like a cashier now (D-085 supersedes 00038), and the master '
+    || 'is not touched');
 
   perform set_config('request.jwt.claim.sub', v_user::text, true);
 

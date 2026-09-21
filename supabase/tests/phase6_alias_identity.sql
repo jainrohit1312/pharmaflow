@@ -16,13 +16,14 @@
 --       (pharmacy_id, supplier_id, normalized_name) in that order, and
 --       NULLS NOT DISTINCT - which is the whole of the change, and the one
 --       property that cannot be inferred from the app's behaviour.
---   2.  The write the app actually makes converges. `ProductsRepository.addAlias`
---       upserts at `on_conflict=pharmacy_id,supplier_id,normalized_name`; the
---       statement below is that statement (every column in the DO UPDATE, the way
---       PostgREST emits it), run as `authenticated` so RLS is live. Before this
---       migration the second NULL-supplier upsert inserted a *second row* - that
---       is the assertion that fails on the old index, and it is why the two
---       printed forms are asserted to normalize to one key first.
+--   2.  The write the app actually makes converges. `ProductsRepository.addAlias` used to upsert at
+--       `on_conflict=pharmacy_id,supplier_id,normalized_name` as `authenticated`; since Phase 6.5c
+--       chunk 5 that statement lives inside `public.save_product()` (an alias is a gated act, and
+--       `authenticated` has no INSERT here any more), and it upserts at the SAME conflict target.
+--       The calls below are that write, run as the OWNER - the role that records an alias directly.
+--       Before migration 00030 the second NULL-supplier upsert inserted a *second row* - that is
+--       the assertion that fails on the old index, and it is why the two printed forms are asserted
+--       to normalize to one key first.
 --   3.  The pharmacy-wide case re-points rather than duplicates: one row, and it
 --       points at the product chosen the second time.
 --   4.  The supplier-scoped case still behaves as it did (parity, not regression).
@@ -37,11 +38,13 @@
 --       by any of it beyond this test's own fixtures.
 --
 -- WHY IT IMPERSONATES
---   The index is DDL and needs no identity, but the *upsert path* is the thing
---   the app uses, and that runs under RLS as `authenticated`. The fixtures are
---   written as postgres (which owns the tables, is not subject to RLS, and is the
---   only way to create a second tenant inside a transaction), and the write
---   assertions run as the user, exactly as phase5_learn_product_aliases.sql does.
+--   The index is DDL and needs no identity, but the *write path* is the thing the app uses, and
+--   since Phase 6.5c chunk 5 that path is `save_product()` - which records the alias for the owner
+--   and raises an approval request for anybody else. So the session becomes the OWNER (the role
+--   that writes directly), and the reads that assert RLS stay scoped by the same claims. The
+--   fixtures are written as postgres (which owns the tables, is not subject to RLS, and is the only
+--   way to create a second tenant inside a transaction) - the same split
+--   phase5_learn_product_aliases.sql uses.
 
 do $$
 declare
@@ -62,6 +65,7 @@ declare
   v_after     int;
   v_pointed   uuid;
   v_raw       text;
+  v_out       jsonb;
   v_indexdef  text;
   v_indisuniq boolean;
   v_indnulls  boolean;
@@ -78,13 +82,17 @@ begin
     raise exception 'PHASE6 ALIAS TEST ABORTED: no pharmacy row exists to test against';
   end if;
 
+  -- The OWNER: an alias write is a gated act since Phase 6.5c chunk 5, and `save_product()`
+  -- records one directly for him while raising an approval request for every other role. This file
+  -- is about the KEY, so it uses the role that writes.
   select id into v_user
     from public.profiles
    where pharmacy_id = v_pharmacy
+     and role = 'owner'
    order by created_at
    limit 1;
   if v_user is null then
-    raise exception 'PHASE6 ALIAS TEST ABORTED: no profile linked to the test pharmacy';
+    raise exception 'PHASE6 ALIAS TEST ABORTED: no owner profile linked to the test pharmacy';
   end if;
 
   -- The two printed forms this test writes. They are *not* the same text - one
@@ -208,18 +216,18 @@ begin
       || public.normalize_product_name('dolo-650   tab') || ''')'
   );
 
-  -- The statement `addAlias` makes, with no supplier named. The first one inserts.
-  insert into public.product_aliases (
-    pharmacy_id, product_id, raw_name, normalized_name, supplier_id
-  )
-  values (v_pharmacy, v_product, 'DOLO-650 TAB', v_norm, null)
-  on conflict (pharmacy_id, supplier_id, normalized_name)
-  do update set
-    pharmacy_id = excluded.pharmacy_id,
-    product_id = excluded.product_id,
-    raw_name = excluded.raw_name,
-    normalized_name = excluded.normalized_name,
-    supplier_id = excluded.supplier_id;
+  -- The write `save_product()` makes for an alias, with no supplier named. The first one inserts.
+  v_out := public.save_product(jsonb_build_object(
+    'product_id', v_product,
+    'alias', jsonb_build_object('raw_name', 'DOLO-650 TAB')
+  ));
+
+  v_log := array_append(
+    v_log,
+    case when v_out ->> 'outcome' = 'recorded' then 'PASS' else 'FAIL' end
+      || ': 2. the owner records an alias directly through save_product() (got '
+      || coalesce(v_out ->> 'outcome', 'no outcome') || ')'
+  );
 
   select count(*) into v_n
     from public.product_aliases a
@@ -236,20 +244,10 @@ begin
   -- The same text, printed slightly differently, for a different product. On the
   -- old index this inserted a second row and reported success; it is the assertion
   -- this migration exists for.
-  insert into public.product_aliases (
-    pharmacy_id, product_id, raw_name, normalized_name, supplier_id
-  )
-  values (
-    v_pharmacy, v_product2, 'dolo-650   tab',
-    public.normalize_product_name('dolo-650   tab'), null
-  )
-  on conflict (pharmacy_id, supplier_id, normalized_name)
-  do update set
-    pharmacy_id = excluded.pharmacy_id,
-    product_id = excluded.product_id,
-    raw_name = excluded.raw_name,
-    normalized_name = excluded.normalized_name,
-    supplier_id = excluded.supplier_id;
+  v_out := public.save_product(jsonb_build_object(
+    'product_id', v_product2,
+    'alias', jsonb_build_object('raw_name', 'dolo-650   tab')
+  ));
 
   select count(*) into v_n
     from public.product_aliases a
@@ -285,29 +283,15 @@ begin
 
   -- --------------------------------------------- 4. the supplier-scoped upsert
   -- Parity: this converged before the change and must still converge.
-  insert into public.product_aliases (
-    pharmacy_id, product_id, raw_name, normalized_name, supplier_id
-  )
-  values (v_pharmacy, v_product, 'ZETAMAC 500 TAB', v_norm2, v_supplier)
-  on conflict (pharmacy_id, supplier_id, normalized_name)
-  do update set
-    pharmacy_id = excluded.pharmacy_id,
-    product_id = excluded.product_id,
-    raw_name = excluded.raw_name,
-    normalized_name = excluded.normalized_name,
-    supplier_id = excluded.supplier_id;
+  v_out := public.save_product(jsonb_build_object(
+    'product_id', v_product,
+    'alias', jsonb_build_object('raw_name', 'ZETAMAC 500 TAB', 'supplier_id', v_supplier)
+  ));
 
-  insert into public.product_aliases (
-    pharmacy_id, product_id, raw_name, normalized_name, supplier_id
-  )
-  values (v_pharmacy, v_product2, 'ZETAMAC 500 TAB', v_norm2, v_supplier)
-  on conflict (pharmacy_id, supplier_id, normalized_name)
-  do update set
-    pharmacy_id = excluded.pharmacy_id,
-    product_id = excluded.product_id,
-    raw_name = excluded.raw_name,
-    normalized_name = excluded.normalized_name,
-    supplier_id = excluded.supplier_id;
+  v_out := public.save_product(jsonb_build_object(
+    'product_id', v_product2,
+    'alias', jsonb_build_object('raw_name', 'ZETAMAC 500 TAB', 'supplier_id', v_supplier)
+  ));
 
   select count(*) into v_n
     from public.product_aliases a
@@ -337,10 +321,10 @@ begin
   -- One printed text, two scopes: the supplier-scoped row and the pharmacy-wide
   -- row coexist. This is the fact phase5_match_products.sql asserts, and the
   -- migration must not have taken it away.
-  insert into public.product_aliases (
-    pharmacy_id, product_id, raw_name, normalized_name, supplier_id
-  )
-  values (v_pharmacy, v_product, 'DOLO-650 TAB', v_norm, v_supplier);
+  v_out := public.save_product(jsonb_build_object(
+    'product_id', v_product,
+    'alias', jsonb_build_object('raw_name', 'DOLO-650 TAB', 'supplier_id', v_supplier)
+  ));
 
   select count(*) into v_n
     from public.product_aliases a
@@ -361,13 +345,10 @@ begin
     from public.product_aliases a
    where a.pharmacy_id = v_pharmacy and a.supplier_id is null;
 
-  insert into public.product_aliases (
-    pharmacy_id, product_id, raw_name, normalized_name, supplier_id
-  )
-  values (
-    v_pharmacy, v_product, 'AMOXICILLIN 500 CAP',
-    public.normalize_product_name('AMOXICILLIN 500 CAP'), null
-  );
+  v_out := public.save_product(jsonb_build_object(
+    'product_id', v_product,
+    'alias', jsonb_build_object('raw_name', 'AMOXICILLIN 500 CAP')
+  ));
 
   select count(*) into v_after
     from public.product_aliases a
@@ -381,10 +362,10 @@ begin
   );
 
   -- One text under two different suppliers is two rows.
-  insert into public.product_aliases (
-    pharmacy_id, product_id, raw_name, normalized_name, supplier_id
-  )
-  values (v_pharmacy, v_product, 'ZETAMAC 500 TAB', v_norm2, v_supplier2);
+  v_out := public.save_product(jsonb_build_object(
+    'product_id', v_product,
+    'alias', jsonb_build_object('raw_name', 'ZETAMAC 500 TAB', 'supplier_id', v_supplier2)
+  ));
 
   select count(*) into v_n
     from public.product_aliases a

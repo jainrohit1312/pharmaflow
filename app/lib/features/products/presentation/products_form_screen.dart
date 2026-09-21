@@ -16,6 +16,7 @@ import 'package:app/core/widgets/loading_view.dart';
 import 'package:app/core/widgets/section_card.dart';
 import 'package:app/data/models/product.dart';
 import 'package:app/data/models/product_draft.dart';
+import 'package:app/features/approvals/presentation/sent_to_owner.dart';
 import 'package:app/features/products/application/products_form_controller.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -186,7 +187,22 @@ class _FormScaffoldState extends ConsumerState<_FormScaffold> {
       if (!mounted) {
         return;
       }
-      context.go(Routes.productDetail(saved.id));
+
+      // A staged write wrote NOTHING - the product does not exist yet, or the edit has not
+      // happened - so there is no detail route to open. Navigating to the product anyway would
+      // show the pre-edit row and read as a save, which is exactly the claim this sentence exists
+      // to prevent.
+      if (saved.isStaged) {
+        showSentToOwnerNotice(context, message: sentForApprovalMessage);
+        context.go(
+          existing == null
+              ? Routes.products
+              : Routes.productDetail(existing.id),
+        );
+        return;
+      }
+
+      context.go(Routes.productDetail(saved.document!.id));
     } on Object catch (error, stackTrace) {
       // The controller has already put the failure in its state, which the
       // `ref.listen` below turns into a SnackBar. Logging here keeps it out of

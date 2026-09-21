@@ -27,7 +27,7 @@
 -- WHAT IT PROVES
 --   1.  The shape: the five protected tables take no INSERT/UPDATE/DELETE from `authenticated` any
 --       more, the three write RPCs are callable, the mechanism's internals are not, and the three
---       new action types have executors while the ones whose chunks have not landed do not.
+--       new action types have executors while the ones D-085 retired never will.
 --   2.  A staff return or adjustment is a REQUEST: nothing is written, no stock moves, no ledger row
 --       exists, and the owner has one ask carrying the whole document.
 --   3.  The same submit twice is one ask, not two - which is what keeps a double tap from becoming
@@ -195,8 +195,8 @@ begin
     || ': 1. and for stock_adjustment');
 
   v_log := array_append(v_log, case
-    when not public.approval_has_executor('product_create') then 'PASS' else 'FAIL' end
-    || ': 1. and still no for a chunk that has not landed (product_create)');
+    when not public.approval_has_executor('expense_create') then 'PASS' else 'FAIL' end
+    || ': 1. and never for an action type D-085 retired (expense_create)');
 
   select has_function_privilege('anon', p.oid, 'EXECUTE') into v_allowed
     from pg_proc p
