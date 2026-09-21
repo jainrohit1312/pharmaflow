@@ -4139,3 +4139,72 @@ screen can be bypassed by a session holding a token.
   their acts have to be BUILT before they can be gated: nothing writes `sales.status = 'cancelled'`,
   so what a cancel does to already-posted stock and money is still the question put to the owner.
 
+---
+
+## D-087 — A Cancel Is a Status Flip on a Bill Nothing Has Happened To, and a Sale Edit Is the Printed Identity
+
+**Date:** 2026-09-21
+
+**Status:** Active (Phase 6.5c chunk 5d — built; commit `d2c26e5`, migration `20260921000047`, pushed to
+hosted, which now reads 47 = 47)
+
+**Decision:** The owner answered the one question chunk 5 put to him, and it settles both sale acts.
+
+**1. The cancellation is the CHEAP of the two options.** In his words: *"this data is only for testing,
+i will again update data from my current software when this product is fully developed and bug free, so
+you have to take easy way out, and focus on completing your task"*. So `cancel_sale()` is a **status
+flip and nothing else** — no reversal machinery is built — and it is accepted **only for a bill nothing
+has happened to**, where "nothing" is three queries rather than a feeling:
+
+- **no sale return names it** — the goods already came back, so the bill is already corrected;
+- **no receipt has been applied to it SINCE it was raised** — a later `payment_allocations` row whose
+  payment is not the bill's own counter settlement;
+- **nothing is still owed on it** (`balance_due = 0`) — a receivable with nothing to attach it to.
+
+Each refusal is a sentence that names the **sale return** which can correct the bill, and the same
+check holds the ask and the owner's own write (`document_payload_problem()`), so no unanswerable
+question reaches his list.
+
+**2. `sale_edit` is the PRINTED identity only.** In his words: *"Yes, narrow only"*. The five fields —
+the patient name/mobile/address, the prescriber's name, the hospital's reference — are **snapshots taken
+at checkout**, so correcting one rewrites the paper and never the master, the money or the stock. The
+narrow scope is enforced by a **WHITELIST**: any other key in the payload is refused **by name**, in a
+sentence naming the sale return.
+
+**Rationale:** a posted bill has already moved stock and posted a ledger entry, so a cancel that only
+flipped the status leaves two internally-consistent views disagreeing — the shape D-075 and D-081 exist
+to prevent. The owner's answer accepts that trade for a bill with nothing against it, and this decision
+records it as a *chosen* trade rather than a hidden one: **the goods stay out of stock, and the money the
+bill moved is not reversed.** That sentence is in the owner's own ask (on the screen he decides from),
+in the operation's confirmation dialog, and in the enum's comment.
+
+**Consequences:**
+
+- **The refusal that guards a later receipt is unreachable through this application today**, and that is
+  stated rather than implied: `allocate_payment()` will not over-settle a settled bill (D-076), and a bill
+  with anything outstanding is already refused by the third. It is kept, and pinned by a test against a
+  directly-written fixture, because it describes a state a later migration could produce.
+- **The first draft of that refusal made the whole act a dead letter**, and the test caught it: a bill paid
+  at the counter **does** carry an allocation, because `ledger_auto_entry_sale()` (migration 00035) writes
+  the payment, its ledger credit and its allocation in the sale's own transaction, with the payment's
+  `reference_no` set to the bill's own invoice number. Counting that as "something happened" refused every
+  ordinary counter bill. The refusal now tests for a receipt applied **afterwards**, which is what the
+  sentence always claimed, so an ordinary paid-over-the-counter bill passes — the case the feature exists
+  for.
+- **A cancelled bill closes its own questions.** If the owner cancels a bill his staff had asked about, any
+  pending ask about it is closed as **refused** with a note, the way chunk 3 does for a cancelled purchase:
+  a decision that can never usefully be taken is a stuck row, not a question.
+- **`sales` and `sale_items` lose INSERT/UPDATE/DELETE to `authenticated`** in the same migration as the
+  request path — the last pair of tables that still took writes directly. Verified before revoking that
+  every writer is inside a SECURITY DEFINER function and no Dart file writes either table.
+- **Two schema rules the edit could break are checked in words rather than raised**: 00035's
+  `sales_patient_identity_before_7a` (a pharmacy bill carries the patient's name and number **together**,
+  or neither — which is why the sheet always sends both) and `sales_ipd_needs_reference` (an admission
+  bill keeps a reference).
+- **A correction that changes WHAT THE CUSTOMER OWES is still a sale return**, and that is not a gap: the
+  whitelist refuses a money column by name and says so. Editing a line (quantity, rate, batch) means
+  re-pricing a posted bill and re-cutting its stock, which is a return plus a re-bill.
+- **`phase4_report_summary.sql`'s cancelled-sale fixture is written as postgres now**, because a session
+  can no longer write `sales` at all. Its assertions are unchanged.
+
+

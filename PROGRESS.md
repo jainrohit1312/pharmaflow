@@ -1,11 +1,12 @@
 # PharmaFlow — Progress Tracker
 
-**Phase 6.5c status (2026-09-21) — chunks 1, 2a-c, 3, 4 and 5a-c are done; 5d and chunk 6 remain.**
-The approval RBAC the owner settled on 2026-09-21 ("only sale bill is allowed without approval") is now
+**Phase 6.5c status (2026-09-21) — chunks 1, 2a-c, 3, 4, 5a-c and 5d are done; chunk 6 remains.** The
+approval RBAC the owner settled on 2026-09-21 ("only sale bill is allowed without approval") is now
 real over the whole counter's neighbourhood: the mechanism, the owner's queue, the counter's ask
 flow, the **purchase document**, the **contra documents** (purchase returns, sale returns, stock
-adjustments), and the **master data** (the product master, the patient master and the expense
-notification).
+adjustments), the **master data** (the product master, the patient master and the expense
+notification), and the **two sale acts** (cancelling a posted bill, and correcting its printed
+identity).
 
 - **Chunk 1** (`6bea1b2`, migration `00043`, applied to hosted): `approval_requests`, the 16-action
   enum, `request_approval()` / `decide_approval()`, `sales.discount_above_limit_request_id`, and the
@@ -35,23 +36,34 @@ notification).
   deliberately **not** gated; the three expense action types are RETIRED in the enum's own comment;
   and the three product tables lose INSERT/UPDATE/DELETE to `authenticated` in the same migration —
   which **closes the `product_batches` hole D-083 recorded**. See **D-086**.
-- **Chunk 5d is the only part of chunk 5 left, and it waits on the owner's answer.** Both questions
-  that blocked chunk 5 are **answered (D-085, 2026-09-21)**: **expenses are NOT gated** — recording one
-  stays free and the owner is *notified* instead, which chunk 5a-c built — and **`sale_edit` /
-  `sale_cancel` ARE gated**, which in this app means building the act before its gate: nothing writes
-  `sales.status = 'cancelled'` today and there is no sale-edit screen, so what a cancel does to
-  already-posted stock and ledger is the question put back to him (with a recommendation).
+- **Chunk 5d** (`d2c26e5`, migration `00047`, pushed to hosted): **a posted bill can be cancelled or
+  corrected, and both ask first.** `cancel_sale()` is a status flip and nothing else, accepted only
+  for a bill **nothing has happened to** — no return against it, no receipt applied to it since it
+  was raised, nothing still owed — with each refusal naming the sale return that can correct it;
+  `save_sale_identity()` corrects the **printed** identity (patient name/mobile/address, prescriber,
+  hospital reference) and refuses any other key **by name** through a whitelist. `sales` and
+  `sale_items` lose INSERT/UPDATE/DELETE to `authenticated` — **the last pair of tables that still
+  took writes directly** — and a cancelled bill closes any question still standing about it. See
+  **D-087**.
+- **Chunk 5d is the last of chunk 5, and it closed the question chunk 5 put to him.** **`sale_edit` /
+  `sale_cancel` ARE gated** (D-085), and what a cancel does to already-posted stock and money was a
+  design question rather than a policy one: he answered *"take easy way out"* — the cheap and honest
+  option, with no reversal machinery — and confirmed the narrow edit. **Expenses are NOT gated**
+  (D-085) and chunk 5a-c built the notification instead.
 
-**Verified, and where.** Chunk 5 is green on every gate and pushed: **1049 Flutter tests, 181 Deno
-tests, all passing**; `dart format`, `custom_lint` and `flutter analyze` clean; the committed SQL
-suite is **15 files with a SUMMARY line, 0 FAIL** against a fresh 46-migration database; and the
-Phase 6.5c chunk-5 test plus every file it moved were re-run **against the hosted project** (110/0,
-91/0, 61/0, 30/0, 21/0, 75/0 and 14 assertions 0 FAIL) after the push, per D-082's lesson. The
-assertions that changed were re-expressed, never weakened: "an action type this build cannot execute
-is refused" moved its example from `purchase` (chunk 3) and then `purchase_return` (chunk 4) and then
-`product_create` (chunk 5) to **`expense_create`**, a type D-085 RETIRED, so the example stops moving;
-and **two files that had been ERRORING — not failing — since chunks 3 and 4** (`phase4_report_summary`,
-`phase7a_sale_types`) were repaired, proved pre-existing by a baseline arm at migration `00045`.
+**Verified, and where.** Chunks 5a-c and 5d are green on every gate and pushed: **1061 Flutter tests,
+181 Deno tests, all passing**; `dart format`, `custom_lint` and `flutter analyze` clean; the committed
+SQL suite is **16 files with a SUMMARY line, 0 FAIL** against a fresh 47-migration database; and every
+file chunk 5 moved was re-run **against the hosted project** (110/0, 60/0, 91/0, 61/0, 30/0, 21/0,
+75/0 and 14 assertions 0 FAIL) after each push, per D-082's lesson. The assertions that changed were
+re-expressed, never weakened: "an action type this build cannot execute is refused" moved its example
+from `purchase` (chunk 3) and then `purchase_return` (chunk 4) and then `product_create` (chunk 5) to
+**`expense_create`**, a type D-085 RETIRED, so the example stops moving — and when chunk 5d left no
+declared type without a chunk, the other half of that rule moved forward with it (the retired trio
+answer no, the sale acts answer yes). **Two files that had been ERRORING — not failing — since chunks
+3 and 4** (`phase4_report_summary`, `phase7a_sale_types`) were repaired, proved pre-existing by a
+baseline arm at migration `00045`; and `phase4_report_summary`'s own cancelled-sale fixture is now
+written as postgres, because chunk 5d revoked the last session write `sales` had.
 
 **Phase 7a status, in four parts (2026-09-20)** — kept distinct on purpose, because "implemented",
 "verified", "in the app" and "deployed" are four different things here:
@@ -140,25 +152,24 @@ this slice did not re-run because it changed **no Dart file** (SQL, docs and one
 after C2, 0 failures** — the count is the gate's own output each time, not a running total.
 
 **Last Updated:** 2026-09-21
-**Current Phase:** **PHASE 6.5c — chunks 1, 2a-c, 3, 4 and 5a-c are done and pushed; 5d (the sale acts)
-and chunk 6 (notify the owner) remain.** Chunk 3 (`a8b7711`, migration `00044`), chunk 4 (`3668b72`,
-migration `00045`) and chunk 5a-c (`fb1998c`, migration `00046`) are pushed to hosted (**46 = 46**),
-each re-verified there with its own SQL test. **Both owner questions are answered (D-085,
-2026-09-21): expenses are NOT gated — chunk 5a-c built the notification instead — and
-`sale_edit`/`sale_cancel` ARE gated**, which means building the act first, because nothing writes
-`sales.status = 'cancelled'` today and there is no sale-edit screen, so **what a cancel does to
-already-posted stock and ledger is chunk 5d's opening question** (with a recommendation, put to him
-with chunk 5a-c's report). Chunk 5 also folded in `update_patient`'s role gate and closed the
-`product_batches` write hole chunk 3 left open on purpose. **PHASE 7a's C3/4b deposit-application
-sheet is still unbuilt** (`open_bills` has no Dart caller yet — `context/chat3r-opening-prompt.md`
-§2). **PHASE 6.5a DONE** (2026-09-20 — the opening stock import, D-065/D-066). **PHASE 6 IN
-PROGRESS** (chunk 3 of n, done; `context/chat3n-summary.md`).
+**Current Phase:** **PHASE 6.5c — chunks 1, 2a-c, 3, 4, 5a-c and 5d are done and pushed; chunk 6
+(notify the owner, and whether a stale pending request expires) remains.** Chunk 3 (`a8b7711`,
+migration `00044`), chunk 4 (`3668b72`, migration `00045`), chunk 5a-c (`fb1998c`, migration `00046`)
+and chunk 5d (`d2c26e5`, migration `00047`) are pushed to hosted (**47 = 47**), each re-verified there
+with its own SQL test. **Every one of the owner's questions is answered** (D-085, D-087):
+**expenses are NOT gated** — he is notified instead, which chunk 5a-c built — **`sale_edit` and
+`sale_cancel` ARE gated**, and the acts behind them are built: a cancel is a **status flip on a bill
+nothing has happened to** (his own *"take easy way out"*, with no reversal machinery), and a sale edit
+is the **printed identity only**. **PHASE 7a's C3/4b deposit-application sheet is still unbuilt**
+(`open_bills` has no Dart caller yet — `context/chat3r-opening-prompt.md` §2). **PHASE 6.5a DONE**
+(2026-09-20 — the opening stock import, D-065/D-066). **PHASE 6 IN PROGRESS** (chunk 3 of n, done;
+`context/chat3n-summary.md`).
 **Overall Status:** Phases 0-5 done and gated; Phase 6 chunks 1-3 done and gated; **Phase 6.5c chunks
-1-5a-c done, pushed and verified on hosted**; Phase 7a's durable layer is on hosted (46 = 46) and its
+1-5d done, pushed and verified on hosted**; Phase 7a's durable layer is on hosted (47 = 47) and its
 Flutter side's C1, C2, C3/1–3, C3/4a and C3/4b's reader are built and gated — Phase 5 closed with its
 database substrate, **five deployed Edge Functions**, a bill that reads and saves end to end, a
 matcher that suggests and learns, a backfilled catalogue with a measured similarity floor, its alert
-sources, the notification function and inbox, and a chatbot a person can type into. **1049 Flutter
+sources, the notification function and inbox, and a chatbot a person can type into. **1061 Flutter
 tests, 181 Deno tests**
 
 **Phase 6.5a — the opening stock import — is DONE (2026-09-20).** The one-time Marg
@@ -189,7 +200,7 @@ imported**: the owner runs it from `/settings/import/opening-stock`.
 | 6 | Testing + Deployment + Documentation | IN PROGRESS (chunks 1-3 done) | 2026-09-19 | - |
 | 6.5a | Opening stock import (the Marg import) | COMPLETE | 2026-09-20 | 2026-09-20 |
 | 6.5b | The receiver app | not started | - | - |
-| 6.5c | The approval RBAC (with an `action_type` enum and a `payload` jsonb) | **IN PROGRESS — chunks 1, 2a-c, 3 (the purchase document), 4 (returns and stock adjustments) and 5a-c (the master data and the expense notification) done, pushed and verified on hosted (`6bea1b2`, `60e0a61`, `1af220f`, `6de6e85`, `a1f6ea3`, `a8b7711`, `3668b72`, `fb1998c`); 5d (building the sale edit/cancel acts) waits on the owner's answer to what a cancel does to posted stock and money — see D-086** | 2026-09-21 | - |
+| 6.5c | The approval RBAC (with an `action_type` enum and a `payload` jsonb) | **IN PROGRESS — chunks 1, 2a-c, 3 (the purchase document), 4 (returns and stock adjustments), 5a-c (the master data and the expense notification) and 5d (the two sale acts) done, pushed and verified on hosted (`6bea1b2`, `60e0a61`, `1af220f`, `6de6e85`, `a1f6ea3`, `a8b7711`, `3668b72`, `fb1998c`, `d2c26e5`); every declared action type is now implemented or retired, and chunk 6 (notify the owner, and stale pending requests) remains — see D-086 and D-087** | 2026-09-21 | - |
 | 7a | The four sale types + patient/admission identity (patient-first billing) | **durable layer ON HOSTED (41 = 41); Flutter C1, C2, C3/1–3, C3/4a and C3/4b's `open_bills` done locally** (`925630c`, `c8fa615`, `fe8bd3a`, `1ef2234`, `d8b6335`, `ed4e177`, `d2c0990`, `6804d10`, `0f8ad77`, `be05756`, `bfe6928`, `dbeb023`); **the deposit-application sheet remains** | 2026-09-20 | - |
 
 ---
@@ -364,7 +375,7 @@ design time.
   RPC envelopes are read into)
 - Auth flow: splash -> login -> register -> dashboard -> signout
 - Dashboard shell responsive (NavigationBar mobile / NavigationRail desktop)
-- **The owner's approval rail (Phase 6.5c chunks 1-5a-c)**: a gated write either lands or goes to
+- **The owner's approval rail (Phase 6.5c chunks 1-5d)**: a gated write either lands or goes to
   the owner, and every screen says which. The counter asks for an above-cap discount and waits
   (`PosCart.discountApprovalId` survives every copy that does not move the bill's figures); the
   owner answers at `/settings/approvals`; a purchase a member of staff saves is a **pending GRN**
@@ -372,12 +383,14 @@ design time.
   posted, a filter chip, and the sentence "Sent to the owner. Nothing posts until he approves
   it."); a purchase return, a sale return and a stock correction are **requests that write
   nothing** (`WriteOutcome`, so a screen opens the document that exists or says where the work
-  went); and a product create, edit, deletion, restore or alias act goes through the same one door
+  went); a product create, edit, deletion, restore or alias act goes through the same one door
   (`ProductPayload` + `save_product()`, with the action type derived server-side), so a form that
-  staged tells the operator and navigates nowhere. No screen guards a gate itself: the tables have
-  no write grant left for a session, and the refusals come from the server in its own words. An
-  expense stays free for every role and TELLS the owner instead, in-app, through a trigger on
-  `expenses`.
+  staged tells the operator and navigates nowhere; and a posted bill's two acts go through
+  `cancel_sale()` / `save_sale_identity()` from the bill screen itself (`SaleActPayload` +
+  `SaleActsController`), with `cancel_sale`'s confirmation saying what a cancel does NOT do. No
+  screen guards a gate itself: the tables have no write grant left for a session, and the refusals
+  come from the server in its own words. An expense stays free for every role and TELLS the owner
+  instead, in-app, through a trigger on `expenses`.
 - **The patient-first counter (Phase 7a's C1a/C1b)**: the sale money layer computes on the
   server's tax-inclusive basis with per-type rate helpers and the three pricing refusals
   (`sale_totals.dart`); the cart carries the patient identity, the four sale types, the
