@@ -39,7 +39,7 @@ types is still to come from the owner"*), he answered:
 | `stock_adjustment` | an inventory adjustment |
 | `product_create` / `product_edit` / `product_delete` | the product master (`products`, `product_batches`) |
 | `customer_edit` | a customer master edit (absorbing today's `update_patient` role gate) |
-| `expense_create` / `expense_edit` / `expense_delete` | expenses — **not named by the owner**; included because an expense is money out like a purchase. **Confirm or drop this row.** |
+| `expense_create` / `expense_edit` / `expense_delete` | expenses — **ANSWERED 2026-09-21: NOT gated (D-085). The owner wants a *notification* instead.** The three action types stay declared in the enum and will never get an executor. |
 | `discount_above_limit` | D-071's above-10% discount, which is the reason Phase 7a is blocked |
 
 Adding an action type later is `alter type … add value`, so this list is not a one-way door.
@@ -106,15 +106,23 @@ all, so each chunk lands as a pair (server + the screens that use it).
 - The truthfulness rule these briefs keep: a screen must not promise an approval workflow that is not
   there. Today's refusal sentences already say Phase 6.5c does not exist; they come out with chunk 1.
 
-## Decisions this brief still needs from the owner
+## Decisions this brief needed from the owner — ALL ANSWERED (2026-09-21)
 
-1. **Expenses** — the table above gates them; he never named them. Keep or drop?
-2. **`sale_edit` / `sale_cancel`** — he said "any modification and deletion"; editing a posted sale is
-   currently a sale *return* rather than an edit (`SaleStatus` has `cancelled`, and the app has no
-   sale-edit screen). Confirm that "modification of a sale" means a return + cancel, or that a real
-   edit flow is wanted.
-3. **A pharmacist** is gated like a cashier per his answer — said back plainly because it removes a
-   trust that exists today.
+1. **Expenses are NOT gated** (D-085). He answers with a different mechanism: *"expenses donot need
+   approvals only notification, email, whatsapp notification"*. So `expense_create` / `expense_edit` /
+   `expense_delete` stay declared in the enum and **never get an executor** — recording an expense
+   stays free for every role, and the owner is **told** instead (the `queue_notification` rail, chunk 6
+   or the chunk that builds it). The `expenses` table therefore keeps its write grants: there is no
+   request path to ship with a revoke.
+2. **`sale_edit` and `sale_cancel` ARE gated** (D-085): *"sale edit/ sale cancle need approval from
+   owner"*. Note what that means in this app: **neither act exists** — nothing anywhere writes
+   `sales.status = 'cancelled'`, and there is no sale-edit screen, so a correction today is a sale
+   *return* (already gated, chunk 4). Building the gate means building the act, and a posted bill has
+   already moved stock and posted a ledger entry — so what a cancel *does* to those is the open design
+   question recorded in `context/chat3t-opening-prompt.md`.
+3. **A pharmacist is gated like a cashier** per his answer — said back plainly because it removes a
+   trust that exists today, and it is why `update_patient`'s role gate is folded into `customer_edit`
+   rather than left beside it.
 
 ## Files when chunk 1 starts
 

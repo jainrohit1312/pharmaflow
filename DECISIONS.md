@@ -4002,3 +4002,64 @@ executor performs the same inserts the client made, so the triggers fire identic
 - **Two older assertions were RE-EXPRESSED, not deleted**: "an action type this build cannot execute is
   refused" moved its example from `purchase` (chunk 3) and then `purchase_return` (this chunk) to
   `product_create`, the action type whose chunk has not landed. The rule asserted is unchanged.
+
+---
+
+## D-085 — Expenses Are Not Gated (He Is Notified Instead), and a Sale Edit or Cancel Is
+
+**Date:** 2026-09-21
+
+**Status:** Active (policy settled; the work is Phase 6.5c chunk 5 and chunk 6)
+
+**Decision:** The last two open questions in the approval brief
+(`context/phase6_5c-approval-rbac.md`) are answered by the owner, and both answers are recorded here
+because both change what gets built and neither was in his original sentence ("I need owner approval on
+purchase, sale return, purchase return, any modification and deletion from staff").
+
+**1. Expenses are NOT gated.** In his words: *"expenses donot need approvals only notification, email,
+whatsapp notification"*. So:
+
+- Recording an expense stays **free for every role** — the way the sale bill and taking a payment are —
+  and `expenses` keeps its INSERT/UPDATE/DELETE grants. There is no request path, and therefore no
+  revoke to ship with one.
+- **The owner is told instead.** A notification is queued through the rail Phase 5 built
+  (`queue_notification()`, migration `00028`, which writes the in-app row and the delivery log in one
+  transaction) and delivered through `send-notification`, which is **already deployed** and answers
+  `skipped` naming the missing credential until the WhatsApp/SendGrid secrets exist (N-1).
+- **`expense_create`, `expense_edit` and `expense_delete` are RETIRED from the enum's promise.** They
+  stay declared — an enum value cannot be dropped — but `approval_has_executor()` will return false for
+  them for ever, and the comment on the type has to say so. Without that, the enum reads as "a chunk is
+  coming" for three action types that will never have one, which is exactly the reading
+  `approval_has_executor()` exists to prevent on the row level.
+
+**2. `sale_edit` and `sale_cancel` ARE gated.** In his words: *"sale edit/ sale cancle need approval
+from owner"*. This answers the half of the question that was about the policy; the other half is a fact
+about this app and is now the chunk's first design question:
+
+- **Neither act exists today.** Nothing anywhere writes `sales.status = 'cancelled'` — the value is
+  read (the filter, the return's refusal, every outstanding-bill expression excludes it) and never
+  written — and there is no sale-edit screen. A correction today is a **sale return**, which chunk 4
+  already gated.
+- So building the gate means building the act, and a posted bill has already moved stock and posted a
+  ledger entry. **What a cancel does to those two is the question the next session puts to him**, with
+  a recommendation, before it writes that part (see `context/chat3t-opening-prompt.md`). A cancel that
+  only flips the status would leave the stock out, the ledger row standing and every account and report
+  excluding the bill — two internally-consistent views disagreeing, which is the shape D-075 and D-081
+  exist to prevent.
+
+**Rationale:** the owner's own model is that the *counter* is free and the *paperwork* is not. An
+expense is paperwork he bears the cost of and wants to see, not an act he wants to authorise — a
+notification is the right control for it, and gating it would spend his attention on every tea bill.
+A sale edit or cancel is the opposite: it rewrites a document that has already posted, and the whole
+module exists because that is precisely what he does not want staff doing unasked.
+
+**Consequences:**
+
+- **Chunk 5 keeps three targets, not four**: the product master, `customer_edit` (absorbing
+  `update_patient`'s role gate — a pharmacist is gated like a cashier now), and the sale edit/cancel
+  question. The expense notification is a **chunk 6** item on the existing rail.
+- **No revoke for `expenses`**, and no `document_payload_problem()` entry either: there is no document
+  to ask about.
+- **The two sale action types stop being "declared for completeness".** They are the only ones whose
+  chunk has work behind it that does not exist yet, which makes them the last real piece of 6.5c
+  rather than a formality.

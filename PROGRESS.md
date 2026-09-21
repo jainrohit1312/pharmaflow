@@ -24,8 +24,12 @@ adjustments).
   the only door to five tables, each answering `{outcome, document, request_id}` so a screen can tell
   a document it can open from one the owner has not answered; approving runs the same inserts the
   client used to run, so no committed stock or ledger trigger is touched. See **D-084**.
-- **Chunk 5 (master data) and chunk 6 (notify the owner, and decide whether a stale request expires)
-  are what remain.** Chunk 5 has two questions for the owner recorded below.
+- **Chunk 5 (master data) is next, and chunk 6 is the notification polish.** Both of the questions
+  that blocked chunk 5 are **answered (D-085, 2026-09-21)**: **expenses are NOT gated** — recording one
+  stays free and the owner is *notified* instead (email/WhatsApp, on the Phase 5 rail) — and
+  **`sale_edit` / `sale_cancel` ARE gated**, which in this app means building the act before its gate:
+  nothing writes `sales.status = 'cancelled'` today and there is no sale-edit screen, so what a cancel
+  does to already-posted stock and ledger is chunk 5's first design question.
 
 **Verified, and where.** Both chunks are green on every gate and pushed: **1038 Flutter tests, 181
 Deno tests, all passing**; `dart format`, `custom_lint` and `flutter analyze` clean; the committed
@@ -123,15 +127,17 @@ after C2, 0 failures** — the count is the gate's own output each time, not a r
 
 **Last Updated:** 2026-09-21
 **Current Phase:** **PHASE 6.5c — chunks 1, 2a-c, 3 and 4 are done and pushed; chunks 5 (master
-data) and 6 (polish) remain.** Chunk 3 (`a8b7711`, migration `00044`) and chunk 4 (`3668b72`,
-migration `00045`) are pushed to hosted (**45 = 45**), each re-verified there with its own SQL test.
-**Chunk 5 is the next chunk**, and it needs two answers from the owner first: **are expenses gated**
-(the brief's table gates them; he never named them), and **what `sale_edit` / `sale_cancel` mean**
-(the app has no sale-edit screen — "modification of a sale" is currently a return plus a cancel). It
-also folds in today's `update_patient` role gate and closes the `product_batches` write hole chunk 3
-left open on purpose. **PHASE 7a's C3/4b deposit-application sheet is still unbuilt** (`open_bills`
-has no Dart caller yet — `context/chat3r-opening-prompt.md` §2). **PHASE 6.5a DONE** (2026-09-20 — the
-opening stock import, D-065/D-066). **PHASE 6 IN PROGRESS** (chunk 3 of n, done;
+data, plus the sale edit/cancel acts) and 6 (notify the owner) remain.** Chunk 3 (`a8b7711`,
+migration `00044`) and chunk 4 (`3668b72`, migration `00045`) are pushed to hosted (**45 = 45**), each
+re-verified there with its own SQL test. **Both owner questions are answered (D-085, 2026-09-21):
+expenses are NOT gated (he is notified instead, on the Phase 5 rail — a chunk 6 item), and
+`sale_edit`/`sale_cancel` ARE gated** — which means building the act first, because nothing writes
+`sales.status = 'cancelled'` today and there is no sale-edit screen, so **what a cancel does to
+already-posted stock and ledger is chunk 5's opening question** (with a recommendation). Chunk 5 also
+folds in `update_patient`'s role gate and closes the `product_batches` write hole chunk 3 left open on
+purpose. **PHASE 7a's C3/4b deposit-application sheet is still unbuilt** (`open_bills` has no Dart
+caller yet — `context/chat3r-opening-prompt.md` §2). **PHASE 6.5a DONE** (2026-09-20 — the opening
+stock import, D-065/D-066). **PHASE 6 IN PROGRESS** (chunk 3 of n, done;
 `context/chat3n-summary.md`).
 **Overall Status:** Phases 0-5 done and gated; Phase 6 chunks 1-3 done and gated; **Phase 6.5c chunks
 1-4 done, pushed and verified on hosted**; Phase 7a's durable layer is on hosted (45 = 45) and its
@@ -169,7 +175,7 @@ imported**: the owner runs it from `/settings/import/opening-stock`.
 | 6 | Testing + Deployment + Documentation | IN PROGRESS (chunks 1-3 done) | 2026-09-19 | - |
 | 6.5a | Opening stock import (the Marg import) | COMPLETE | 2026-09-20 | 2026-09-20 |
 | 6.5b | The receiver app | not started | - | - |
-| 6.5c | The approval RBAC (with an `action_type` enum and a `payload` jsonb) | **IN PROGRESS — chunks 1, 2a-c, 3 (the purchase document) and 4 (returns and stock adjustments) done, pushed and verified on hosted (`6bea1b2`, `60e0a61`, `1af220f`, `6de6e85`, `a1f6ea3`, `a8b7711`, `3668b72`); chunk 5 (master data) needs two answers from the owner and is next** | 2026-09-21 | - |
+| 6.5c | The approval RBAC (with an `action_type` enum and a `payload` jsonb) | **IN PROGRESS — chunks 1, 2a-c, 3 (the purchase document) and 4 (returns and stock adjustments) done, pushed and verified on hosted (`6bea1b2`, `60e0a61`, `1af220f`, `6de6e85`, `a1f6ea3`, `a8b7711`, `3668b72`); chunk 5 (master data, plus building the sale edit/cancel acts) is next — its two owner questions are answered, D-085** | 2026-09-21 | - |
 | 7a | The four sale types + patient/admission identity (patient-first billing) | **durable layer ON HOSTED (41 = 41); Flutter C1, C2, C3/1–3, C3/4a and C3/4b's `open_bills` done locally** (`925630c`, `c8fa615`, `fe8bd3a`, `1ef2234`, `d8b6335`, `ed4e177`, `d2c0990`, `6804d10`, `0f8ad77`, `be05756`, `bfe6928`, `dbeb023`); **the deposit-application sheet remains** | 2026-09-20 | - |
 
 ---
