@@ -208,7 +208,9 @@ class SaleDetailScreen extends ConsumerWidget {
           AppButton.outlined(
             label: 'Back to sales',
             icon: Icons.receipt_long_outlined,
-            onPressed: () => Navigator.of(context).maybePop(),
+            // `go`, not `maybePop`: this screen is reached by navigating **to a location**,
+            // so the stack has nothing to pop and the button did nothing at all.
+            onPressed: () => context.go(Routes.sales),
           ),
         ],
       ),

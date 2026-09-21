@@ -759,6 +759,33 @@ void main() {
       expect(qtyAt(tester).text, '1');
     });
 
+    testWidgets('Enter returns to the search, so the next product can be typed', (
+      tester,
+    ) async {
+      await pumpCounter(tester, FakeSalesRepository());
+      await _addLine(tester);
+      expect(
+        FocusManager.instance.primaryFocus?.debugLabel,
+        'pos cart quantity',
+      );
+
+      await _key(tester, LogicalKeyboardKey.enter);
+
+      // The counter's loop: search, Enter to ring the line up, type the quantity, Enter to
+      // search again - a whole bill without the mouse. This is the opposite of Tab, which
+      // moves on, and the two keys mean two different things on purpose.
+      expect(
+        FocusManager.instance.primaryFocus?.debugLabel,
+        'pos search',
+        reason: 'the caret goes back to the search, not forward',
+      );
+      expect(
+        find.text('Dolo 650'),
+        findsOneWidget,
+        reason: 'stepping back to the search is not a removal',
+      );
+    });
+
     testWidgets('Tab from the last quantity leaves the basket for payment', (
       tester,
     ) async {

@@ -21,8 +21,10 @@
 ///  * an **emptied** field is not a quantity, and it is certainly not a removal - the line
 ///    keeps its own number until the field answers, and the field puts that number back
 ///    when the caret leaves it;
-///  * **Enter** moves on like Tab, and **Escape** steps back out to the search field -
-///    Escape does not clear the quantity and does not touch the basket (D-078).
+///  * **Enter and Escape both step back out to the search field** - Enter is the counter's
+///    loop (search, add, type the quantity, search again, all from the keyboard), and Escape
+///    is that same step without the intent to keep going. Neither clears the quantity and
+///    neither touches the basket (D-078). **Tab** is the key that moves *on*.
 ///
 /// Only the line's own delete control and Delete remove a line.
 library;
@@ -48,7 +50,7 @@ class PosCartLine extends StatefulWidget {
     required this.onRemove,
     this.focusQty = false,
     this.onQtyFocused,
-    this.onEscape,
+    this.onReturnToSearch,
     super.key,
   });
 
@@ -87,8 +89,14 @@ class PosCartLine extends StatefulWidget {
   /// Called once the caret has reached this line's quantity field.
   final VoidCallback? onQtyFocused;
 
-  /// Called by Escape in the quantity field: step back out to the search field.
-  final VoidCallback? onEscape;
+  /// Called by Enter or Escape in the quantity field: step back out to the search field.
+  ///
+  /// **Enter is the counter's loop**, and it is why this is not "move on like Tab": the
+  /// operator searches, presses Enter to ring the line up, types the quantity, presses Enter
+  /// again to go back to searching, and repeats - a whole bill without the mouse. Tab still
+  /// moves *forward* (to the next quantity, then the payment card), so the two keys mean two
+  /// different things on purpose.
+  final VoidCallback? onReturnToSearch;
 
   @override
   State<PosCartLine> createState() => _PosCartLineState();
@@ -229,16 +237,18 @@ class _PosCartLineState extends State<PosCartLine> {
     widget.onQty(restored);
   }
 
-  /// Enter moves on like Tab; Escape steps back out to the search field.
-  ///
-  /// Escape deliberately does **not** clear the quantity and does not touch the basket: at
-  /// the counter it means "stop editing this number", not "undo the line" (D-078).
+  /// Enter and Escape step back out to the search; Enter also arrives as the field's own
+  /// submit action (see the `onSubmitted` below), so the two paths are belt and braces and
+  /// the callback is idempotent.
   KeyEventResult _onQtyKey(FocusNode node, KeyEvent event) {
     if (event is! KeyDownEvent) {
       return KeyEventResult.ignored;
     }
-    if (event.logicalKey == LogicalKeyboardKey.escape) {
-      widget.onEscape?.call();
+    final key = event.logicalKey;
+    if (key == LogicalKeyboardKey.escape ||
+        key == LogicalKeyboardKey.enter ||
+        key == LogicalKeyboardKey.numpadEnter) {
+      widget.onReturnToSearch?.call();
       return KeyEventResult.handled;
     }
     return KeyEventResult.ignored;
@@ -319,14 +329,16 @@ class _PosCartLineState extends State<PosCartLine> {
                           focusNode: _qtyFocus,
                           label: 'Qty',
                           keyboardType: TextInputType.number,
-                          textInputAction: TextInputAction.next,
+                          // The platform's key says what it does: this one returns to
+                          // searching rather than moving on.
+                          textInputAction: TextInputAction.search,
                           validator: Validators.positiveInt,
-                          // Enter moves on like Tab. Tapping selects what is already there,
-                          // so a touch reaches the behaviour a keyboard gets for free - and
-                          // post-frame, so the selection is set after the tap has placed the
-                          // caret rather than before.
-                          onSubmitted: (_) =>
-                              FocusScope.of(context).nextFocus(),
+                          // **Enter is the counter's loop** - search, Enter to ring the line
+                          // up, type the quantity, Enter to search again - so it steps out
+                          // rather than on. Tapping selects what is already there, so a touch
+                          // reaches the behaviour a keyboard gets for free, and post-frame so
+                          // the selection lands after the tap has placed the caret.
+                          onSubmitted: (_) => widget.onReturnToSearch?.call(),
                           onTap: () => WidgetsBinding.instance
                               .addPostFrameCallback((_) => _selectAll()),
                         ),

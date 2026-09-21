@@ -406,9 +406,11 @@ class _PosScreenState extends ConsumerState<PosScreen> {
                                 setState(() => _pendingQtyFocus = null);
                               }
                             },
-                            // Escape in a quantity steps back out to the search - it does
-                            // not clear the quantity and does not touch the basket.
-                            onEscape: _searchFocus.requestFocus,
+                            // Enter **and** Escape in a quantity step back out to the search,
+                            // which is what lets a whole bill be rung up from the keyboard -
+                            // one product after another, without the mouse. Neither clears the
+                            // quantity and neither touches the basket.
+                            onReturnToSearch: _searchFocus.requestFocus,
                             onQty: (qty) =>
                                 pos.setQty(cart.lines[index].batchId, qty),
                             onRate: (rate) =>
