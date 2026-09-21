@@ -3712,4 +3712,73 @@ two reads that could disagree. One function, one round trip, one tenant guard.
   this function** — the client never joins the two tables itself, so the batch a line came out of
   cannot be mis-joined in Dart.
 
+---
+
+## D-080 — The Counter Confirms the Bill Before It Writes, and Only Credit May Leave a Balance
+
+**Date:** 2026-09-21
+
+**Status:** Active (Phase 7a, C3 — built; commit `0f8ad77`)
+
+**Decision:** Taking payment at the counter is **two steps**, and the second one belongs to the
+server. The owner specified the shape on 2026-09-21 and this is it:
+
+- **Step 1, before anything is written.** The counter shows a **confirmation dialog** with the
+  client's own figures — computed on the server's basis (D-075) — and says in as many words
+  *"Server will verify totals."* Buttons are **Confirm & Submit** and **Cancel**. A dismissed dialog
+  is **not** a confirmation, and nothing has reached the till at this point.
+- **Step 2, after the server answers.** The write happens only once, and **nothing is shown as
+  written and nothing is printed before the server answers**. If the server's stored figures are not
+  the ones the dialog showed, the counter raises a **"Verified"** notice carrying the **server's**
+  figures (total, taxable value, tax) and naming the figure the counter had shown. The sale is
+  written either way, and the bill that opens is the server's, because `saleDetail` reads
+  `sale_document()` (C3/2). Client money is never recomputed after the write.
+- **A settling mode is complete or refused.** `cash`, `card`, `upi`, `bank` and `wallet` must collect
+  the bill in **full**; a shortfall is refused in the counter's own words: *"Cash requires the full
+  ₹105.00. ₹95.00 short."* Only `credit` may leave a balance, and then a party must owe it — in the
+  server's own sentence (00019): *"a sale with an unpaid balance needs a customer to owe it."*
+- **Every refusal happens before the dialog**, so an operator is never asked to confirm a sale the
+  counter is about to refuse.
+
+**Rationale:** the first step is what makes the second one honest. The client computes on the
+server's basis but the server recomputes from its own reading of the slabs and trusts none of the
+client's tax figures (D-075), so a flow that treated the counter's number as final could hand a
+customer a bill for an amount nobody had verified — and a flow that showed "success" before the
+write had answered could show it for a sale the server refused. The "Verified" notice is the visible
+half of that: a divergence is *named*, not smoothed over.
+
+**The payment rule is the counter's own, because the server has none.** `sales_payment_check()`
+(migration 00020) refuses a sale paid **more** than its total — the change handed back is not revenue
+— and nothing else; `checkout_sale()` turns any shortfall into a balance and a `credit` status
+**whatever the mode says**. So a "cash" sale carrying a "balance due" was storable before this. The
+counter refuses it instead of storing it. The brief supplied this wording after being told the
+server had no sentence to mirror; the credit branch keeps the server's own words.
+
+**Consequences:**
+
+- **A new window for a double tap, closed by a new guard.** The confirmation is up while no write has
+  started, so `isLoading` is still false and the live-state guard of D-078 cannot see a tap arriving
+  then. `_confirming` closes it: two taps with no frame between them raise **one** dialog. That is
+  asserted directly, and it is the same defect D-078 is about, reached through a new door.
+- **The write guard's own test narrowed, and this is recorded rather than papered over.** The old
+  non-vacuous test held the write open (`checkoutGate`) and tapped twice in one frame. The modal
+  barrier now covers that frame, so the `isLoading` guard can no longer be exercised from the screen
+  that way. The guard is unchanged and still reachable in the frame after the dialog pops; the
+  re-expressed test proves what it can — one confirmation, one sale.
+- **Two money helpers rather than two call sites doing the same arithmetic.** `SaleTotals.tenderedFor`
+  (the raw tender the change is worked from — the screen's private `_tenderedValue` is gone, and the
+  dialog shares the one definition) and `SaleTotals.matchesStored` (compared **exactly**: both sides
+  are whole paise, so a tolerance would swallow the one-paisa divergence that is the reason to ask).
+- **One provider answers the package markup** (`packageMarkupPercent`), read by both the counter's
+  pre-dialog check and the write itself. It was a private read inside `SaleCheckoutController`; the
+  screen needed the same answer to refuse a package sale *before* the dialog, and two reads of one
+  setting could disagree about one basket.
+- **The credit branch is defensive, and reachable only from a unit test.** Every sale type that bills
+  somebody already requires its party before this rule is asked, and a transfer takes no payment, so
+  the screen cannot reach it today. It stays for the same reason `SaleCheckoutController` keeps its
+  own copy of the server's sentence: a future type that allowed an unowed balance would otherwise
+  reach the till.
+- **Not in this chunk:** the balance views (C3/4) — patient, admission, and the sale's allocations.
+
+
 

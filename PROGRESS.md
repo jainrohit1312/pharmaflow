@@ -3,13 +3,19 @@
 **Phase 7a status, in four parts (2026-09-20)** — kept distinct on purpose, because "implemented",
 "verified", "in the app" and "deployed" are four different things here:
 
-- **Backend implemented: YES.** Six additive migrations, `20260920000033`…`…000038`: the four sale
+- **Backend implemented: YES.** Seven additive migrations, `20260920000033`…`…000039`: the four sale
   types (D-067), patients and admissions (**D-074**), the tax-inclusive rate basis (**D-075**),
-  allocation integrity under a row lock, and a server-gated patient-master edit (**D-076**).
-- **Locally verified: YES.** All 38 migrations apply clean to a fresh Postgres 17 + pgvector
-  container, and the committed SQL suite passes with **zero failures** there.
-- **Hosted applied: YES (2026-09-20).** Migrations `00033`–`00038` are **pushed to the hosted
-  project** (`supabase db push`, `supabase migration list` now shows 38 = 38). Verified on the
+  allocation integrity under a row lock, a server-gated patient-master edit (**D-076**), and the
+  receipt's one read `sale_document` (**D-079**).
+- **Locally verified: YES.** All **39** migrations apply clean to a fresh Postgres 17 + pgvector
+  container, and the committed SQL suite (16 files) passes with **zero failures** there; the pre-7a →
+  7a upgrade path passes 16/16.
+- **Hosted applied: YES (2026-09-20, and `00039` on 2026-09-21).** Migrations `00033`–`00038` are
+  **pushed to the hosted project** (`supabase db push`, `supabase migration list` now shows 38 = 38);
+  **`00039` (`sale_document`) was pushed on 2026-09-21**, so the list reads **39 = 39**, and the new
+  function was verified live there — its own test **23 PASS / 0 FAIL**, `security invoker` with
+  `search_path` pinned and the grant to `authenticated` only, and `checkout_sale`'s body fingerprint
+  identical to the local database's, so "unchanged" is evidenced rather than asserted. Verified on the
   hosted database: `sale_type` = `counter, ipd_admission, package, transfer`; `admissions` (16
   columns), `hospitals`, `doctors` and `payment_allocations` all present; `checkout_sale(p_payload
   jsonb)` unchanged in signature; `pharmacies.package_markup_percent` numeric, **nullable, no
@@ -33,12 +39,23 @@
   checks out, Tab walks the quantities line to line, Delete removes the line the caret is on,
   Escape closes the list without touching the basket, and a rapid second Enter or tap cannot
   double-add or double-submit. Measured: **`flutter test` → 926 passing, 0 failures** (from 758 at
-  the start of Phase 7a's Flutter work), at commit `ed4e177`. **Not built: C3** — the payment
-  confirmation, the 80mm receipt with batch and expiry (**blocked on migration 00039**,
-  `sale_document`, whose body the owner approved verbatim and which is **still unwritten**) and the
-  balance views. The receipt also needs the patient's **code**, which is not a column on `sales`:
-  the decision recorded for C3 is that `sale_document` returns it from a join on
-  `sales.customer_id`, so a receipt is one round trip (see `context/chat3q-opening-prompt.md`).
+  the start of Phase 7a's Flutter work), at commit `ed4e177`.
+- **C3 chunks 1–3 are done and gated; the balance views are what remains (2026-09-21, three
+  commits).** **C3/1** (`d2c0990`) is migration **`00039` `sale_document`** — the additive read the
+  receipt needed, written as the next migration in order and **pushed to hosted, where its own test
+  is 23/23** — plus `supabase/tests/phase7a_sale_document.sql` (23 assertions). **C3/2** (`6804d10`)
+  is the app's side of it: `SaleDocument`/`SaleDocumentLine` and `SalesRepository.saleDocument` (one
+  round trip, tenant derived server-side), `SaleDetailData` served by the document, and the **80mm
+  receipt printing each line's pack and expiry** — `Batch ZZTEST-39-A · exp 09/27`, an unrecorded
+  value printing **`—`** rather than `OPENING-…` or a date — with the patient's name and **code**
+  under the reference. **C3/3** (`0f8ad77`) is the **payment, in two steps**: the counter confirms the
+  bill on its own figures ("Server will verify totals."), the server's answer is the authority, and a
+  divergence raises a **"Verified"** notice naming both figures; a **settling mode must collect the
+  bill in full** and only credit may leave a balance (**D-080**). Measured: **`flutter test` → 943
+  passing, 0 failures**, at `0f8ad77`. **Not built: C3/4** — the balance views (patient, admission and
+  the sale's allocations), which are the server's `patient_account` / `admission_account` aggregates
+  and `collect_payment` / `allocate_payment`. See `context/chat3q-summary.md` and
+  `context/chat3r-opening-prompt.md`.
 
 **Hosted data, observed while verifying (2026-09-20):** ~315 products and ~314 batches, stock value
 at cost ₹6,04,704.48, one sale in the table, no hospitals, doctors, admissions or allocations yet,
@@ -55,18 +72,20 @@ this slice did not re-run because it changed **no Dart file** (SQL, docs and one
 **Re-measured 2026-09-20 after Phase 7a's Flutter slices: 758 at the start, 898 after C1b, 926
 after C2, 0 failures** — the count is the gate's own output each time, not a running total.
 
-**Last Updated:** 2026-09-20
-**Current Phase:** **PHASE 7a — C1 and C2 are done; C3 is what remains.** The durable layer is on
-hosted (above); the app's C1a (money basis, models, the nullable-expiry fix), C1b (the patient-first
-write and its screens) and **C2 (the POS UX refactor: the search dropdown, the compact cart lines,
-the strip and the keyboard contract)** are committed locally as `925630c`, `c8fa615`, `fe8bd3a`,
-`1ef2234`, `d8b6335` and `ed4e177`, each with its own full gate run, **none pushed**. **Next: C3** —
-the payment confirmation, the 80mm receipt (which needs migration `00039` `sale_document`, approved
-but **unwritten**, and its per-line batch/expiry come from it) and the balance views. See
-`context/chat3p-summary.md` and `context/chat3q-opening-prompt.md`.
+**Last Updated:** 2026-09-21
+**Current Phase:** **PHASE 7a — C1, C2 and C3's first three chunks are done; the balance views are
+what remains.** The durable layer is on hosted, **39 = 39** (above); the app's C1a (money basis,
+models, the nullable-expiry fix), C1b (the patient-first write and its screens), C2 (the POS UX
+refactor) and C3/1 (the migration), C3/2 (the receipt) and C3/3 (the payment) are committed locally
+as `925630c`, `c8fa615`, `fe8bd3a`, `1ef2234`, `d8b6335`, `ed4e177`, `d2c0990`, `6804d10` and
+`0f8ad77`, each with its own full gate run, **none pushed**. **Next: C3/4** — the balance views
+(patient, admission, and the sale's allocations), whose figures are the server's
+`patient_account` / `admission_account` aggregates and whose money moves through
+`collect_payment` / `allocate_payment`. See `context/chat3q-summary.md` and
+`context/chat3r-opening-prompt.md`.
 **Before that:** **PHASE 6.5a DONE** (2026-09-20 — the opening stock import, D-065/D-066; see
 below). **PHASE 6 IN PROGRESS** (chunk 3 of n, done; `context/chat3n-summary.md`). Phase 5 is complete. Phase 6 chunk 1 closed everything needing no account (W-1, A-1, I-1, N-5, T-3/T-4/T-5/T-6, the printer and bill-screen coverage, R-1, `docs/`); chunk 2 shipped the **Android APK** and settled **N-7**/**N-8**; **chunk 3 wrote the Vercel deploy** (`app/vercel.json` + `docs/DEPLOY_VERCEL.md` — configured and **not run**) and **exposed the re-read** the N-8 fix made safe (D-062), and then **implemented I-3** in a commit of its own (D-064) once it turned out the chunk-2 message had claimed it against no diff at all. Next: **import the repo into Vercel and run the first deploy** (the account exists; the project does not), then the credentials behind D-046/D-052/N-1, N-9's re-measurement, and the manual's screenshot pass (`context/chat3o-opening-prompt.md`)
-**Overall Status:** Phases 0-5 done and gated; Phase 6 chunks 1-3 done and gated; **Phase 7a's durable layer is on hosted and its Flutter side's C1 and C2 are built and gated** — Phase 5 closed with its database substrate, **five deployed Edge Functions**, a bill that reads and saves end to end, a matcher that suggests and learns, a backfilled catalogue with a measured similarity floor, its alert sources, the notification function and inbox, and a chatbot a person can type into. Phase 6 added one migration since Phase 5 closed (the alias key, N-5), the Android sideload APK (D-061), a Vercel build config for the web app, the bill re-read with its three-read limit (D-062), and the purchase picker's three-way search (I-3, D-064) — **926 Flutter tests, 181 Deno tests**
+**Overall Status:** Phases 0-5 done and gated; Phase 6 chunks 1-3 done and gated; **Phase 7a's durable layer is on hosted (39 = 39) and its Flutter side's C1, C2 and C3/1–3 are built and gated** — Phase 5 closed with its database substrate, **five deployed Edge Functions**, a bill that reads and saves end to end, a matcher that suggests and learns, a backfilled catalogue with a measured similarity floor, its alert sources, the notification function and inbox, and a chatbot a person can type into. Phase 6 added one migration since Phase 5 closed (the alias key, N-5), the Android sideload APK (D-061), a Vercel build config for the web app, the bill re-read with its three-read limit (D-062), and the purchase picker's three-way search (I-3, D-064) — **943 Flutter tests, 181 Deno tests**
 
 **Phase 6.5a — the opening stock import — is DONE (2026-09-20).** The one-time Marg
 migration the owner has been preparing: 314 rows, one product and one batch each, written by
@@ -97,7 +116,7 @@ imported**: the owner runs it from `/settings/import/opening-stock`.
 | 6.5a | Opening stock import (the Marg import) | COMPLETE | 2026-09-20 | 2026-09-20 |
 | 6.5b | The receiver app | not started | - | - |
 | 6.5c | The approval RBAC (with an `action_type` enum and a `payload` jsonb) | not started | - | - |
-| 7a | The four sale types + patient/admission identity (patient-first billing) | **durable layer ON HOSTED; Flutter C1 and C2 done locally** (`925630c`, `c8fa615`, `fe8bd3a`, `1ef2234`, `d8b6335`, `ed4e177`); C3 remains | 2026-09-20 | - |
+| 7a | The four sale types + patient/admission identity (patient-first billing) | **durable layer ON HOSTED (39 = 39); Flutter C1, C2 and C3/1–3 done locally** (`925630c`, `c8fa615`, `fe8bd3a`, `1ef2234`, `d8b6335`, `ed4e177`, `d2c0990`, `6804d10`, `0f8ad77`); **C3/4 — the balance views — remains** | 2026-09-20 | - |
 
 ---
 
@@ -290,7 +309,20 @@ design time.
   `SalesRepository.recentlySoldProductIds` and `ProductsRepository.categories`/`batchesForProducts`.
   The keyboard contract is asserted from the VM: Enter adds and never checks out, Escape closes
   without clearing, and a held-open write proves a second tap cannot double-submit.
-  **Not yet: C3's receipt and balances.**
+  **Not yet: C3/4's balance views.**
+- **The bill, its pack, and the payment (Phase 7a's C3 chunks 1-3)**: `SalesRepository.saleDocument`
+  reads `sale_document` (migration `00039`) into `SaleDocument` / `SaleDocumentLine`, so a bill's
+  lines carry the pack each came out of in **one round trip** - the client never joins `sale_items`
+  to `product_batches` itself; the **80mm receipt** (`services/invoice_printer.dart`) prints
+  `Batch ZZTEST-39-A · exp 09/27` on a row of its own per line plus the patient's name and **code**
+  under the reference, and prints **`—`** for a batch or expiry nobody recorded (145 of the owner's
+  opening-stock batches have no date, 138 no number - the ordinary case, not a corner); and taking
+  money is **two steps** (`presentation/widgets/payment_confirmation.dart` and `pos_screen.dart`):
+  the counter confirms the bill on its own figures with *"Server will verify totals."*, the server
+  writes it and its stored row is the authority, a divergence raises a **"Verified"** notice naming
+  both figures, and `paymentModeRefusal` refuses a settling mode short of the bill while only credit
+  may leave a balance (D-080). A second tap cannot raise a second confirmation (`_confirming`), and
+  a sale the counter is about to refuse is never offered for confirmation.
 - The Phase 5 surfaces: the bill reader (`features/purchase_ocr/`, which now also
   suggests catalogue products per line, records what the human confirmed, survives a
   re-read, and offers one on demand — three reads per bill, D-062), the verify-and-save
