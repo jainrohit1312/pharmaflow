@@ -21,6 +21,7 @@
 
 import { assertEquals, assertStringIncludes } from 'jsr:@std/assert';
 import { FunctionError } from '../_shared/errors.ts';
+import { effectiveParams } from './answer.ts';
 import { createHandler, paramsFor, type HandlerDeps } from './handler.ts';
 import {
   MAX_HISTORY_TURNS,
@@ -233,10 +234,13 @@ Deno.test('the window the model did not name is passed as null, so the report de
 
   await createHandler(deps)(post({ question: 'what sells best?' }));
 
+  // The window is null because the report's own rolling default is the right answer for an
+  // unnamed period. The cap is NOT null: it is resolved to a number, which is what lets the
+  // sentence describe the list it was given (see `effectiveParams`).
   assertEquals(calls.reports[0].args, {
     p_from: null,
     p_to: null,
-    p_limit: null,
+    p_limit: 20,
     p_metric: 'revenue',
   });
 });
@@ -340,7 +344,9 @@ Deno.test('the envelope carries the model, so a model change is visible', async 
   const body = await bodyOf(await createHandler(deps)(post({ question: 'what is low?' })));
 
   assertEquals(body.meta.model, 'gemini-3.6-flash');
-  assertEquals(body.params, { p_limit: null });
+  // The cap is named rather than null: it is a number the sentence's "at least" depends on,
+  // so the caller can see exactly what the list was asked for.
+  assertEquals(body.params, { p_limit: 50 });
 });
 
 Deno.test('a question that maps to no report is a success, so there is nowhere to invent one', async () => {
@@ -380,10 +386,51 @@ Deno.test('paramsFor hands each report only the arguments it takes', () => {
     p_days: 30,
     p_limit: null,
   });
-  // The horizons are always explicit, so the sentence describes the query that
-  // ran even when the model named none.
-  assertEquals(paramsFor('expiring_batches', params()).p_days, 90);
-  assertEquals(paramsFor('dead_stock', params()).p_days, 90);
+});
+
+Deno.test('the horizon and the cap are resolved before either the call or the sentence', () => {
+  // `paramsFor` is a pure mapper now: what it is handed IS what runs and what is described,
+  // so the defaults live in `effectiveParams` where both readers can see them. These two
+  // assertions used to sit on `paramsFor`, which is why they moved rather than went.
+  assertEquals(effectiveParams('expiring_batches', params()).days, 90);
+  assertEquals(effectiveParams('dead_stock', params()).days, 90);
+
+  const effective = effectiveParams('expiring_batches', params({ days: 5000, limit: 9 }));
+  assertEquals(effective.days, 90);
+  assertEquals(effective.limit, 9);
+  assertEquals(paramsFor('expiring_batches', effective), { p_days: 90, p_limit: 9 });
+});
+
+Deno.test('the horizon the sentence states is the horizon the report was called with', async () => {
+  // The regression this closes: the arguments used to be defaulted where they were built
+  // while the sentence was written from the *declared* parameters, so a 5000-day horizon was
+  // announced to the caller and quietly clamped to 3650 in the query.
+  // The arguments are captured here rather than through `stubDeps`' recorder: an override
+  // replaces the recording stub, which is the point of an override.
+  let calledWith: Record<string, unknown> | null = null;
+
+  const { deps } = stubDeps({
+    classify: () =>
+      Promise.resolve({
+        rpc: 'expiring_batches',
+        params: params({ days: 5000 }),
+      } satisfies Classification),
+    run: (_request, _rpc, args) => {
+      calledWith = args;
+      return Promise.resolve([
+        { product_name: 'Amoxy 500', batch_no: 'A-9', days_left: 6, qty: 12, expiry_date: '2026-09-28' },
+      ]);
+    },
+  });
+
+  const body = await bodyOf(
+    await createHandler(deps)(post({ question: 'what expires in the next few years?' })),
+  );
+
+  assertEquals(calledWith, { p_days: 90, p_limit: 50 });
+  assertStringIncludes(body.answer, 'within 90 days');
+  assertEquals(body.answer.includes('5000'), false);
+  assertEquals(body.params.p_days, 90);
 });
 
 Deno.test('a summary subject never reaches the report, because it is not one of its arguments', () => {

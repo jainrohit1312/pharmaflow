@@ -17,7 +17,12 @@
  */
 
 import { assertEquals, assertStringIncludes } from 'jsr:@std/assert';
-import { renderAnswer, UNSUPPORTED_ANSWER } from './answer.ts';
+import {
+  effectiveParams,
+  LIST_MAX_LIMIT,
+  renderAnswer,
+  UNSUPPORTED_ANSWER,
+} from './answer.ts';
 import type { ChatParams, ClassificationChoice, SummarySubject } from './schema.ts';
 
 /** The parameters a test does not care about. */
@@ -418,6 +423,95 @@ Deno.test('the dead-stock horizon comes from the report meta, not from the calle
   }, params({ days: 90 }));
 
   assertEquals(rendered.text, 'Nothing has gone quiet in the last 30 days.');
+});
+
+Deno.test('a list that came back full is described as a page, not as the whole answer', () => {
+  // The defect this closes: `rows.length` is what the report *returned*, and reporting it as
+  // the number that are low claimed a total the report never established. A page that came
+  // back exactly at its cap says "at least"; one that came back short is the whole answer.
+  const rows = [
+    { name: 'Dolo 650', shortfall: 40, total_qty: 10, min_stock_level: 50 },
+    { name: 'Crocin', shortfall: 5, total_qty: 5, min_stock_level: 10 },
+  ];
+
+  assertStringIncludes(
+    renderAnswer('low_stock_products', rows, params({ limit: 2 })).text,
+    'At least 2 products are below their reorder level.',
+  );
+  assertEquals(
+    renderAnswer('low_stock_products', rows, params({ limit: 3 })).text.startsWith(
+      '2 products are',
+    ),
+    true,
+    'a page that came back short is the whole answer',
+  );
+  assertEquals(
+    renderAnswer('low_stock_products', rows, params()).text.startsWith('2 products are'),
+    true,
+    'with no cap named there is nothing to compare against, so no total is claimed',
+  );
+});
+
+Deno.test('the two counting list sentences treat a full page the same way', () => {
+  const batches = [
+    { product_name: 'Amoxy 500', batch_no: 'A-9', days_left: 6, qty: 12, expiry_date: '2026-09-28' },
+  ];
+  const quiet = [
+    { name: 'Old Syrup', total_qty: 24, stock_value_at_cost: 4800, last_sold_on: null },
+  ];
+
+  assertStringIncludes(
+    renderAnswer('expiring_batches', batches, params({ days: 30, limit: 1 })).text,
+    'At least 1 batch expires within 30 days.',
+  );
+  assertStringIncludes(
+    renderAnswer('dead_stock', { meta: { quiet_days: 90 }, rows: quiet }, params({ limit: 1 })).text,
+    'At least 1 product has stock that has not sold in 90 days.',
+  );
+  // And the sentence that counts nothing is unchanged by a full page: "the top seller is
+  // Dolo 650" is as true of a page as of the whole list.
+  assertStringIncludes(
+    renderAnswer('top_products', {
+      meta: { window_from: '2026-08-21', window_to: '2026-09-19', metric_used: 'units' },
+      rows: [
+        { rank: 1, name: 'Dolo 650', units_sold: 120, revenue: 6000 },
+        { rank: 2, name: 'Crocin', units_sold: 80, revenue: 1600 },
+      ],
+    }, params({ limit: 2 })).text,
+    'Next is Crocin with 80 units.',
+  );
+});
+
+Deno.test('a horizon the reports cannot use becomes the default, so the sentence is true', () => {
+  // 5000 days is outside both expiry reports' range (1..3650). Forwarded, the report would
+  // clamp it to 3650 while the sentence said 5000 - the defect `effectiveParams` removes by
+  // replacing a value the report could not have used rather than passing it on.
+  assertEquals(effectiveParams('expiring_batches', params({ days: 5000 })).days, 90);
+  assertEquals(effectiveParams('expiring_batches', params({ days: 0 })).days, 90);
+  assertEquals(effectiveParams('expiring_batches', params({ days: -3 })).days, 90);
+  assertEquals(effectiveParams('expiring_batches', params({ days: 30 })).days, 30);
+  assertEquals(effectiveParams('expiring_batches', params({ days: 3650 })).days, 3650);
+  assertEquals(effectiveParams('dead_stock', params({ days: 5000 })).days, 90);
+  assertEquals(effectiveParams('dead_stock', params({ days: 30 })).days, 30);
+});
+
+Deno.test('a cap the reports cannot use becomes the default, and one they can is kept', () => {
+  assertEquals(effectiveParams('low_stock_products', params()).limit, 50);
+  assertEquals(effectiveParams('low_stock_products', params({ limit: 5000 })).limit, 50);
+  assertEquals(effectiveParams('low_stock_products', params({ limit: 0 })).limit, 50);
+  assertEquals(effectiveParams('low_stock_products', params({ limit: 5 })).limit, 5);
+  assertEquals(effectiveParams('expiring_batches', params()).limit, 50);
+  assertEquals(effectiveParams('dead_stock', params()).limit, 50);
+  assertEquals(effectiveParams('top_products', params()).limit, 20);
+  // The largest cap this function will ever ask for is inside every list report's own
+  // maximum, which is what makes "the page came back full, so say at least" sound.
+  assertEquals(effectiveParams('low_stock_products', params({ limit: LIST_MAX_LIMIT })).limit, LIST_MAX_LIMIT);
+  assertEquals(effectiveParams('low_stock_products', params({ limit: LIST_MAX_LIMIT + 1 })).limit, 50);
+});
+
+Deno.test('a summary is left exactly as the model declared it', () => {
+  const declared = params({ fromDate: '2026-09-01', toDate: '2026-09-19', subject: 'sales' });
+  assertEquals(effectiveParams('report_summary', declared), declared);
 });
 
 Deno.test('an unreadable array is reported rather than rendered as empty', () => {

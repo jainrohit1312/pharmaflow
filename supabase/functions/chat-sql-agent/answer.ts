@@ -51,6 +51,7 @@ import {
   type ChatParams,
   type ClassificationChoice,
   type SummarySubject,
+  type SupportedRpc,
 } from './schema.ts';
 
 /** A rendered answer, and whether the envelope was readable. */
@@ -72,6 +73,108 @@ export const EXPIRING_DEFAULT_DAYS = 90;
 /** The horizon `dead_stock` uses when none is given. Mirrors migration 00029. */
 export const DEAD_STOCK_DEFAULT_DAYS = 90;
 
+/**
+ * The horizon range both expiry reports accept - their own, from migrations 00027 and
+ * 00029 (`least(greatest(coalesce(p_days, 90), 1), 3650)`).
+ *
+ * Repeated here for the same reason the two defaults above are: a horizon outside this
+ * range is a horizon the report cannot have used, so `effectiveParams` replaces it with
+ * the default rather than forwarding a number the report would clamp. That is what lets
+ * the sentence state a horizon that is *true*.
+ */
+export const HORIZON_MIN_DAYS = 1;
+
+/** The largest horizon the expiry reports accept. */
+export const HORIZON_MAX_DAYS = 3650;
+
+/** The smallest row cap any list report accepts. */
+export const LIST_MIN_LIMIT = 1;
+
+/**
+ * The largest row cap this function will ask a list report for.
+ *
+ * Inside every list report's own maximum (200 for `low_stock_products` and
+ * `top_products`, 500 for the other two), and deliberately one number rather than four:
+ * what the chatbot does with a list is name its leader and count it, so a cap beyond
+ * this buys a longer count of the same answer and costs four more rules that must agree
+ * with four migrations.
+ */
+export const LIST_MAX_LIMIT = 200;
+
+/** The cap the list reports take when none is given (mirrors 00027/00029's 50). */
+export const LIST_DEFAULT_LIMIT = 50;
+
+/** The cap `top_products` takes when none is given (mirrors 00029's 20). */
+export const TOP_PRODUCTS_DEFAULT_LIMIT = 20;
+
+/**
+ * The parameters a report is run with, and the values its sentence is written from.
+ *
+ * **One object, both jobs**, because they must not be able to disagree. Before this, the
+ * arguments were defaulted as they were built while the sentence was written from the
+ * *declared* parameters - so a model that asked for a 5000-day horizon was told about
+ * batches expiring "within 5000 days" while the report had quietly queried 3650. Reading
+ * both from here makes that unrepresentable rather than merely unlikely.
+ *
+ * A day or row value outside the ranges above is **replaced by the report's default**
+ * rather than forwarded to be clamped. A horizon the report could not have used is not a
+ * horizon the caller meant, and replacing it is the only way the sentence can state a
+ * number that is true. The reports keep their own clamp as the backstop for a caller that
+ * does not come through here (a screen calling the RPC directly).
+ */
+export function effectiveParams(
+  rpc: SupportedRpc,
+  params: ChatParams,
+): ChatParams {
+  switch (rpc) {
+    case 'report_summary':
+      return params;
+    case 'low_stock_products':
+      return { ...params, limit: listLimit(params.limit, LIST_DEFAULT_LIMIT) };
+    case 'expiring_batches':
+      return {
+        ...params,
+        days: horizon(params.days, EXPIRING_DEFAULT_DAYS),
+        limit: listLimit(params.limit, LIST_DEFAULT_LIMIT),
+      };
+    case 'top_products':
+      return { ...params, limit: listLimit(params.limit, TOP_PRODUCTS_DEFAULT_LIMIT) };
+    case 'dead_stock':
+      return {
+        ...params,
+        days: horizon(params.days, DEAD_STOCK_DEFAULT_DAYS),
+        limit: listLimit(params.limit, LIST_DEFAULT_LIMIT),
+      };
+  }
+}
+
+/** [days] when the expiry reports could have used it, and [fallback] otherwise. */
+function horizon(days: number | null, fallback: number): number {
+  return days !== null && days >= HORIZON_MIN_DAYS && days <= HORIZON_MAX_DAYS
+    ? days
+    : fallback;
+}
+
+/** [limit] when a list report could have used it, and [fallback] otherwise. */
+function listLimit(limit: number | null, fallback: number): number {
+  return limit !== null && limit >= LIST_MIN_LIMIT && limit <= LIST_MAX_LIMIT
+    ? limit
+    : fallback;
+}
+
+/**
+ * Whether the report stopped at its cap, which makes the rows a *page* rather than the
+ * whole answer.
+ *
+ * A `null` limit means no cap was named, so there is nothing to compare against and no
+ * total may be claimed - the honest reading, and the only one available. Every path
+ * through the handler names one ([effectiveParams]); this is reachable from a direct
+ * call, which is what the tests do.
+ */
+function isCapped(rows: number, limit: number | null): boolean {
+  return limit !== null && rows >= limit;
+}
+
 /** The fixed sentence for a question none of the reports answers. */
 export const UNSUPPORTED_ANSWER =
   'I cannot answer that. I can answer questions about sales and purchases, stock levels, expiring batches, what sells best, and what has stopped selling.';
@@ -86,13 +189,13 @@ export function renderAnswer(
     case 'report_summary':
       return renderSummary(data, params.subject ?? DEFAULT_SUMMARY_SUBJECT);
     case 'low_stock_products':
-      return renderLowStock(data);
+      return renderLowStock(data, params.limit);
     case 'expiring_batches':
-      return renderExpiring(data, params.days ?? EXPIRING_DEFAULT_DAYS);
+      return renderExpiring(data, params.days ?? EXPIRING_DEFAULT_DAYS, params.limit);
     case 'top_products':
       return renderTopProducts(data);
     case 'dead_stock':
-      return renderDeadStock(data, params.days ?? DEAD_STOCK_DEFAULT_DAYS);
+      return renderDeadStock(data, params.days ?? DEAD_STOCK_DEFAULT_DAYS, params.limit);
     case 'unsupported':
       return { text: UNSUPPORTED_ANSWER, understood: true };
   }
@@ -346,7 +449,15 @@ function renderEverything(
   };
 }
 
-function renderLowStock(data: unknown): RenderedAnswer {
+/**
+ * What is running out, worst first.
+ *
+ * [limit] is the cap the report was actually asked for, and it is here for one reason: a
+ * capped list is a *page*, and "2 products are below their reorder level" is a claim about
+ * the whole catalogue that a capped list cannot support. When the page came back full the
+ * sentence says "at least", which is true whether or not there is a row behind it.
+ */
+function renderLowStock(data: unknown, limit: number | null): RenderedAnswer {
   const rows = asArray(data);
   if (rows === null) {
     return UNREADABLE;
@@ -365,9 +476,11 @@ function renderLowStock(data: unknown): RenderedAnswer {
     return UNREADABLE;
   }
 
+  const atLeast = isCapped(rows.length, limit) ? 'At least ' : '';
+
   return {
     text:
-      `${rows.length} ${
+      `${atLeast}${rows.length} ${
         plural(
           rows.length,
           'product is below its reorder level',
@@ -380,7 +493,18 @@ function renderLowStock(data: unknown): RenderedAnswer {
   };
 }
 
-function renderExpiring(data: unknown, days: number): RenderedAnswer {
+/**
+ * What is about to go off, soonest first.
+ *
+ * [days] is the horizon the report was asked for and [limit] the cap it was asked for, both
+ * as `effectiveParams` resolved them - so the horizon in this sentence is the horizon the
+ * query used, and a full page is described as a page rather than as the whole list.
+ */
+function renderExpiring(
+  data: unknown,
+  days: number,
+  limit: number | null,
+): RenderedAnswer {
   const rows = asArray(data);
   if (rows === null) {
     return UNREADABLE;
@@ -409,15 +533,25 @@ function renderExpiring(data: unknown, days: number): RenderedAnswer {
     ? `**already expired ${Math.abs(daysLeft)} ${plural(Math.abs(daysLeft), 'day', 'days')} ago**`
     : `**${daysLeft} ${plural(daysLeft, 'day', 'days')} left**`;
 
+  const atLeast = isCapped(rows.length, limit) ? 'At least ' : '';
+
   return {
     text:
-      `${rows.length} ${plural(rows.length, 'batch expires', 'batches expire')} within ${days} days. ` +
+      `${atLeast}${rows.length} ${plural(rows.length, 'batch expires', 'batches expire')} within ${days} days. ` +
       `The soonest is **${product}**${batchNo !== null ? ` batch ${batchNo}` : ''}, ${when}` +
       `${expiryDate !== null ? ` (${expiryDate})` : ''} - ${qty} ${plural(qty, 'unit', 'units')} on the shelf.`,
     understood: true,
   };
 }
 
+/**
+ * What sells best, in the window the report itself stated.
+ *
+ * No cap is taken, because this sentence claims no total: it names the winner and the
+ * runner-up, and "the top seller is Dolo 650" is true of a page and of the whole list
+ * alike. A sentence here that ever *counts* will need one - the way the three list
+ * sentences above do - and that is the point at which it should be added.
+ */
 function renderTopProducts(data: unknown): RenderedAnswer {
   const envelope = asRecord(data);
   const rows = asArray(envelope.rows);
@@ -463,7 +597,18 @@ function renderTopProducts(data: unknown): RenderedAnswer {
   return { text, understood: true };
 }
 
-function renderDeadStock(data: unknown, days: number): RenderedAnswer {
+/**
+ * Money sitting on a shelf, most of it first.
+ *
+ * [days] comes from the report's own `meta` when it is there (`quiet_days`), because that is
+ * the number the query used; [limit] is the cap it was asked for, and a full page is again
+ * described as a page.
+ */
+function renderDeadStock(
+  data: unknown,
+  days: number,
+  limit: number | null,
+): RenderedAnswer {
   const envelope = asRecord(data);
   const rows = asArray(envelope.rows);
   const meta = asRecord(envelope.meta);
@@ -491,9 +636,11 @@ function renderDeadStock(data: unknown, days: number): RenderedAnswer {
     return UNREADABLE;
   }
 
+  const atLeast = isCapped(rows.length, limit) ? 'At least ' : '';
+
   return {
     text:
-      `${rows.length} ${plural(rows.length, 'product has', 'products have')} stock that has not sold in ${quietDays} days. ` +
+      `${atLeast}${rows.length} ${plural(rows.length, 'product has', 'products have')} stock that has not sold in ${quietDays} days. ` +
       `The most cash tied up is **${name}**: ${qty} ${plural(qty, 'unit', 'units')} worth **${value}** at cost, ` +
       `${lastSold === null ? 'never sold' : `last sold ${lastSold}`}.`,
     understood: true,

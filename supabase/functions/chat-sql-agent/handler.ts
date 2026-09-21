@@ -31,7 +31,7 @@
 
 import { FunctionError, isFunctionError } from '../_shared/errors.ts';
 import { failJson, okJson, preflight } from '../_shared/response.ts';
-import { DEAD_STOCK_DEFAULT_DAYS, EXPIRING_DEFAULT_DAYS, renderAnswer } from './answer.ts';
+import { effectiveParams, renderAnswer } from './answer.ts';
 import {
   MAX_HISTORY_TURNS,
   type ChatParams,
@@ -92,17 +92,22 @@ export function createHandler(
       const classification = await deps.classify(request, question, history);
 
       const warnings: string[] = [];
+      let effective: ChatParams = classification.params;
       let args: Record<string, unknown> = {};
       let data: unknown = null;
       let rpc: SupportedRpc | null = null;
 
       if (classification.rpc !== 'unsupported') {
         rpc = classification.rpc;
-        args = paramsFor(rpc, classification.params);
+        // One object decides the arguments *and* the sentence, so the two cannot come to
+        // describe different queries: the horizon a sentence states is the horizon the
+        // report ran (see `effectiveParams`, and the 5000-day horizon it exists for).
+        effective = effectiveParams(rpc, classification.params);
+        args = paramsFor(rpc, effective);
         data = await deps.run(request, rpc, args);
       }
 
-      const rendered = renderAnswer(classification.rpc, data, classification.params);
+      const rendered = renderAnswer(classification.rpc, data, effective);
       if (!rendered.understood) {
         warnings.push(
           'The report ran, but its answer came back in a shape this app does not understand.',
@@ -135,12 +140,15 @@ export function createHandler(
 /**
  * The arguments one report takes, and only those.
  *
- * This is the boundary that makes "the model fills declared parameters" true: a
- * report is handed a fixed set of keys, so a value the model put somewhere
- * unexpected cannot travel as an argument to a report that has no such
- * parameter. `p_metric` is passed as `null` rather than dropped when the model
- * named none, so the report's own default applies (and the sentence says which
- * metric was used, from the report's `meta`).
+ * This is the boundary that makes "the model fills declared parameters" true: a report is
+ * handed a fixed set of keys, so a value the model put somewhere unexpected cannot travel
+ * as an argument to a report that has no such parameter.
+ *
+ * It is a pure mapper, and deliberately so: `effectiveParams` has already resolved every
+ * default and every out-of-range value, so what this returns **is** what the sentence was
+ * written from. `p_metric` is passed as `null` when the model named none, because the
+ * report's own default is right there and its sentence says which metric it used - read
+ * from the report's own `meta`.
  */
 export function paramsFor(
   rpc: SupportedRpc,
@@ -152,9 +160,7 @@ export function paramsFor(
     case 'low_stock_products':
       return { p_limit: params.limit };
     case 'expiring_batches':
-      // The horizon is stated explicitly so the sentence describes the query that
-      // ran: the report returns a bare array with no `meta` to read it back from.
-      return { p_days: params.days ?? EXPIRING_DEFAULT_DAYS, p_limit: params.limit };
+      return { p_days: params.days, p_limit: params.limit };
     case 'top_products':
       return {
         p_from: params.fromDate,
@@ -163,7 +169,7 @@ export function paramsFor(
         p_metric: params.metric,
       };
     case 'dead_stock':
-      return { p_days: params.days ?? DEAD_STOCK_DEFAULT_DAYS, p_limit: params.limit };
+      return { p_days: params.days, p_limit: params.limit };
   }
 }
 
