@@ -4206,5 +4206,12 @@ in the operation's confirmation dialog, and in the enum's comment.
   re-pricing a posted bill and re-cutting its stock, which is a return plus a re-bill.
 - **`phase4_report_summary.sql`'s cancelled-sale fixture is written as postgres now**, because a session
   can no longer write `sales` at all. Its assertions are unchanged.
+- **The schema already understands a cancelled sale as posting nothing, which is why the flip is
+  coherent where it is.** `stock_update_on_sale()` returns early when the sale's status is `cancelled`
+  (`20260918000019_phase3_sale_automation.sql:293-295`), and `ledger_auto_entry_sale()` — which hangs off
+  `after insert or update of status on public.sales` (`…:660-662`) — opens with *"A cancelled sale never
+  happened, so it posts nothing"*. So `cancel_sale()`'s single UPDATE posts nothing new and moves no
+  stock by the database's own design rather than by this chunk's restraint: what stands is what the bill
+  posted when it was raised, which is exactly what D-087 tells the owner before he decides.
 
 
