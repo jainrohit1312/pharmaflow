@@ -50,6 +50,10 @@
 --       bill carries the patient's name and number together (00035), and an admission bill keeps its
 --       hospital reference (`sales_ipd_needs_reference`).
 --   8.  Approving writes exactly what the owner's own act writes, and a refusal writes nothing.
+--   9.  A recorded sale return closes the CANCELLATION ask it strands - approving one could never
+--       land after a return, so the row would stay pending and fail on every tap - and leaves the
+--       IDENTITY edit standing, because a return does not touch the printed details. Both go through
+--       the ONE closure, whose action-type list is what makes the difference (chunk 6).
 
 do $$
 declare
@@ -68,6 +72,7 @@ declare
   v_allocated      public.sales;
   v_returned       public.sales;
   v_transfer       public.sales;
+  v_stranded       public.sales;
   v_ipd            public.sales;
   v_other_sale     public.sales;
   v_sale           public.sales;
@@ -76,9 +81,11 @@ declare
   v_qty_after      int;
   v_rows           int;
   v_note           text;
+  v_sale_by        uuid;
   v_allowed        boolean;
   v_msg            text;
   v_out            jsonb;
+  v_out2           jsonb;
   v_request        public.approval_requests;
   v_decided        public.approval_requests;
   v_comment        text;
@@ -720,6 +727,123 @@ begin
   v_log := array_append(v_log, case
     when (v_out #>> '{document,hospital_reference}') = 'IPD-61 corrected' then 'PASS' else 'FAIL' end
     || ': 8. and correcting one is the edit it is for');
+
+  -- ============== 9. a recorded sale return closes the cancellation ask it strands
+  -- The bill below is one his staff have asked TWO things about: to cancel it, and to correct its
+  -- printed identity. A return then comes back against it. The cancellation can never be ANSWERED
+  -- after that - `document_payload_problem()` refuses exactly this state, so approving it would
+  -- raise on every tap and the row would stay pending - while the identity edit is untouched by a
+  -- return, because the printed details of a bill that has had something returned are still
+  -- correctable. That difference is the whole reason the ONE closure takes an action-type list
+  -- rather than closing everything about the document (chunk 6, D-088).
+  perform set_config('request.jwt.claims', json_build_object('sub', v_owner::text)::text, true);
+  perform set_config('request.jwt.claim.sub', v_owner::text, true);
+
+  v_stranded := public.checkout_sale(jsonb_build_object(
+    'sale_type', 'counter',
+    'customer_id', v_patient,
+    'payment_mode', 'cash',
+    'amount_paid', 105,
+    'items', jsonb_build_array(jsonb_build_object(
+      'product_id', v_product, 'batch_id', v_batch, 'qty', 1, 'rate', 105
+    ))
+  ));
+
+  perform set_config('request.jwt.claims', json_build_object('sub', v_cashier::text)::text, true);
+  perform set_config('request.jwt.claim.sub', v_cashier::text, true);
+
+  v_out := public.cancel_sale(jsonb_build_object('sale_id', v_stranded.id));
+  v_out2 := public.save_sale_identity(jsonb_build_object(
+    'sale_id', v_stranded.id,
+    'patient_name', 'ZZTEST 61 stranded',
+    'patient_mobile', '9876500061'
+  ));
+
+  select count(*) into v_rows from public.approval_requests a
+   where a.pharmacy_id = v_pharmacy
+     and a.target_id = v_stranded.id
+     and a.status = 'pending'::public.approval_status;
+  v_log := array_append(v_log, case
+    when (v_out ->> 'outcome') = 'staged' and (v_out2 ->> 'outcome') = 'staged' and v_rows = 2
+      then 'PASS' else 'FAIL' end
+    || ': 9. his staff ask to cancel the bill AND to correct its printed identity (two pending: '
+    || v_rows || ')');
+
+  -- The return is recorded by the OWNER, through the door, so it is written rather than asked about.
+  perform set_config('request.jwt.claims', json_build_object('sub', v_owner::text)::text, true);
+  perform set_config('request.jwt.claim.sub', v_owner::text, true);
+
+  v_out := public.record_sale_return(jsonb_build_object(
+    'sale_id', v_stranded.id,
+    'restock', true,
+    'grand_total', 105,
+    'items', jsonb_build_array(jsonb_build_object(
+      'product_id', v_product, 'batch_id', v_batch, 'qty', 1,
+      'rate', 105, 'gst_percent', 5, 'tax_amount', 5, 'total_amount', 105
+    ))
+  ));
+  v_log := array_append(v_log, case when (v_out ->> 'outcome') = 'recorded' then 'PASS' else 'FAIL' end
+    || ': 9. and a sale return is recorded against it (got ' || coalesce(v_out ->> 'outcome', 'NULL')
+    || ')');
+
+  select count(*) into v_rows from public.approval_requests a
+   where a.pharmacy_id = v_pharmacy
+     and a.target_id = v_stranded.id
+     and a.action_type = 'sale_cancel'::public.approval_action_type
+     and a.status = 'pending'::public.approval_status;
+  v_log := array_append(v_log, case when v_rows = 0 then 'PASS' else 'FAIL' end
+    || ': 9. so the CANCEL ask is closed - approving it could never land (still pending: '
+    || v_rows || ')');
+
+  select a.decision_note, a.decided_by into v_note, v_sale_by
+    from public.approval_requests a
+   where a.pharmacy_id = v_pharmacy
+     and a.target_id = v_stranded.id
+     and a.action_type = 'sale_cancel'::public.approval_action_type;
+
+  v_log := array_append(v_log, case
+    when v_note = 'a sale return was recorded against the bill, so it can no longer be cancelled'
+      then 'PASS' else 'FAIL' end
+    || ': 9. closed as REFUSED with a note naming what washed it out (got '
+    || coalesce(v_note, 'NULL') || ')');
+
+  v_log := array_append(v_log, case when v_sale_by = v_owner then 'PASS' else 'FAIL' end
+    || ': 9. and decided by the owner, which is what the decision columns require of a decided row (got '
+    || coalesce(v_sale_by::text, 'NULL') || ')');
+
+  select count(*) into v_rows from public.approval_requests a
+   where a.pharmacy_id = v_pharmacy
+     and a.target_id = v_stranded.id
+     and a.action_type = 'sale_edit'::public.approval_action_type
+     and a.status = 'pending'::public.approval_status;
+  v_log := array_append(v_log, case when v_rows = 1 then 'PASS' else 'FAIL' end
+    || ': 9. while the identity edit is LEFT STANDING, because a return does not touch the printed '
+    || 'details (pending: ' || v_rows || ')');
+
+  -- Not just "still pending" - still ANSWERABLE, which is the reason the filter exists at all.
+  select * into v_request from public.approval_requests a
+   where a.pharmacy_id = v_pharmacy
+     and a.target_id = v_stranded.id
+     and a.action_type = 'sale_edit'::public.approval_action_type;
+
+  v_decided := public.decide_approval(v_request.id, true);
+  v_log := array_append(v_log, case
+    when v_decided.status = 'approved'::public.approval_status then 'PASS' else 'FAIL' end
+    || ': 9. and the owner can still approve it (got ' || v_decided.status || ')');
+
+  select s.patient_name into v_note from public.sales s where s.id = v_stranded.id;
+  v_log := array_append(v_log, case when v_note = 'ZZTEST 61 stranded' then 'PASS' else 'FAIL' end
+    || ': 9. and it did what it said: the bill prints the corrected name (got '
+    || coalesce(v_note, 'NULL') || ')');
+
+  -- The rule has to be readable where the row lives, or the next reader re-derives it from a chat log.
+  select obj_description('public.approval_requests'::regclass, 'pg_class') into v_comment;
+  v_log := array_append(v_log, case
+    when v_comment like '%LIFECYCLE%'
+     and v_comment like '%approval_close_target_asks%'
+     and v_comment like '%no scheduler%' then 'PASS' else 'FAIL' end
+    || ': 9. and the approval_requests table says in its own comment what closes a stale ask, and why '
+    || 'an expiry could not (D-088)');
 
   -- ================================================================ summary
   v_log := array_append(v_log, case

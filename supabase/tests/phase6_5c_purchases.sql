@@ -214,9 +214,21 @@ begin
   select has_function_privilege('authenticated', p.oid, 'EXECUTE') into v_allowed
     from pg_proc p
     join pg_namespace n on n.oid = p.pronamespace
-   where n.nspname = 'public' and p.proname = 'approval_close_purchase_asks';
+   where n.nspname = 'public' and p.proname = 'approval_close_target_asks';
   v_log := array_append(v_log, case when not v_allowed then 'PASS' else 'FAIL' end
-    || ': 1. ... and not approval_close_purchase_asks (got ' || v_allowed || ')');
+    || ': 1. ... and not approval_close_target_asks, the ONE closure, either (got '
+    || v_allowed || ')');
+
+  -- The purchase-specific closure that one replaced is GONE rather than left beside it: two
+  -- functions that close the pending asks about a document are two mechanisms for one action, which
+  -- is the rule this module has kept since chunk 1.
+  select count(*) into v_rows
+    from pg_proc p
+    join pg_namespace n on n.oid = p.pronamespace
+   where n.nspname = 'public' and p.proname = 'approval_close_purchase_asks';
+  v_log := array_append(v_log, case when v_rows = 0 then 'PASS' else 'FAIL' end
+    || ': 1. and the purchase-specific closure it replaced is retired, not kept beside it (got '
+    || v_rows || ')');
 
   select count(*) into v_rows
     from pg_indexes
