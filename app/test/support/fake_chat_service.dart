@@ -77,7 +77,7 @@ class FakeChatService implements ChatService {
 /// The defaults are the shape the live function actually answers with, so a test
 /// that changes one field is changing one field of a real envelope.
 ChatResponse buildChatAnswer({
-  String answer = 'Nothing is at or below its reorder level.',
+  String answer = 'Nothing is below its reorder level.',
   String? rpc = 'low_stock_products',
   Map<String, Object?> params = const <String, Object?>{},
   Object? data,

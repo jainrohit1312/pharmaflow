@@ -17,6 +17,33 @@
  * recognise. That is a warning rather than an error: the query ran and the caller
  * may still want the raw envelope, and saying "I could not read the answer" is
  * better than rendering `undefined`.
+ *
+ * The emphasis marker
+ * -------------------
+ * A sentence marks the part worth pointing at with `**...**`: the figure an owner
+ * would circle, the product or batch that figure belongs to, and any exception
+ * ("already expired 6 days ago"). The alternative - a paragraph of uniform text -
+ * is what this feature was reported for: the important number is in there, and
+ * nobody can find it.
+ *
+ * **The marker is written here, and only here.** It is presentation syntax, but it
+ * is the *server's* presentation syntax: the words and the figures are still this
+ * file's, and the client's only job (see `answer_emphasis.dart`) is to turn a
+ * marker into a bold run. Nothing on the client decides *what* is worth pointing
+ * at, which is what keeps D-053 true while the answer becomes readable.
+ *
+ * A sentence with nothing to point at carries **no** marker: the four "nothing is
+ * low / expiring / sold / quiet" answers, `UNSUPPORTED_ANSWER` and `UNREADABLE` are
+ * plain prose on purpose, so a marker always means *there is a finding here*. That
+ * is asserted, both ways, in `answer_test.ts`.
+ *
+ * The marker travels with the sentence, so the conversation history the classifier
+ * is handed carries it too. That is deliberate rather than overlooked: the history
+ * is context, the model returns only a choice and its parameters, and stripping the
+ * marker for one reader while rendering it for another would be a second copy of
+ * the sentence waiting to drift. It is also why the two money figures in a summary
+ * are the *only* ones marked there - a marker that appears everywhere points at
+ * nothing.
  */
 
 import type { ChatParams, ClassificationChoice } from './schema.ts';
@@ -98,10 +125,10 @@ function renderSummary(data: unknown): RenderedAnswer {
 
   return {
     text:
-      `${window}${count} ${plural(count, 'sale', 'sales')} for ${grandTotal}, ` +
-      `${collected} collected and ${outstanding} still due. ` +
+      `${window}${count} ${plural(count, 'sale', 'sales')} for **${grandTotal}**, ` +
+      `${collected} collected and **${outstanding}** still due. ` +
       `${purchaseCount} ${plural(purchaseCount, 'purchase was', 'purchases were')} received. ` +
-      `Stock on hand is worth ${stockValue} at cost.`,
+      `Stock on hand is worth **${stockValue}** at cost.`,
     understood: true,
   };
 }
@@ -112,7 +139,7 @@ function renderLowStock(data: unknown): RenderedAnswer {
     return UNREADABLE;
   }
   if (rows.length === 0) {
-    return { text: 'Nothing is at or below its reorder level.', understood: true };
+    return { text: 'Nothing is below its reorder level.', understood: true };
   }
 
   const first = asRecord(rows[0]);
@@ -127,8 +154,14 @@ function renderLowStock(data: unknown): RenderedAnswer {
 
   return {
     text:
-      `${rows.length} ${plural(rows.length, 'product is', 'products are')} at or below the reorder level. ` +
-      `The biggest gap is ${name}: ${shortfall} ${plural(shortfall, 'unit', 'units')} short ` +
+      `${rows.length} ${
+        plural(
+          rows.length,
+          'product is below its reorder level',
+          'products are below their reorder level',
+        )
+      }. ` +
+      `The biggest gap is **${name}**: **${shortfall} ${plural(shortfall, 'unit', 'units')} short** ` +
       `(${totalQty} in stock against a level of ${level}).`,
     understood: true,
   };
@@ -157,14 +190,16 @@ function renderExpiring(data: unknown, days: number): RenderedAnswer {
     return UNREADABLE;
   }
 
+  // Both halves are the answer's point - "6 days left" on the one you can still
+  // move, "already expired" on the one that is already a loss - so both are marked.
   const when = daysLeft < 0
-    ? `already expired ${Math.abs(daysLeft)} ${plural(Math.abs(daysLeft), 'day', 'days')} ago`
-    : `${daysLeft} ${plural(daysLeft, 'day', 'days')} left`;
+    ? `**already expired ${Math.abs(daysLeft)} ${plural(Math.abs(daysLeft), 'day', 'days')} ago**`
+    : `**${daysLeft} ${plural(daysLeft, 'day', 'days')} left**`;
 
   return {
     text:
       `${rows.length} ${plural(rows.length, 'batch expires', 'batches expire')} within ${days} days. ` +
-      `The soonest is ${product}${batchNo !== null ? ` batch ${batchNo}` : ''}, ${when}` +
+      `The soonest is **${product}**${batchNo !== null ? ` batch ${batchNo}` : ''}, ${when}` +
       `${expiryDate !== null ? ` (${expiryDate})` : ''} - ${qty} ${plural(qty, 'unit', 'units')} on the shelf.`,
     understood: true,
   };
@@ -197,8 +232,11 @@ function renderTopProducts(data: unknown): RenderedAnswer {
   }
 
   const by = meta.metric_used === 'revenue' ? 'revenue' : 'units sold';
+  // The winner's identity and both of its figures are the answer, so all three are
+  // marked - and only in this clause: the runner-up is context, and marking it too
+  // would leave nothing for the marker to point at.
   let text =
-    `By ${by}, ${window} the top seller is ${name}: ${units} ${plural(units, 'unit', 'units')} for ${revenue}.`;
+    `By ${by}, ${window} the top seller is **${name}**: **${units} ${plural(units, 'unit', 'units')}** for **${revenue}**.`;
 
   if (rows.length > 1) {
     const second = asRecord(rows[1]);
@@ -243,7 +281,7 @@ function renderDeadStock(data: unknown, days: number): RenderedAnswer {
   return {
     text:
       `${rows.length} ${plural(rows.length, 'product has', 'products have')} stock that has not sold in ${quietDays} days. ` +
-      `The most cash tied up is ${name}: ${qty} ${plural(qty, 'unit', 'units')} worth ${value} at cost, ` +
+      `The most cash tied up is **${name}**: ${qty} ${plural(qty, 'unit', 'units')} worth **${value}** at cost, ` +
       `${lastSold === null ? 'never sold' : `last sold ${lastSold}`}.`,
     understood: true,
   };

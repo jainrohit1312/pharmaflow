@@ -15,6 +15,13 @@
 ///
 /// Nothing here computes a figure. The sentence is the server's (D-053), and the
 /// note under it is read from the envelope's own fields.
+///
+/// The one thing an answer's bubble does that a question's does not is read the
+/// server's emphasis marker (`[parseAnswerEmphasis]`, and `answer.ts` for why the
+/// marker exists): a question is the user's own text and is never markup, while an
+/// answer's sentence is the server's and pointing at its own finding is the
+/// server's job. A sentence with no marker is one plain run, so an unmarked answer
+/// renders exactly as it did before markers existed.
 library;
 
 import 'package:app/core/errors/error_message.dart';
@@ -22,6 +29,7 @@ import 'package:app/core/widgets/app_button.dart';
 import 'package:app/data/models/chat_message.dart';
 import 'package:app/data/models/chat_response.dart';
 import 'package:app/features/chatbot/application/chat_controller.dart';
+import 'package:app/features/chatbot/presentation/answer_emphasis.dart';
 import 'package:flutter/material.dart';
 
 /// The widest a bubble grows before it wraps; a wide window should not turn a
@@ -46,9 +54,46 @@ class MessageBubble extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
         children: <Widget>[
-          Text(message.text),
+          // A question is the user's own words and is shown exactly as typed —
+          // marker or no marker, it is not markup. An answer is the server's
+          // sentence, and the part the server pointed at is shown the way a person
+          // would have highlighted it on paper.
+          if (response == null)
+            Text(message.text)
+          else
+            _AnswerText(text: message.text),
           // An answer says where it came from; a question has nothing to say.
           if (response != null) _AnswerOrigin(response: response),
+        ],
+      ),
+    );
+  }
+}
+
+/// An answer's sentence, with the part the server pointed at set in bold.
+///
+/// [parseAnswerEmphasis] does the reading; this only paints what it found. The runs
+/// carry no style of their own beyond the weight, so the sentence still takes the
+/// bubble's own text style — and a sentence with no marker is one plain run, which
+/// is the same widget it was before there were markers at all.
+class _AnswerText extends StatelessWidget {
+  const _AnswerText({required this.text});
+
+  /// The server's sentence, marker and all.
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    return Text.rich(
+      TextSpan(
+        children: <InlineSpan>[
+          for (final run in parseAnswerEmphasis(text))
+            TextSpan(
+              text: run.text,
+              style: run.isStrong
+                  ? const TextStyle(fontWeight: FontWeight.bold)
+                  : null,
+            ),
         ],
       ),
     );

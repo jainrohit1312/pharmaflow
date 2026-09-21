@@ -28,6 +28,28 @@ import 'package:flutter_test/flutter_test.dart';
 import '../../../support/chatbot_test_app.dart';
 import '../../../support/fake_chat_service.dart';
 
+/// The text of every run this screen renders in bold, in order.
+///
+/// Only an answer builds a `TextSpan` — a question is a plain `Text` — so this can
+/// never pick up the user's own words. That is the point of it: the two tests below
+/// are about *where* the bold is allowed to come from.
+List<String> boldRuns(WidgetTester tester) {
+  final bold = <String>[];
+  for (final text in tester.widgetList<Text>(
+    find.byWidgetPredicate(
+      (widget) => widget is Text && widget.textSpan != null,
+    ),
+  )) {
+    text.textSpan!.visitChildren((span) {
+      if (span is TextSpan && span.style?.fontWeight == FontWeight.bold) {
+        bold.add(span.text ?? '');
+      }
+      return true;
+    });
+  }
+  return bold;
+}
+
 void main() {
   testWidgets('an empty conversation is an invitation, not an error or a wait', (
     tester,
@@ -101,7 +123,7 @@ void main() {
   ) async {
     final assistant = FakeChatService()
       ..answer = buildChatAnswer(
-        answer: '1 product is at or below the reorder level.',
+        answer: '1 product is below its reorder level.',
         data: <String, dynamic>{'rows': <dynamic>[]},
       );
     await pumpChatbotApp(tester, service: assistant);
@@ -109,16 +131,61 @@ void main() {
     await askQuestion(tester, 'What is low on stock?');
     await tester.pumpAndSettle();
 
-    expect(
-      find.text('1 product is at or below the reorder level.'),
-      findsOneWidget,
-    );
+    expect(find.text('1 product is below its reorder level.'), findsOneWidget);
     expect(
       find.text('Low stock products'),
       findsOneWidget,
       reason: 'the note names the report and what it was asked for (D-053)',
     );
     expect(find.byType(ErrorView), findsNothing);
+  });
+
+  testWidgets('an answer points at its finding, and shows no marker doing it', (
+    tester,
+  ) async {
+    final assistant = FakeChatService()
+      ..answer = buildChatAnswer(
+        answer:
+            'The biggest gap is **Dolo 650**: **40 units short** '
+            '(10 in stock against a level of 50).',
+      );
+    await pumpChatbotApp(tester, service: assistant);
+
+    await askQuestion(tester, 'What is low on stock?');
+    await tester.pumpAndSettle();
+
+    // The reader gets the sentence, not the punctuation that shaped it: what the
+    // server marked is bold, and what it marked *with* is nowhere on screen.
+    expect(
+      find.text(
+        'The biggest gap is Dolo 650: 40 units short '
+        '(10 in stock against a level of 50).',
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.textContaining('**', findRichText: true),
+      findsNothing,
+      reason:
+          'the marker is the server talking to this widget, not to a person',
+    );
+    expect(boldRuns(tester), <String>['Dolo 650', '40 units short']);
+  });
+
+  testWidgets("a question is the user's own words, never markup", (
+    tester,
+  ) async {
+    final assistant = FakeChatService();
+    await pumpChatbotApp(tester, service: assistant);
+
+    await askQuestion(tester, 'is **Dolo 650** low?');
+    await tester.pumpAndSettle();
+
+    // Nothing the user types can reach the answer's styling: the question is shown
+    // exactly as it was written, asterisks and all, and it is not bold. Otherwise a
+    // user could make their own words look like something the server said.
+    expect(find.text('is **Dolo 650** low?'), findsOneWidget);
+    expect(boldRuns(tester), isEmpty);
   });
 
   testWidgets("the server's own warnings show beside the sentence", (

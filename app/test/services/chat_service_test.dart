@@ -26,8 +26,8 @@ void main() {
     test('reads a report answer the function actually sent', () {
       final response = decodeChatAnswer(<String, dynamic>{
         'answer':
-            '1 product is at or below the reorder level. The biggest gap is '
-            'dolo 650: 20 units short (0 in stock against a level of 20).',
+            '1 product is below its reorder level. The biggest gap is '
+            '**dolo 650**: **20 units short** (0 in stock against a level of 20).',
         'rpc': 'low_stock_products',
         'params': <String, dynamic>{'p_limit': null},
         'data': <dynamic>[
@@ -141,7 +141,7 @@ void main() {
 
     test('a response with no meta at all still reads', () {
       final response = decodeChatAnswer(<String, dynamic>{
-        'answer': 'Nothing is at or below its reorder level.',
+        'answer': 'Nothing is below its reorder level.',
         'rpc': 'low_stock_products',
       });
 
@@ -418,7 +418,7 @@ void main() {
         });
         expect(answer.toJson(), <String, dynamic>{
           'role': 'model',
-          'text': 'Nothing is at or below its reorder level.',
+          'text': 'Nothing is below its reorder level.',
         });
         expect(
           answer.response,
