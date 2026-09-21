@@ -11,7 +11,6 @@ library;
 
 import 'package:app/core/errors/app_exception.dart';
 import 'package:app/data/models/customer.dart';
-import 'package:app/features/customers/application/patient_lookup.dart';
 import 'package:app/features/customers/data/patients_repository.dart';
 import 'package:app/features/sales/application/pos_controller.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
@@ -32,6 +31,27 @@ class PatientRegistration {
 }
 
 /// Registers a patient, or pins the one a mobile number already belongs to.
+///
+/// **The screens read this controller and nothing watches it**, so Riverpod is free to
+/// dispose it the moment a read returns - and every method here does its work *after* an
+/// `await`. Against a real backend the write takes long enough for that disposal to land,
+/// and the post-await `ref.read(posControllerProvider.notifier).setPatient(...)` then threw
+/// *"Cannot use the Ref of patientRegistrationControllerProvider after it has been
+/// disposed"* **on screen**, with the patient never selected. Every test passed, because a
+/// fake repository answers immediately and the window never opened.
+///
+/// Two rules follow, and both are load-bearing rather than defensive:
+///
+///  * **capture what is needed before the await** and guard what follows with `ref.mounted`.
+///    The pin then goes through a `keepAlive` provider's notifier and owes nothing to *this*
+///    controller's lifetime.
+///  * **refreshing a read is the caller's job** - the same one-way dependency
+///    `showPaymentSheet` documents. This controller cannot promise to still exist when its
+///    own write answers, so it does not promise to invalidate anything.
+///
+/// `keepAlive` was tried and is **not** the fix: `riverpod_lint` refuses a `keepAlive`
+/// provider that depends on an autoDispose one (`only_use_keep_alive_inside_keep_alive`),
+/// and this one depends on the patients repository.
 @riverpod
 class PatientRegistrationController extends _$PatientRegistrationController {
   @override
@@ -79,30 +99,37 @@ class PatientRegistrationController extends _$PatientRegistrationController {
       throw const ValidationException(message: 'A patient needs a name.');
     }
 
-    state = const AsyncLoading<PatientRegistration?>();
+    // Captured **before** the write. Everything past this line awaits, and a `ref` that
+    // survives an async gap is not something this controller may assume - see the class
+    // doc for the error that assumption produced on screen.
+    final pos = ref.read(posControllerProvider.notifier);
+    final repository = ref.read(patientsRepositoryProvider);
+    if (ref.mounted) {
+      state = const AsyncLoading<PatientRegistration?>();
+    }
+
     try {
-      final patient = await ref
-          .read(patientsRepositoryProvider)
-          .register(
-            name: name,
-            mobile: mobile,
-            dateOfBirth: dateOfBirth,
-            ageYears: ageYears,
-            ageMonths: ageMonths,
-            sex: sex,
-            guardianName: guardianName,
-            guardianPhone: guardianPhone,
-            address: address,
-          );
-      ref.read(posControllerProvider.notifier).setPatient(patient);
-      // A patient who was not on file a moment ago is on the list now, and the
-      // recent list is what the next counter opens with.
-      ref.invalidate(recentPatientsProvider);
+      final patient = await repository.register(
+        name: name,
+        mobile: mobile,
+        dateOfBirth: dateOfBirth,
+        ageYears: ageYears,
+        ageMonths: ageMonths,
+        sex: sex,
+        guardianName: guardianName,
+        guardianPhone: guardianPhone,
+        address: address,
+      );
+      pos.setPatient(patient);
       final result = PatientRegistration(patient: patient, reused: false);
-      state = AsyncData<PatientRegistration?>(result);
+      if (ref.mounted) {
+        state = AsyncData<PatientRegistration?>(result);
+      }
       return result;
     } on Object catch (error, stackTrace) {
-      state = AsyncError<PatientRegistration?>(error, stackTrace);
+      if (ref.mounted) {
+        state = AsyncError<PatientRegistration?>(error, stackTrace);
+      }
       rethrow;
     }
   }
@@ -114,17 +141,29 @@ class PatientRegistrationController extends _$PatientRegistrationController {
   /// also what assigns a code to a customer registered before Phase 7a. Invoice
   /// details never silently edit the patient master.
   Future<PatientRegistration> reuse(Customer patient) async {
-    state = const AsyncLoading<PatientRegistration?>();
+    // Both captured before the write, for the reason the class doc gives: this is the
+    // path a **tap on a patient** takes, and it is the one that failed on screen.
+    final pos = ref.read(posControllerProvider.notifier);
+    final repository = ref.read(patientsRepositoryProvider);
+    if (ref.mounted) {
+      state = const AsyncLoading<PatientRegistration?>();
+    }
+
     try {
-      final saved = await ref
-          .read(patientsRepositoryProvider)
-          .register(name: patient.name, patientId: patient.id);
-      ref.read(posControllerProvider.notifier).setPatient(saved);
+      final saved = await repository.register(
+        name: patient.name,
+        patientId: patient.id,
+      );
+      pos.setPatient(saved);
       final result = PatientRegistration(patient: saved, reused: true);
-      state = AsyncData<PatientRegistration?>(result);
+      if (ref.mounted) {
+        state = AsyncData<PatientRegistration?>(result);
+      }
       return result;
     } on Object catch (error, stackTrace) {
-      state = AsyncError<PatientRegistration?>(error, stackTrace);
+      if (ref.mounted) {
+        state = AsyncError<PatientRegistration?>(error, stackTrace);
+      }
       rethrow;
     }
   }

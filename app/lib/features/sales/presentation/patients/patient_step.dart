@@ -140,6 +140,11 @@ class _PatientStepState extends ConsumerState<PatientStep> {
     if (registered == null || !mounted) {
       return;
     }
+    // A patient who was not on file a moment ago is on the list now, and the recent list
+    // is what the next counter opens with. Refreshed **here** rather than by the
+    // controller, which may already have been disposed by the time its own write answers -
+    // the same one-way dependency `showPaymentSheet` documents.
+    ref.invalidate(recentPatientsProvider);
     _clearSearch();
     _report('${registered.patient.name} pinned to this bill.');
   }

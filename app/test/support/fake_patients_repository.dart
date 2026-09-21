@@ -3,6 +3,8 @@
 /// Not a `_test.dart` file, so `flutter test` does not try to run it.
 library;
 
+import 'dart:async';
+
 import 'package:app/data/models/admission.dart';
 import 'package:app/data/models/customer.dart';
 import 'package:app/features/customers/data/patients_repository.dart';
@@ -77,6 +79,14 @@ class FakePatientsRepository implements PatientsRepository {
   /// When set, the next call throws it.
   Exception? errorToThrow;
 
+  /// When set, `register` waits for it before answering.
+  ///
+  /// A **real** write takes time, and the gap is not cosmetic: it is the window in which
+  /// a provider that nothing listens to can be disposed. A test that only ever drives
+  /// instant fakes cannot see that window, which is exactly how a "the patient does not
+  /// get selected" defect survives a green suite.
+  Completer<void>? registerGate;
+
   /// The patient `register` answers with, so a test can assert on the code the
   /// server would have minted. Defaults to a fresh row built from the arguments.
   Customer? patientToReturn;
@@ -124,6 +134,10 @@ class FakePatientsRepository implements PatientsRepository {
     final error = errorToThrow;
     if (error != null) {
       throw error;
+    }
+    final gate = registerGate;
+    if (gate != null) {
+      await gate.future;
     }
     registrations.add(<String, Object?>{
       'name': name,

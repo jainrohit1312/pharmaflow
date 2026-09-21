@@ -11,6 +11,8 @@
 /// means anything if the deliberate case still works.
 library;
 
+import 'dart:async';
+
 import 'package:app/core/router/routes.dart';
 import 'package:app/core/utils/formatters.dart';
 import 'package:app/core/widgets/app_search_field.dart';
@@ -572,6 +574,44 @@ void main() {
       findsOneWidget,
       reason:
           'the sentence names what is missing rather than only that something is',
+    );
+  });
+
+  testWidgets('pins the patient that was tapped, however slow the server is', (
+    tester,
+  ) async {
+    // The registration controller is **read** by the step and **watched by nothing**, and
+    // every one of its methods does its work *after* an `await`. A real write takes time;
+    // an instant fake does not - so this window only opens against a real backend, which
+    // is why a green suite here proves nothing about the device. The gate holds the write
+    // open long enough for the test to look at it.
+    final patients = FakePatientsRepository(patients: <Customer>[_patient()])
+      ..registerGate = Completer<void>();
+    await pumpSalesApp(
+      tester,
+      repository: FakeSalesRepository(),
+      searchResults: <Product>[buildProduct('Dolo 650')],
+      batches: <BatchStatus>[_batch()],
+      patients: patients,
+      initialLocation: Routes.pos,
+    );
+
+    await tester.tap(find.text('ZZTEST patient').last);
+    await tester.pump();
+
+    patients.registerGate!.complete();
+    await tester.pumpAndSettle();
+
+    expect(
+      find.text('Change'),
+      findsOneWidget,
+      reason:
+          'the bill is pinned to the patient the operator tapped, and stays pinned',
+    );
+    expect(
+      find.byType(SnackBar),
+      findsNothing,
+      reason: 'a selection that happened is not also reported as a failure',
     );
   });
 
