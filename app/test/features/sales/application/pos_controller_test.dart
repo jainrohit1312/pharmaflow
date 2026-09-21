@@ -199,7 +199,7 @@ void main() {
   });
 
   group('changing a line', () {
-    test('sets a quantity, and removes the line at zero', () {
+    test('sets a quantity, and a quantity of zero leaves the line alone', () {
       final container = _container();
       final batch = buildBatch();
 
@@ -211,9 +211,20 @@ void main() {
       _pos(container).setQty(batch.id, 0);
 
       expect(
+        _cart(container).lines.single.qty,
+        5,
+        reason:
+            'an emptied quantity field is not a removal: the line keeps its own number, '
+            'and only the delete control or Delete drops a line (D-078)',
+      );
+
+      // And what a removal actually is, so the behaviour that moved away from `setQty`
+      // is still pinned somewhere.
+      _pos(container).removeLine(batch.id);
+      expect(
         _cart(container).isEmpty,
         isTrue,
-        reason: 'a quantity of zero is how the counter drops a line',
+        reason: 'removeLine is the one way a line goes',
       );
     });
 

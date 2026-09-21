@@ -57,7 +57,11 @@ class _PosScreenState extends ConsumerState<PosScreen> {
   /// The product search's field, driven rather than left to the widget: a
   /// selection, a dialog and a refusal all have to empty it and put the caret back.
   final _search = TextEditingController();
-  final _searchFocus = FocusNode();
+
+  /// Labelled so the keyboard contract is **assertable**: "the caret went to the new line's
+  /// quantity" and "Escape brought it back here" are things a test can now name, the same way
+  /// the cart line labels its own nodes.
+  final _searchFocus = FocusNode(debugLabel: 'pos search');
   String _term = '';
 
   /// Which row of the dropdown Enter would add, as an index into the results.
@@ -81,6 +85,13 @@ class _PosScreenState extends ConsumerState<PosScreen> {
   /// two: no write has started while it is open, so the live-state guard in `_checkout`
   /// cannot see the second tap the way it sees one arriving during a write.
   bool _confirming = false;
+
+  /// The line whose quantity field should take the caret, once it is built.
+  ///
+  /// Set by an add and cleared by the line that answers it, so the request is a **one-shot**:
+  /// a line rung up at the counter puts the caret in its own quantity - where the operator
+  /// nearly always goes next - and nothing later in the basket's life may pull it back there.
+  String? _pendingQtyFocus;
 
   /// What the counter's list is showing: the search when a term is typed - a term
   /// wins over the strip, because typing is an explicit act - and the strip's own
@@ -202,7 +213,11 @@ class _PosScreenState extends ConsumerState<PosScreen> {
     ref
         .read(posControllerProvider.notifier)
         .addLine(product: hit.product, batch: batch, qty: 1);
-    _resetSearch();
+    // The caret goes to the line just rung up, so the operator can change the quantity
+    // without reaching for the mouse: a counter rings a line up and then very often says
+    // "make it two".
+    _pendingQtyFocus = batch.id;
+    _resetSearch(refocusSearch: false);
   }
 
   /// Empties the field, closes the list and puts the caret back.
@@ -210,7 +225,11 @@ class _PosScreenState extends ConsumerState<PosScreen> {
   /// This is what makes a rapid second Enter harmless: with no term and a basket
   /// that is no longer empty the dropdown is not showing, so a second press has
   /// nothing to add and cannot double-add.
-  void _resetSearch() {
+  ///
+  /// [refocusSearch] is false **after an add**, where the caret belongs in the new line's
+  /// quantity instead. The list still closes, which is the half that keeps a second Enter
+  /// harmless - so moving the caret costs nothing.
+  void _resetSearch({bool refocusSearch = true}) {
     _debounce.cancel();
     _search.clear();
     setState(() {
@@ -218,7 +237,9 @@ class _PosScreenState extends ConsumerState<PosScreen> {
       _highlighted = 0;
       _searchClosed = true;
     });
-    _searchFocus.requestFocus();
+    if (refocusSearch) {
+      _searchFocus.requestFocus();
+    }
   }
 
   @override
@@ -378,6 +399,16 @@ class _PosScreenState extends ConsumerState<PosScreen> {
                               split: split,
                               saleType: cart.saleType,
                             ).total,
+                            focusQty:
+                                _pendingQtyFocus == cart.lines[index].batchId,
+                            onQtyFocused: () {
+                              if (_pendingQtyFocus != null) {
+                                setState(() => _pendingQtyFocus = null);
+                              }
+                            },
+                            // Escape in a quantity steps back out to the search - it does
+                            // not clear the quantity and does not touch the basket.
+                            onEscape: _searchFocus.requestFocus,
                             onQty: (qty) =>
                                 pos.setQty(cart.lines[index].batchId, qty),
                             onRate: (rate) =>
@@ -488,7 +519,10 @@ class _PosScreenState extends ConsumerState<PosScreen> {
     ref
         .read(posControllerProvider.notifier)
         .addLine(product: product, batch: batch, qty: 1);
-    _resetSearch();
+    // The deliberate path takes the caret to the line as well: it is still an add, and the
+    // operator who opened the chooser wants the quantity next as much as anyone.
+    _pendingQtyFocus = batch.id;
+    _resetSearch(refocusSearch: false);
   }
 
   /// Confirms the bill, writes it, and opens its invoice.

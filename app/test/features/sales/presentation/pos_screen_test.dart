@@ -615,6 +615,151 @@ void main() {
     );
   });
 
+  group('the quantity field', () {
+    /// The [index]-th line's quantity field, and what is inside it.
+    Finder qtyEditable({int index = 0}) => find.descendant(
+      of: find.widgetWithText(TextFormField, 'Qty').at(index),
+      matching: find.byType(EditableText),
+    );
+
+    /// The controller behind the [index]-th line's quantity field.
+    TextEditingController qtyAt(WidgetTester tester, {int index = 0}) =>
+        tester.widget<EditableText>(qtyEditable(index: index)).controller;
+
+    /// Pumps the counter with one product and one batch to ring up.
+    Future<void> pumpCounter(WidgetTester tester, FakeSalesRepository sales) =>
+        pumpSalesApp(
+          tester,
+          repository: sales,
+          searchResults: <Product>[buildProduct('Dolo 650')],
+          batches: <BatchStatus>[_batch()],
+          initialLocation: Routes.pos,
+        );
+
+    testWidgets('takes the caret when a row is tapped, with the 1 selected', (
+      tester,
+    ) async {
+      await pumpCounter(tester, FakeSalesRepository());
+      await _addLine(tester);
+
+      // The caret follows the line that was just rung up - a counter rings a line up and
+      // then very often says "make it two".
+      expect(
+        FocusManager.instance.primaryFocus?.debugLabel,
+        'pos cart quantity',
+      );
+      final qty = qtyAt(tester);
+      expect(qty.text, '1');
+      expect(
+        qty.selection,
+        const TextSelection(baseOffset: 0, extentOffset: 1),
+        reason:
+            'selected, so the next digit replaces the default rather than following it',
+      );
+    });
+
+    testWidgets('takes the caret on the Enter path as well as the tap', (
+      tester,
+    ) async {
+      await pumpCounter(tester, FakeSalesRepository());
+      await _searchFor(tester, 'Dolo');
+      await _key(tester, LogicalKeyboardKey.enter);
+
+      expect(
+        FocusManager.instance.primaryFocus?.debugLabel,
+        'pos cart quantity',
+      );
+      expect(qtyAt(tester).text, '1');
+    });
+
+    testWidgets('a typed quantity replaces the default in one keystroke', (
+      tester,
+    ) async {
+      await pumpCounter(tester, FakeSalesRepository());
+      await _addLine(tester);
+
+      // `enterText` writes the whole value, which is the *outcome* of typing over a
+      // selection - and the selection above is what makes it one keystroke.
+      await _type(tester, 'Qty', '7');
+      expect(qtyAt(tester).text, '7');
+
+      await _type(tester, 'Qty', '10');
+      expect(qtyAt(tester).text, '10');
+
+      await _type(tester, 'Qty', '100');
+      expect(qtyAt(tester).text, '100');
+    });
+
+    testWidgets('the typed quantity is the one the bill is written with', (
+      tester,
+    ) async {
+      final sales = FakeSalesRepository();
+      // The basket is checked against stock before the write, so a line with no available
+      // units is refused rather than ticked off - the fake has to say there are some.
+      final products = FakeProductsRepository(products: const <Product>[])
+        ..batchQuantities['batch-1'] = 10;
+      await pumpSalesApp(
+        tester,
+        repository: sales,
+        products: products,
+        searchResults: <Product>[buildProduct('Dolo 650')],
+        batches: <BatchStatus>[_batch()],
+        customers: <Customer>[_patient()],
+        initialLocation: Routes.pos,
+      );
+      await _addLine(tester);
+
+      await _type(tester, 'Qty', '7');
+      await _choosePatient(tester);
+      await tester.tap(find.widgetWithText(ElevatedButton, 'Take payment'));
+      await tester.pumpAndSettle();
+      await _confirm(tester);
+
+      expect(
+        sales.checkouts.single.lines.single.qty,
+        7,
+        reason: 'the field is not a decoration: its number is the payload',
+      );
+    });
+
+    testWidgets('an emptied quantity keeps the line, and blur puts it back', (
+      tester,
+    ) async {
+      await pumpCounter(tester, FakeSalesRepository());
+      await _addLine(tester);
+
+      await _type(tester, 'Qty', '');
+
+      // The bug this replaces: the field reported zero, and zero removed the line.
+      expect(find.text('Dolo 650'), findsOneWidget);
+      expect(qtyAt(tester).text, isEmpty);
+
+      // Leaving the field settles it, silently, on the line's own number.
+      FocusManager.instance.primaryFocus?.unfocus();
+      await tester.pumpAndSettle();
+
+      expect(find.text('Dolo 650'), findsOneWidget);
+      expect(qtyAt(tester).text, '1');
+    });
+
+    testWidgets('Escape returns to the search without touching the basket', (
+      tester,
+    ) async {
+      await pumpCounter(tester, FakeSalesRepository());
+      await _addLine(tester);
+
+      await _key(tester, LogicalKeyboardKey.escape);
+
+      expect(FocusManager.instance.primaryFocus?.debugLabel, 'pos search');
+      expect(
+        find.text('Dolo 650'),
+        findsOneWidget,
+        reason: 'Escape steps out of the field; it is not an undo for the line',
+      );
+      expect(qtyAt(tester).text, '1');
+    });
+  });
+
   group('the confirmation', () {
     testWidgets('shows the bill before it is written, and can be cancelled', (
       tester,

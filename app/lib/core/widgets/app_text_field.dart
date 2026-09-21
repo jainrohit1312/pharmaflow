@@ -26,6 +26,8 @@ class AppTextField extends StatefulWidget {
     this.suffix,
     this.maxLines = 1,
     this.textCapitalization = TextCapitalization.none,
+    this.focusNode,
+    this.onTap,
   });
 
   /// Controller holding the field's text and selection.
@@ -77,6 +79,20 @@ class AppTextField extends StatefulWidget {
   /// Capitalisation applied by the soft keyboard.
   final TextCapitalization textCapitalization;
 
+  /// The node the field's focus is held by, when a caller needs to drive it.
+  ///
+  /// Optional, like `AppSearchField`'s: a field that has to be focused from outside - the
+  /// counter sends the caret to a line's quantity once the line is rung up - needs to own
+  /// its node rather than let the framework make one privately.
+  final FocusNode? focusNode;
+
+  /// Called when the field is tapped, before the caret is placed.
+  ///
+  /// Used by the counter's quantity field to select what is already in it, so a **tapped**
+  /// field behaves the way a tabbed-into one does - the same select-all a desktop user gets
+  /// for free.
+  final VoidCallback? onTap;
+
   @override
   State<AppTextField> createState() => _AppTextFieldState();
 }
@@ -95,6 +111,7 @@ class _AppTextFieldState extends State<AppTextField> {
     return TextFormField(
       controller: widget.controller,
       enabled: widget.enabled,
+      focusNode: widget.focusNode,
       obscureText: _isObscured,
       keyboardType: widget.keyboardType,
       textInputAction: widget.textInputAction,
@@ -104,6 +121,7 @@ class _AppTextFieldState extends State<AppTextField> {
       validator: widget.validator,
       onChanged: widget.onChanged,
       onFieldSubmitted: widget.onSubmitted,
+      onTap: widget.onTap,
       decoration: InputDecoration(
         labelText: widget.label,
         hintText: widget.hint,

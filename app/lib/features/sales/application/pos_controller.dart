@@ -542,10 +542,17 @@ class PosController extends _$PosController {
     ]);
   }
 
-  /// Sets a line's quantity, removing it at zero.
+  /// Sets a line's quantity.
+  ///
+  /// **A quantity that is not a positive number changes nothing.** It used to remove the
+  /// line, and that is what made Backspace on a default `1` delete the row out from under
+  /// the operator: an emptied field parses to no number, no number became zero, and zero was
+  /// read as "drop this line". D-078 gives removal to exactly two controls - the line's own
+  /// delete button and Delete while the caret is on the line - so a field that cannot answer
+  /// yet leaves the line as it stands, and puts the line's own number back when the caret
+  /// leaves it.
   void setQty(String batchId, int qty) {
     if (qty <= 0) {
-      removeLine(batchId);
       return;
     }
     _replace(batchId, (line) => line.copyWith(qty: qty));
