@@ -120,6 +120,22 @@ phase**, and nothing in this work can substitute for it:
 
 - `pos_cart_line.dart`: **name + batch + qty + total on one row**; rate/discount/slab leave the
   line entirely (the discount is bill-level now, and the rate is the batch's own).
+- **The basket's own frame, not only its lines** (owner, 2026-09-21, with a screenshot he
+  attached - which the session could not read, so this is his sentence, verbatim): *"jo basket hai
+  usko bhi inline karna hai, ye bhaut jagah gher raha hai screen par"*. That is the `SectionCard`
+  around the lines, its title row and the trailing `Clear` button, the `Divider` between lines and
+  the 16px gaps - all of it costs the vertical space the medicines need. **Measure it on the
+  counter's own 360x800 pass rather than by eye**: the number that matters is how many medicines
+  fit on one screen, so check that number before and after.
+- **What must survive the squeeze**, because every one of these has a test and a reason: each line
+  still shows the quantity and its own total; the batch and its expiry stay visible (a Drug-Rules
+  line, and 145 of the owner's batches have no expiry - those print `unknown`, never a fake date);
+  the icon controls stay at least 44px for a thumb; and the whole keyboard contract is untouched -
+  the caret goes to a newly added line's quantity with the number **selected**, an emptied
+  quantity **keeps the line**, **Enter returns to the search**, **Tab moves on** and leaves for the
+  payment card after the last quantity, and **Delete** takes the line the caret is on. The
+  traversal bands are the fragile part: a quantity must sort above every one of a line's own
+  controls, or Tab lands on the line instead of the money.
 - Keep every contract that already holds and is asserted: the caret goes to a newly added line's
   quantity with the number **selected**; an emptied quantity **keeps the line** and settles back
   on blur; **Enter returns to the search**, **Tab moves on** (and leaves the basket for payment
