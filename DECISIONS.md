@@ -4215,3 +4215,124 @@ in the operation's confirmation dialog, and in the enum's comment.
   posted when it was raised, which is exactly what D-087 tells the owner before he decides.
 
 
+---
+
+## D-088 — The Dispatch Waits on N-1, and a Stale Ask Is Closed Rather Than Expired
+
+**Date:** 2026-09-22
+
+**Status:** Active (Phase 6.5c chunk 6 — built; commits `d0a9639` (migration `20260922000048`),
+`55ad192` (migration `20260922000049`) and `0fbfc25`, all pushed to hosted, which now reads 49 = 49)
+
+**Decision:** The chunk's two open questions — the one chunk 5a-c left when it built the expense
+notification, and the one chunk 3 left when it noticed that a stale request never leaves the owner's
+list — are answered together, because they are both about what the schema does when it is not
+answering a question.
+
+### 1. The expense notification's dispatch waits on N-1, and the email leg's address was built
+
+Chunk 5a-c built the telling and stopped at the seam: a trigger on `expenses` queues the in-app row
+into the owner's inbox and a WhatsApp delivery-log row when his profile carries a number, and nothing
+dispatches either. The rail's own shape is **queue → call → settle**, and the call cannot be inside
+the transaction that opens the row — a transaction held open across a round trip to Meta is a lock
+held for their latency — so the honest dispatcher is **outside the database**. Each candidate was
+costed, and each pays with something this project does not have:
+
+- **A `pg_net` trigger fired from the queue row** needs a caller identity for a function that
+  authenticates the CALLER and builds its client from that caller's own token (D-004). A trigger has
+  no user, so it could only reach `send-notification` by holding the `service_role` key in the
+  database — a credential this project has deliberately never used — and `pg_net` is not enabled here
+  either. Cost: **a credential the project does not have.**
+- **A scheduled Edge Function** needs a schedule, and there is none anywhere: no `pg_cron`, no
+  `pg_net`, no `net.http_post`, no `cron.schedule`, no cron section in `supabase/config.toml`, and no
+  caller of `send-notification` in the whole repository except a human running the deployment probe.
+  Cost: **a schedule nothing runs.**
+- **The app calling it after a write** is a screen, and a session holding a token can bypass a screen
+  — the same reasoning the trigger exists for. Worse, it would not settle the queued row:
+  `send-notification` opens its OWN log row through `queue_notification` before it calls the
+  provider, so a client that dispatched a queued row would leave **two rows claiming one message**.
+  Cost: **a screen a session can bypass, and a second row for one attempt.**
+
+Behind all three stands the real blocker: with no `WHATSAPP_TOKEN` and no `SENDGRID_API_KEY` (N-1),
+every attempt answers `skipped` and names the missing secret, so a dispatcher built today would fill
+the log with `skipped` rows and reach nobody.
+
+**So the dispatch waits on N-1, and what chunk 6 built is the part that does not wait: the address
+the email leg was missing.** `profiles` carried a phone and no email, which is why chunk 5a-c queued
+no email row — and a row for a destination that does not exist would claim an attempt that could
+never happen. `profiles.email` now exists, **backfilled from `auth.users.email`** and copied on
+signup by `handle_new_user()` exactly as `phone` has been since 00010; the trigger queues the email
+leg under the act's own title as its subject; and the rule it already followed — one delivery-log row
+per channel the account can be REACHED on, and none for a channel it cannot — now covers both
+channels D-085 named.
+
+**The rule is in the schema's own comment, not in a chat log.** `notification_status` had never had
+a comment, and it is exactly where a reader asks what `queued` means. It now says that `queued` means
+the message is **owed** and not sent, that nothing dispatches it yet, and why each candidate for the
+dispatcher was rejected. `notification_logs.status`'s own comment says the same wherever an operator
+reads it.
+
+**Consequences:**
+
+- **`profiles.email` is granted to `authenticated` on the same ROWS `profiles.phone` already is** —
+  a user's own, or an owner's over his pharmacy (00012's pair of policies, neither touched). The
+  grant adds a COLUMN to what a caller may change on a row he could already reach; it does not widen
+  which rows he can reach, and a cashier still cannot touch a colleague.
+- **Nothing is gated, nothing is revoked, and `expenses` keeps its writes**: D-085 settled that
+  recording an expense is free for every role, and this notification IS the control for it.
+- **A dispatcher remains to be built** when N-1 resolves; the seam it has to use is
+  `send-notification` and the rows it has to settle are already in `notification_logs` as `queued`.
+
+### 2. A stale ask is CLOSED when its document washes it out, through ONE closure
+
+A request whose document moved on between the ask and the answer is **refused, not applied** —
+chunks 3, 4, 5 and 5d all assert it — and it stayed `pending`, so the owner's list could hold a
+question he can never usefully answer: he taps Approve, the executor's own shape check refuses it,
+the transaction rolls back, and the row is exactly where it was. Tapping again fails the same way.
+
+Three answers were possible:
+
+- **An expiry (`expires_at` + a sweep) is impossible here**, and not for want of design: a sweep is a
+  SCHEDULE, and this project has none (part 1 above). An expiry without a sweep leaves a column
+  nothing reads and a row that never leaves the list — the same stuck row wearing a date.
+- **Leaving it, with the refusal as the answer**, is honest about the write and leaves the module
+  disagreeing with itself: every chunk since 3 has acted on "a decision he can never usefully take is
+  a stuck row, not a question".
+- **Closing it when its document changes** is what chunk 3 built for a purchase and chunk 5d built
+  for a cancelled bill. **CHOSEN**, with the machinery generalised rather than copied a third time.
+
+`approval_close_target_asks(p_target_table, p_target_id, p_note, p_action_types, p_except)` replaces
+`approval_close_purchase_asks()` — which is **DROPPED**, because two functions that close the pending
+asks about a document are two mechanisms for one action — and every caller routes through it:
+`save_purchase()` (both of its closures), `decide_approval()` (the cancelled-purchase one) and
+`cancel_sale()` (its inline update, which was the second implementation of the same rule).
+
+**Which asks a change washes out is knowledge that belongs at the DOOR that made the change**, so the
+function takes an optional action-type list and each caller names its own. That is what makes the one
+NEW call site correct: `record_sale_return()` closes the bill's **cancellation** ask the moment a
+return is written, because `document_payload_problem()` refuses exactly that state for ever after —
+while the **identity edit** about the same bill is left standing, because a return does not touch the
+printed details. Closing everything about the document would have answered a question that was still
+perfectly answerable.
+
+**Consequences:**
+
+- **The closure runs in the owner's branch of `record_sale_return()`**, which is also the branch
+  `document_apply_decision()` performs — so an approved return closes the ask at the moment the
+  return is actually written, which is the moment the bill moves on. A staff return writes nothing
+  and so closes nothing.
+- **A staff ask the owner has simply SUPERSEDED is deliberately NOT closed** (he edited the product
+  himself, so their edit is redundant). That ask can still be acted on and approving it re-applies a
+  document he can read in full — a no-op rather than a lie — and for the master data there is no ask
+  that can no longer be ANSWERED, which is what this policy is about.
+- **The rule is stated where the row lives**: the `approval_requests` table's own comment now carries
+  the LIFECYCLE paragraph — pending does not expire, a document's own change closes the questions it
+  washes out, and the ONE closure does it.
+- **Two asks about a purchase that a fixture moves OUT OF BAND still fail on the tap and stay
+  pending** (`phase6_5c_purchases.sql` §15 pins it): every door in the application closes its asks,
+  and a status moved by a direct write is not a door. The refusal is kept, and is the honest answer
+  for a document nothing in the application could have moved.
+- **`sale_edit`/`sale_cancel`'s asks are refreshed rather than stacked**, unchanged: the same
+  document keeps one undecided question per action type.
+
+
