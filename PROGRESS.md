@@ -264,8 +264,16 @@ brief first** (`context/chatbot-owner-brief.md`, D-089): Phase A of it is **part
 `f9be7d1`, `83cecc6`, `a4022d1` and `f3ba021` — readable answers, a summary that leads on what was
 asked, all three of the brief's wording/count/horizon defects closed, and the answer sayable in
 Hinglish — **pushed and deployed** (`chat-sql-agent` was redeployed to hosted the same day), with the
-follow-up chips, the exact-totals envelope and Hindi script still to come. **The receiver app is still
-what the plan's sequence names next.**
+follow-up chips, the exact-totals envelope and Hindi script still to come.
+**The owner settled the order on 2026-09-22, and it is now recorded here rather than in a chat:** *"chatbot
+phase hi complete krna hai 1 milion context ke hisab se kro, aur kahi bhi rukna na pade"* and *"receviver
+app wala 6.5b abhi ni krna hai wo bilkul last me krenge"* — so **the chatbot phase is finished first, in
+one long session, and Phase 6.5b is postponed to the very end** (and Phase 7b/7c wait behind it).
+**`context/chat3w-opening-prompt.md` is that session's brief**: no approval gate, the decisions that would
+have blocked it pre-made inside the file (the `{meta, rows}` envelope for the two alert reports and its
+alert-screen carry; `Asia/Kolkata` as the business clock; Hindi script only if the window is wide), and
+pushing, deploying and live testing authorised by the owner (*"agat testing krni hai to, wo tum kr skte
+ho"*). **The receiver app is the plan's next PHASE, but it is the owner's "bilkul last".**
 **PHASE 6.5a DONE** (2026-09-20 — the opening stock import, D-065/D-066). **PHASE 6 IN PROGRESS**
 (chunk 3 of n, done; `context/chat3n-summary.md`).
 **Overall Status:** Phases 0-5 done and gated; Phase 6 chunks 1-3 done and gated; **Phase 6.5c

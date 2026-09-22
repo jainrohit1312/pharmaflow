@@ -147,8 +147,12 @@ message are right. It is recorded in `PROGRESS.md` under "Baseline correction".
 
 ## What's next
 
-`context/chat3w-opening-prompt.md` — **finish Phase A** of the chatbot brief: the follow-up chips and the
-exact-totals envelope (and Hindi script, if he wants it); then Phase B onward of
-`context/chatbot-owner-brief.md`. **The plan's own sequence still names Phase 6.5b (the receiver app)** as
-the next phase, and `MASTER_PLAN.md` has only a stub for it — so if the owner's sequence has moved back
-there, that session opens by asking what the receiver app IS.
+`context/chat3w-opening-prompt.md` — **finish the chatbot phase** in one long session, with no approval
+gate: the exact-totals `{meta, rows}` envelope (and its alert-screen carry), the follow-up chips, the
+business clock, Hindi script if the window is wide, and **a live answer-path probe**, which the owner has
+authorised. Then Phase B onward of `context/chatbot-owner-brief.md`.
+
+**The owner settled the order on 2026-09-22**, after this summary was first written: **Phase 6.5b (the
+receiver app) is postponed to the very end** — *"receviver app wala 6.5b abhi ni krna hai wo bilkul last
+me krenge"* — and Phase 7b/7c wait behind it. So the plan's own sequence resumes only when the chatbot
+phase is finished and he says the receiver app's turn has come.
