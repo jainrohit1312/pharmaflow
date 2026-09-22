@@ -17,7 +17,9 @@ part 'low_stock_controller.g.dart';
 /// The answer is `low_stock_products()`'s own payload, and both the order and
 /// the comparison are its (D-047): the RPC decides "below its level", orders by
 /// shortfall and hands back the shortfall itself, so nothing here decides it in
-/// Dart over a page of rows (I-1).
+/// Dart over a page of rows (I-1). It also hands back **how many there are** - the page
+/// it sent is one page of that set - which is why the answer is an [AlertPage]: the tab
+/// can then say when it is showing only the worst of them.
 ///
 /// The scope is watched rather than read, and it is watched to *gate* the read:
 /// the RPC takes the tenant from the caller's JWT (D-004), so `pharmacyId` is
@@ -26,7 +28,7 @@ part 'low_stock_controller.g.dart';
 /// "loading and empty must not look alike" rule the sale-return picker broke
 /// (T-5).
 @riverpod
-Future<List<LowStockProduct>> lowStockList(Ref ref) async {
+Future<AlertPage<LowStockProduct>> lowStockList(Ref ref) async {
   final pharmacyId = ref.watch(requirePharmacyIdProvider);
   return ref
       .watch(inventoryRepositoryProvider)

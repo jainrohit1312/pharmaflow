@@ -73,6 +73,21 @@ ExpiringBatch buildExpiringBatch({
   qty: qty,
 );
 
+/// An in-memory [AlertPage] over [rows].
+///
+/// Both alert fakes build their pages through this, because the envelope is the contract
+/// now (migration 00050): a fake that answered with a bare list would let a screen that
+/// needs the totals keep compiling while it silently truncates.
+///
+/// [totalCount] defaults to the rows held, which is the honest "this is all of it"; pass a
+/// bigger number to stand in for a report that found more than it returned.
+AlertPage<T> buildAlertPage<T>(List<T> rows, {int? totalCount}) => AlertPage<T>(
+  rows: rows,
+  totalCount: totalCount ?? rows.length,
+  returnedCount: rows.length,
+  hasMore: (totalCount ?? rows.length) > rows.length,
+);
+
 /// An in-memory [NotificationsRepository] for the screen and controller tests.
 ///
 /// Implemented with `implements` plus `noSuchMethod` rather than by subclassing:
@@ -101,6 +116,12 @@ class FakeNotificationsRepository implements NotificationsRepository {
 
   /// What the expiry RPC answers.
   List<ExpiringBatch> expiringBatches;
+
+  /// The whole low-stock set the report claims, when it is bigger than [lowStockProducts].
+  int? lowStockTotal;
+
+  /// The whole expiry set the report claims, when it is bigger than [expiringBatches].
+  int? expiringTotal;
 
   /// When set, `list` throws it until the test clears it.
   ///
@@ -155,18 +176,18 @@ class FakeNotificationsRepository implements NotificationsRepository {
   }
 
   @override
-  Future<List<LowStockProduct>> lowStock({
+  Future<AlertPage<LowStockProduct>> lowStock({
     int limit = NotificationsRepository.alertLimit,
   }) async {
     final error = lowStockError;
     if (error != null) {
       throw error;
     }
-    return lowStockProducts;
+    return buildAlertPage(lowStockProducts, totalCount: lowStockTotal);
   }
 
   @override
-  Future<List<ExpiringBatch>> expiring({
+  Future<AlertPage<ExpiringBatch>> expiring({
     int days = NotificationsRepository.expiryHorizonDays,
     int limit = NotificationsRepository.alertLimit,
   }) async {
@@ -174,7 +195,7 @@ class FakeNotificationsRepository implements NotificationsRepository {
     if (error != null) {
       throw error;
     }
-    return expiringBatches;
+    return buildAlertPage(expiringBatches, totalCount: expiringTotal);
   }
 
   @override

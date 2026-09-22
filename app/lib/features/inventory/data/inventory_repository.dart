@@ -156,11 +156,15 @@ class InventoryRepository {
   /// and the answer carries the shortfall, so the list can say how many units
   /// close the gap rather than only what is low.
   ///
-  /// One round trip to `low_stock_products()` (migration 20260919000027), the
-  /// same RPC the notifications list and the chatbot read (D-047): the
-  /// comparison PostgREST cannot express, the order and the shortfall all
+  /// One round trip to `low_stock_products()` (migrations 20260919000027 and
+  /// 20260922000050), the same RPC the notifications list and the chatbot read (D-047):
+  /// the comparison PostgREST cannot express, the order and the shortfall all
   /// arrive decided, so nothing here scans a page and compares two columns in
   /// Dart (I-1).
+  ///
+  /// The answer is an [AlertPage], so this read can say whether the [lowStockLimit] rows
+  /// it asked for are the whole list or a page of one - which is the one thing a bare
+  /// `jsonb` array could never tell a screen.
   ///
   /// [pharmacyId] is deliberately **not** sent - the RPC takes the tenant from
   /// the caller's own JWT (`get_my_pharmacy_id()`, D-004), which is what keeps
@@ -169,19 +173,31 @@ class InventoryRepository {
   /// way, and the provider that calls it still waits for the scope to be known
   /// before asking: a tab that answered "nothing is low" while the profile was
   /// still loading would be T-5's mistake in a new place.
-  Future<List<LowStockProduct>> lowStock({required String pharmacyId}) async {
+  Future<AlertPage<LowStockProduct>> lowStock({
+    required String pharmacyId,
+  }) async {
     try {
       final data = await _client.rpc<dynamic>(
         'low_stock_products',
         params: <String, dynamic>{'p_limit': lowStockLimit},
       );
-      return lowStockProductsFrom(data);
+      final page = lowStockPageFrom(data);
+      if (page == null) {
+        throw const ServerException(
+          message:
+              'The reorder list came back in a shape this app does not understand.',
+        );
+      }
+      return page;
     } on sb.PostgrestException catch (error) {
       throw mapPostgrestException(
         error,
         fallbackMessage: 'Unable to load the low-stock list.',
       );
     } on Object catch (error) {
+      if (error is AppException) {
+        rethrow;
+      }
       throw ServerException(
         message: 'Unable to load the low-stock list.',
         cause: error,

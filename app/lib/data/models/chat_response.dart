@@ -223,22 +223,30 @@ String _askedNote(String key, String value) => switch (key) {
   _ => '${key.replaceFirst('p_', '').replaceAll('_', ' ')} $value',
 };
 
-/// The caveats a report states about its own answer, in its own `meta`.
+/// The caveats a report states about its own answer, in its own envelope.
 ///
-/// Kept to what a sentence does *not* say: `top_products` and `dead_stock` state
-/// their window and metric in the sentence already (rendered server-side from this
-/// same `meta`), while `returns_not_netted` has no sentence anywhere — which is
-/// exactly why D-053 put it in the envelope.
+/// Kept to what a sentence does *not* say: the list reports state their window, horizon and
+/// total in the sentence already (rendered server-side from this same envelope), while
+/// `returns_not_netted` has no sentence anywhere - which is exactly why D-053 put it in
+/// `meta`. **Which day "today" was**, added with the business clock (migration
+/// 20260922000050), is the other one: every report that means "today" resolved it in the
+/// pharmacy's own zone, and a period is meaningless without the boundary it was cut at - so a
+/// reader of an "aaj" figure can see which day that was.
+///
+/// The metadata is read from wherever the envelope puts it: the four reports that answer
+/// `{meta, rows}` nest it, and `report_summary` is a flat object whose `as_of` and `timezone`
+/// sit beside its `from` and `to`. One rule, both shapes.
 Iterable<String> _caveats(Object? data) {
   if (data is! Map) {
     return const <String>[];
   }
-  final meta = data['meta'];
-  if (meta is! Map) {
-    return const <String>[];
-  }
+  final meta = data['meta'] is Map ? data['meta'] as Map : data;
+  final asOf = _text(meta['as_of']);
+  final timezone = _text(meta['timezone']);
+
   return <String>[
     if (meta['returns_not_netted'] == true) 'returns are not subtracted',
+    if (asOf != null) 'as of $asOf${timezone == null ? '' : ' ($timezone)'}',
   ];
 }
 

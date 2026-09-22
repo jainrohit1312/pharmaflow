@@ -16,12 +16,15 @@ import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 part 'alert_providers.g.dart';
 
-/// What is at or below its reorder level, worst first.
+/// What is below its reorder level, worst first.
+///
+/// The whole answer, not just the rows: the report states how big the set was (migration
+/// 00050), and the screen is the place that says whether it is showing all of it.
 @riverpod
-Future<List<LowStockProduct>> lowStockAlerts(Ref ref) =>
+Future<AlertPage<LowStockProduct>> lowStockAlerts(Ref ref) =>
     ref.watch(notificationsRepositoryProvider).lowStock();
 
 /// What has stock left and expires inside the horizon, soonest first.
 @riverpod
-Future<List<ExpiringBatch>> expiringAlerts(Ref ref) =>
+Future<AlertPage<ExpiringBatch>> expiringAlerts(Ref ref) =>
     ref.watch(notificationsRepositoryProvider).expiring();

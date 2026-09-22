@@ -86,6 +86,45 @@ void main() {
     );
   });
 
+  testWidgets('a reorder list that is only the worst of them says so', (
+    tester,
+  ) async {
+    // `low_stock_products` states how many there are in total (migration 00050). The tab asks
+    // for 200 (the server's own ceiling), so this is the case where the pharmacy has more than
+    // one page of low stock - and a list that stops at 200 without saying so reads as the whole
+    // list.
+    await pumpInventoryApp(
+      tester,
+      repository: FakeInventoryRepository(
+        stock: <ProductStock>[
+          buildStock(name: 'Paracetamol', totalQty: 2, minStockLevel: 10),
+        ],
+      )..lowStockTotal = 315,
+    );
+
+    await _openTab(tester, 'Low stock');
+
+    expect(find.text('Showing the 1 worst of 315'), findsOneWidget);
+  });
+
+  testWidgets('a complete reorder list carries no "showing" caption', (
+    tester,
+  ) async {
+    await pumpInventoryApp(
+      tester,
+      repository: FakeInventoryRepository(
+        stock: <ProductStock>[
+          buildStock(name: 'Paracetamol', totalQty: 2, minStockLevel: 10),
+        ],
+      ),
+    );
+
+    await _openTab(tester, 'Low stock');
+
+    expect(find.text('Paracetamol'), findsOneWidget);
+    expect(find.textContaining('Showing the'), findsNothing);
+  });
+
   testWidgets('leads with the worst shortfall and cannot show a stock value', (
     tester,
   ) async {

@@ -11,8 +11,10 @@
 ///     tenant filter would be a second, weaker copy of a rule the database already
 ///     enforces (D-015 governs tenant tables; this is not one).
 ///   - **The alerts are read from the RPCs, never re-derived here** (D-047). They
-///     answer with a `jsonb` array and take the tenant from `get_my_pharmacy_id()`
-///     on the server, so nothing in this file knows a pharmacy id.
+///     answer `{meta, rows}` and take the tenant from `get_my_pharmacy_id()` on the
+///     server, so nothing in this file knows a pharmacy id. The envelope's own totals
+///     travel with the rows (`AlertPage`), because a screen that cannot say whether its
+///     list is the whole of it is a screen that quietly truncates.
 ///   - **`read_at` carries the device's clock**, because PostgREST cannot call
 ///     `now()` and a database function for one timestamp would be a migration for
 ///     nothing. Nothing reads the value except "is it null", so the drift cannot be
@@ -111,52 +113,62 @@ class NotificationsRepository {
     }
   }
 
-  /// What is at or below its reorder level, worst first (`low_stock_products`).
-  Future<List<LowStockProduct>> lowStock({int limit = alertLimit}) async {
-    final data = await _call(
-      'low_stock_products',
-      <String, dynamic>{'p_limit': limit},
-      failure: 'Unable to check which products are low.',
-      shape:
-          'The stock alert came back in a shape this app does not understand.',
-    );
-
-    return lowStockProductsFrom(data);
-  }
+  /// What is below its reorder level, worst first (`low_stock_products`).
+  ///
+  /// The answer is an [AlertPage] rather than a list because the report states how big the
+  /// whole set was (migration 00050): the screen asks for [alertLimit] rows, and a page that
+  /// is short of the total is a page - which a plain list could not say.
+  Future<AlertPage<LowStockProduct>> lowStock({
+    int limit = alertLimit,
+  }) => _page(
+    'low_stock_products',
+    <String, dynamic>{'p_limit': limit},
+    failure: 'Unable to check which products are low.',
+    shape: 'The stock alert came back in a shape this app does not understand.',
+    decode: lowStockPageFrom,
+  );
 
   /// What has stock left and expires inside [days] (`expiring_batches`).
-  Future<List<ExpiringBatch>> expiring({
+  Future<AlertPage<ExpiringBatch>> expiring({
     int days = expiryHorizonDays,
     int limit = alertLimit,
-  }) async {
-    final data = await _call(
-      'expiring_batches',
-      <String, dynamic>{'p_days': days, 'p_limit': limit},
-      failure: 'Unable to check what is expiring.',
-      shape:
-          'The expiry alert came back in a shape this app does not understand.',
-    );
+  }) => _page(
+    'expiring_batches',
+    <String, dynamic>{'p_days': days, 'p_limit': limit},
+    failure: 'Unable to check what is expiring.',
+    shape:
+        'The expiry alert came back in a shape this app does not understand.',
+    decode: expiringBatchesPageFrom,
+  );
 
-    return expiringBatchesFrom(data);
-  }
-
-  /// One alert RPC, with its failures classified and its shape checked.
+  /// One alert RPC and its envelope, with both failures classified.
   ///
-  /// The shape check is not the decoder's: an answer that is not a list must not
-  /// read as "nothing is low on stock", because that is the one wrong answer a
-  /// pharmacy would act on. It is a failure, and the screen says so.
-  Future<Object?> _call(
+  /// The shape check is not the decoder's: an answer that is not the `{meta, rows}` the
+  /// report promises must not read as "nothing is low on stock", because that is the one
+  /// wrong answer a pharmacy would act on. It is a failure, and the screen says so.
+  Future<AlertPage<T>> _page<T>(
     String function,
     Map<String, dynamic> params, {
     required String failure,
     required String shape,
+    required AlertPage<T>? Function(Object?) decode,
+  }) async {
+    final data = await _call(function, params, failure: failure);
+    final page = decode(data);
+    if (page == null) {
+      throw ServerException(message: shape);
+    }
+    return page;
+  }
+
+  /// One alert RPC, with its failures classified.
+  Future<Object?> _call(
+    String function,
+    Map<String, dynamic> params, {
+    required String failure,
   }) async {
     try {
-      final data = await _client.rpc<dynamic>(function, params: params);
-      if (data is! List) {
-        throw ServerException(message: shape);
-      }
-      return data;
+      return await _client.rpc<dynamic>(function, params: params);
     } on sb.PostgrestException catch (error) {
       throw mapPostgrestException(error, fallbackMessage: failure);
     } on Object catch (error) {

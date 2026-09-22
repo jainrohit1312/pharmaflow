@@ -254,6 +254,39 @@ void main() {
       expect(find.text('Order 1 unit'), findsOneWidget);
     });
 
+    testWidgets('a section that is only part of the list says so', (
+      tester,
+    ) async {
+      // The envelope states the whole set's size (migration 00050). A screen that holds 200
+      // of 315 low products and says nothing is a screen that quietly truncates - which is the
+      // one thing a reader could act on wrongly.
+      final repository =
+          FakeNotificationsRepository(
+              lowStockProducts: <LowStockProduct>[buildLowStockProduct()],
+              expiringBatches: <ExpiringBatch>[buildExpiringBatch()],
+            )
+            ..lowStockTotal = 120
+            ..expiringTotal = 96;
+      await pumpNotificationsApp(tester, notifications: repository);
+
+      expect(find.text('Showing the 1 worst of 120'), findsOneWidget);
+      expect(find.text('Showing the 1 soonest of 96'), findsOneWidget);
+    });
+
+    testWidgets('a list that is the whole set carries no "showing" caption', (
+      tester,
+    ) async {
+      // The other half of the rule: a caption on a complete list would be noise, and would
+      // teach a reader to ignore the one that matters.
+      final repository = FakeNotificationsRepository(
+        lowStockProducts: <LowStockProduct>[buildLowStockProduct()],
+        expiringBatches: <ExpiringBatch>[buildExpiringBatch()],
+      );
+      await pumpNotificationsApp(tester, notifications: repository);
+
+      expect(find.textContaining('Showing the'), findsNothing);
+    });
+
     testWidgets(
       'expiry renders the batch, and an expired one is coloured as gone',
       (tester) async {

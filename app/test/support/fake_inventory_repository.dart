@@ -9,6 +9,7 @@ import 'package:app/data/models/product_stock.dart';
 import 'package:app/data/models/stock_adjustment.dart';
 import 'package:app/data/models/write_outcome.dart';
 import 'package:app/features/inventory/data/inventory_repository.dart';
+import 'fake_notifications_repository.dart' show buildAlertPage;
 
 /// Builds a `product_stock` row with only the fields a test cares about.
 ProductStock buildStock({
@@ -117,6 +118,10 @@ class FakeInventoryRepository implements InventoryRepository {
   /// Whether writes land (the owner) or are raised as requests (everybody else).
   final bool isOwner;
 
+  /// The whole low-stock set the report claims, when it is bigger than the rows the fake
+  /// derives - for the case where `low_stock_products` found more than it returned.
+  int? lowStockTotal;
+
   /// How many corrections the fake sent to the owner instead of writing.
   int stagedSubmissions = 0;
 
@@ -175,7 +180,9 @@ class FakeInventoryRepository implements InventoryRepository {
   }
 
   @override
-  Future<List<LowStockProduct>> lowStock({required String pharmacyId}) async {
+  Future<AlertPage<LowStockProduct>> lowStock({
+    required String pharmacyId,
+  }) async {
     // The server's own rule, in the server's own order: below its level, with
     // a level configured, worst shortfall first and name breaking the tie
     // (migration 20260919000027). The real repository asks the RPC for exactly
@@ -193,10 +200,14 @@ class FakeInventoryRepository implements InventoryRepository {
           ),
         )
         .toList(growable: false);
-    return products..sort((a, b) {
-      final byShortfall = b.shortfall.compareTo(a.shortfall);
-      return byShortfall != 0 ? byShortfall : a.name.compareTo(b.name);
-    });
+    // The envelope the report sends (migration 00050): the whole set's size beside the page's.
+    return buildAlertPage(
+      products..sort((a, b) {
+        final byShortfall = b.shortfall.compareTo(a.shortfall);
+        return byShortfall != 0 ? byShortfall : a.name.compareTo(b.name);
+      }),
+      totalCount: lowStockTotal,
+    );
   }
 
   @override

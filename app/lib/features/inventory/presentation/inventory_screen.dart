@@ -255,8 +255,8 @@ class _LowStockTab extends ConsumerWidget {
     final rows = ref.watch(lowStockListProvider);
 
     if (rows.hasValue) {
-      final items = rows.value!;
-      if (items.isEmpty) {
+      final page = rows.value!;
+      if (page.rows.isEmpty) {
         return const AppEmptyView(
           icon: Icons.check_circle_outline,
           title: 'Nothing is below its level',
@@ -267,10 +267,18 @@ class _LowStockTab extends ConsumerWidget {
       }
       return ListView.separated(
         padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
-        itemCount: items.length,
+        // One extra row when the report said there are more than it sent: a list that stops
+        // at 200 of 315 says so, rather than reading as the whole list (migration 00050).
+        itemCount: page.rows.length + (page.hasMore ? 1 : 0),
         separatorBuilder: (context, index) => const SizedBox(height: 12),
         itemBuilder: (context, index) {
-          final product = items[index];
+          if (index == page.rows.length) {
+            return _MoreRowsCaption(
+              returnedCount: page.returnedCount,
+              totalCount: page.totalCount,
+            );
+          }
+          final product = page.rows[index];
           return LowStockCard(
             product: product,
             onTap: () => context.go(Routes.productDetail(product.productId)),
@@ -287,6 +295,34 @@ class _LowStockTab extends ConsumerWidget {
     }
 
     return const LoadingView(message: 'Loading the reorder list…');
+  }
+}
+
+/// The line a reorder list ends with when the report had more rows than it returned.
+class _MoreRowsCaption extends StatelessWidget {
+  const _MoreRowsCaption({
+    required this.returnedCount,
+    required this.totalCount,
+  });
+
+  /// How many rows are on screen.
+  final int returnedCount;
+
+  /// How many the report's rule selected.
+  final int totalCount;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+
+    return Padding(
+      padding: const EdgeInsets.only(top: 4),
+      child: Text(
+        'Showing the $returnedCount worst of $totalCount',
+        textAlign: TextAlign.center,
+        style: theme.textTheme.bodySmall,
+      ),
+    );
   }
 }
 

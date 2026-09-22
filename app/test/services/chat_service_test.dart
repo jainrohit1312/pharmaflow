@@ -346,6 +346,51 @@ void main() {
       );
     });
 
+    test('the day a report meant by "today" reaches the reader', () {
+      // The business clock (migration 20260922000050): every report that means "today"
+      // resolved it in the pharmacy's own zone, and a period is meaningless without the
+      // boundary it was cut at - so the envelope states it and this line shows it.
+      expect(
+        describeAnswerOrigin(
+          buildChatAnswer(
+            data: <String, dynamic>{
+              'meta': <String, dynamic>{
+                'rule': 'total_qty < min_stock_level',
+                'as_of': '2026-09-22',
+                'timezone': 'Asia/Kolkata',
+                'total_count': 120,
+                'returned_count': 1,
+                'has_more': true,
+              },
+              'rows': <dynamic>[
+                <String, dynamic>{'name': 'Dolo 650'},
+              ],
+            },
+          ),
+        ),
+        'Low stock products · as of 2026-09-22 (Asia/Kolkata)',
+      );
+    });
+
+    test('an envelopeless report_summary states its boundary too', () {
+      // `report_summary` is a flat envelope - no `meta` - so its `as_of` sits beside its
+      // `from` and `to`, and the same rule reads it.
+      expect(
+        describeAnswerOrigin(
+          buildChatAnswer(
+            rpc: 'report_summary',
+            data: <String, dynamic>{
+              'from': '2026-09-22',
+              'to': '2026-09-22',
+              'as_of': '2026-09-22',
+              'timezone': 'Asia/Kolkata',
+            },
+          ),
+        ),
+        'Report summary · as of 2026-09-22 (Asia/Kolkata)',
+      );
+    });
+
     test(
       'a meta that is not a map, or a data that is a list, is not a crash',
       () {

@@ -87,10 +87,22 @@ class _InboxSection extends ConsumerWidget {
 
     return _AlertSection<AppNotification>(
       title: 'Notifications',
-      value: notifications,
+      // The inbox is not one of the two envelope reports: it is a bounded read of the
+      // user's own rows with its own documented page size (`inboxLimit`), so it makes no
+      // "there is more" claim here - the flag is there so the section reads it the same way
+      // the other two are read, and it is false because this list is what the read returned.
+      value: notifications.whenData(
+        (items) => AlertPage<AppNotification>(
+          rows: items,
+          totalCount: items.length,
+          returnedCount: items.length,
+          hasMore: false,
+        ),
+      ),
       loading: 'Loading notifications…',
       empty: 'No notifications yet',
       onRetry: () => ref.invalidate(notificationsControllerProvider),
+      more: (page) => 'Showing the newest ${page.returnedCount}',
       rows: (items) => <Widget>[
         for (final notification in items)
           _NotificationTile(
@@ -176,7 +188,7 @@ class _NotificationTile extends StatelessWidget {
   }
 }
 
-/// What is at or below its reorder level.
+/// What is below its reorder level.
 class _LowStockSection extends ConsumerWidget {
   const _LowStockSection();
 
@@ -190,6 +202,10 @@ class _LowStockSection extends ConsumerWidget {
       loading: 'Checking stock…',
       empty: 'Nothing is below its reorder level',
       onRetry: () => ref.invalidate(lowStockAlertsProvider),
+      // The report says how many there are, so a list that is only the worst of them says
+      // so rather than reading as the whole list (migration 00050).
+      more: (page) =>
+          'Showing the ${page.returnedCount} worst of ${page.totalCount}',
       rows: (items) => <Widget>[
         for (final product in items) _LowStockTile(product: product),
       ],
@@ -244,6 +260,8 @@ class _ExpiringSection extends ConsumerWidget {
       loading: 'Checking expiry…',
       empty: 'Nothing expires in the next $days days',
       onRetry: () => ref.invalidate(expiringAlertsProvider),
+      more: (page) =>
+          'Showing the ${page.returnedCount} soonest of ${page.totalCount}',
       rows: (items) => <Widget>[
         for (final batch in items) _ExpiringTile(batch: batch),
       ],
@@ -292,6 +310,10 @@ class _ExpiringTile extends StatelessWidget {
 /// One widget for all three sections so that the three sentences cannot drift
 /// apart between them - which is exactly the bug T-5 records, where "still
 /// loading" and "nothing here" looked the same.
+///
+/// It reads an [AlertPage] rather than a list because the two envelope reports state how big
+/// the whole set was (migration 00050): a section that is showing a page of a longer list
+/// says so, which is the difference between a truncated list and a wrong one.
 class _AlertSection<T> extends StatelessWidget {
   const _AlertSection({
     required this.title,
@@ -300,13 +322,14 @@ class _AlertSection<T> extends StatelessWidget {
     required this.empty,
     required this.onRetry,
     required this.rows,
+    this.more,
   });
 
   /// The card's heading.
   final String title;
 
-  /// The read behind it.
-  final AsyncValue<List<T>> value;
+  /// The read behind it, with the totals its envelope stated.
+  final AsyncValue<AlertPage<T>> value;
 
   /// What to say while it is loading.
   final String loading;
@@ -320,6 +343,9 @@ class _AlertSection<T> extends StatelessWidget {
   /// The rows, when there are some.
   final List<Widget> Function(List<T> items) rows;
 
+  /// How to say "this is part of it", given the page. Shown only when there is more.
+  final String Function(AlertPage<T> page)? more;
+
   @override
   Widget build(BuildContext context) {
     return SectionCard(
@@ -328,9 +354,17 @@ class _AlertSection<T> extends StatelessWidget {
         loading: () => _Status(caption: loading, isBusy: true),
         error: (error, _) =>
             ErrorView(message: describeError(error), onRetry: onRetry),
-        data: (items) => items.isEmpty
+        data: (page) => page.rows.isEmpty
             ? _Status(caption: empty)
-            : Column(children: rows(items)),
+            : Column(
+                children: <Widget>[
+                  ...rows(page.rows),
+                  // Only when there really is more: a caption on a complete list would be
+                  // noise, and a caption is the one place a page admits it is a page.
+                  if (page.hasMore && more != null)
+                    _Status(caption: more!(page)),
+                ],
+              ),
       ),
     );
   }
