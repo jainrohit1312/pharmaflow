@@ -245,7 +245,10 @@ as measured. The mistake was arithmetic on my own added tests, not a run: five w
 the message named seven. `deno test` prints the authoritative number for each file.
 
 **Last Updated:** 2026-09-22
-**Current Phase:** **PHASE 7a IS DONE, and PHASE 6.5c IS COMPLETE.** Chunk 6 (`d0a9639`, `55ad192`,
+**Current Phase:** **THE OWNER'S CHATBOT BRIEF IS FINISHED THROUGH PHASE A, except Hindi script**
+(2026-09-22, migration `00050`; `c434b4a`, `707c5f0`, `9bed4ad`; hosted **50 = 50** and
+`chat-sql-agent` **version 4**) — see the paragraph below and **D-090**. **PHASE 7a IS DONE, and
+PHASE 6.5c IS COMPLETE.** Chunk 6 (`d0a9639`, `55ad192`,
 `0fbfc25`; migrations `00048` and `00049`) is pushed to hosted (**49 = 49**), each migration
 re-verified there with its own SQL test, and with it **Phase 6.5c closes: every declared action type
 is implemented or retired, every table the owner named is behind the rail, the expense notification
@@ -260,11 +263,10 @@ is not yet re-routed — `customer_edit` is already the action type that chunk w
 change the form in the same migration. **The owner's own sequence says the receiver app is next:**
 Phase 6.5b (`context/chat3r-opening-prompt.md` is answered; **PHASE 7b — hospital profit sharing —
 and 7c — the reports — follow it**). **The owner set that aside on 2026-09-22 to take up the chatbot
-brief first** (`context/chatbot-owner-brief.md`, D-089): Phase A of it is **partly done** in
+brief first** (`context/chatbot-owner-brief.md`, D-089): Phase A of it was built in
 `f9be7d1`, `83cecc6`, `a4022d1` and `f3ba021` — readable answers, a summary that leads on what was
 asked, all three of the brief's wording/count/horizon defects closed, and the answer sayable in
-Hinglish — **pushed and deployed** (`chat-sql-agent` was redeployed to hosted the same day), with the
-follow-up chips, the exact-totals envelope and Hindi script still to come.
+Hinglish — **pushed and deployed** (`chat-sql-agent` was redeployed to hosted the same day).
 **The owner settled the order on 2026-09-22, and it is now recorded here rather than in a chat:** *"chatbot
 phase hi complete krna hai 1 milion context ke hisab se kro, aur kahi bhi rukna na pade"* and *"receviver
 app wala 6.5b abhi ni krna hai wo bilkul last me krenge"* — so **the chatbot phase is finished first, in
@@ -274,15 +276,65 @@ have blocked it pre-made inside the file (the `{meta, rows}` envelope for the tw
 alert-screen carry; `Asia/Kolkata` as the business clock; Hindi script only if the window is wide), and
 pushing, deploying and live testing authorised by the owner (*"agat testing krni hai to, wo tum kr skte
 ho"*). **The receiver app is the plan's next PHASE, but it is the owner's "bilkul last".**
+
+**The chatbot's Phase A is now COMPLETE except Hindi script (2026-09-22, `c434b4a`, `707c5f0`,
+`9bed4ad`; migration `00050`, applied to hosted — 50 = 50 — and `chat-sql-agent` redeployed,
+version 4).** The session that opened on `context/chat3w-opening-prompt.md` closed the last two
+items the brief had found and the one open question behind its first acceptance scenario; all of it
+is recorded in **D-090** and summarised in `context/chat3x-summary.md`:
+
+- **`00050` gives the two alert reports their own rule and their own total.** `low_stock_products`
+  and `expiring_batches` answered a bare `jsonb` array (00027), so a caller could see how many rows
+  it got and never how many there were — and the chatbot read the page as a total. Both answer
+  `{meta, rows}` now, with `total_count` over the whole candidate set (`count(*) over ()` on the same
+  pass that cuts the page) beside `returned_count` and `has_more`; `meta.rule` states
+  `total_qty < min_stock_level` in the database's own words; `meta.horizon_days` is the **clamped**
+  horizon that ran; `dead_stock` gains the counts it never had, and `top_products` the timezone. The
+  three counting sentences in `answer.ts` now state the exact total, and say **"Showing the N worst
+  of M"** when the page is short of the set — the brief's own wording. **The app reads the envelope**:
+  `AlertPage<T>` replaces the bare list in both repositories and providers, the decoders return
+  `null` for anything that is not the envelope (silence would read as "nothing is low"), and the two
+  alert sections plus the reorder tab now say when they are showing a page.
+- **And it puts one clock behind "today".** `public.business_today()` is
+  `(now() at time zone 'Asia/Kolkata')::date`, and every report that means "today" reads it —
+  the expiry horizon and `days_left`, `top_products`' rolling window, `dead_stock`'s cutoff,
+  `report_summary`'s default period, **and `batch_status`' buckets**, which decides a batch's bucket
+  on the dashboard and inside the summary alike. Between 00:00 and 05:30 IST every "aaj" figure used
+  to belong to yesterday; the boundary is now asserted **by arithmetic** (`19:00 UTC is already the
+  23rd in IST and still the 22nd in UTC`) rather than by what time the test ran, and the clock is
+  asserted invariant under a session `TimeZone` change. `as_of`/`timezone` travel in every envelope,
+  and the client's provenance line shows them.
+- **The follow-up chips are built** (Dart only, no migration): a structural map from the answering
+  report to one or two questions, rendered under the **newest answer only**, asking through the
+  screen's own `_ask`. Every question in the map is asserted to be one of `chatExampleQuestions` —
+  a chip is a promise, and a promise this feature cannot keep would come back as a refusal.
+
+**Verified at `9bed4ad` (2026-09-22):** all **50** migrations apply clean to a fresh Postgres 17 +
+pgvector container; the committed SQL suite is **24 files with 0 FAIL and none `ABORTED`**
+(`phase5_alerts` **50/0 of 50**, `phase5_chat_aggregates` **38/0 of 39**); `dart format` clean,
+`build_runner` no tracked output changed (generated Dart is gitignored, `.gitignore:22`),
+`custom_lint` and `flutter analyze` clean, **`flutter test` 1110 passing, 0 failures** (1087 at this
+session's start), **`deno test supabase/functions` 209 passed / 0 failed**, the five `deno check`
+entry points clean. **On hosted: 50 = 50**, `chat-sql-agent` **version 4**, `curl -X OPTIONS` answers
+**204** with its CORS headers, and the three touched SQL files were re-run **against hosted** —
+`phase5_alerts` **50/0 of 50** (with the owner's own catalogue in play: the low-stock page was 3 of 3
+and the expiry page 2 of 10), `phase5_chat_aggregates` **38/0 of 39**, `phase4_report_summary`
+**15/0**. **The live answer-path probe was NOT run: there is no sanctioned credential in the repo**
+(`app/` holds only `.env.example`), and none was invented — so the `subject` enum's prompt-shaped risk
+is still settled by tests alone. Two hosted failures the first run found were the pagination class
+this project has met before (fixtures that do not win a 50-row page against the owner's real
+catalogue) and were **fixed by sizing the fixture**, not by relaxing the assertion.
+
 **PHASE 6.5a DONE** (2026-09-20 — the opening stock import, D-065/D-066). **PHASE 6 IN PROGRESS**
 (chunk 3 of n, done; `context/chat3n-summary.md`).
 **Overall Status:** Phases 0-5 done and gated; Phase 6 chunks 1-3 done and gated; **Phase 6.5c
-COMPLETE (chunks 1-6), pushed and verified on hosted (49 = 49)**; **Phase 7a COMPLETE** (durable
+COMPLETE (chunks 1-6), pushed and verified on hosted**; **Phase 7a COMPLETE** (durable
 layer on hosted, Flutter side C1, C2, C3/1–3, C3/4a, C3/4b and the deposit-application sheet built
 and gated) — Phase 5 closed with its database substrate, **five deployed Edge Functions**, a bill
 that reads and saves end to end, a matcher that suggests and learns, a backfilled catalogue with a
 measured similarity floor, its alert sources, the notification function and inbox, and a chatbot a
-person can type into. **1074 Flutter tests, 181 Deno tests**
+person can type into. **Hosted reads 50 = 50. 1110 Flutter tests, 209 Deno tests**, all passing at
+`9bed4ad`; the committed SQL suite is 24 files, 0 FAIL, none `ABORTED`.
 
 **Phase 6.5a — the opening stock import — is DONE (2026-09-20).** The one-time Marg
 migration the owner has been preparing: 314 rows, one product and one batch each, written by

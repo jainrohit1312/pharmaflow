@@ -4523,3 +4523,138 @@ translated too — so a Hinglish conversation never falls back to an English sen
 
 
 
+---
+
+## D-090 — A Report States Its Own Rule and Its Own Total, and One Clock Says What Day It Is
+
+**Date:** 2026-09-22
+
+**Status:** Active (the owner's chatbot brief, Phase A's last two items — built in migration
+`20260922000050`, committed as `c434b4a` server-side and `707c5f0`/`9bed4ad` with the app, pushed,
+applied to hosted (**50 = 50**) and `chat-sql-agent` redeployed (version 4))
+
+**Decision:** Three things, and they are one migration because they re-publish the same
+`create or replace` bodies and splitting them would mean reproducing each body twice — which is how
+two copies of a rule start to drift.
+
+### 1. The `{meta, rows}` envelope for the last two reports that answered a bare array
+
+`low_stock_products` and `expiring_batches` returned a `jsonb` **array** (00027), so a caller could
+see how many rows it got and never how many there were — and the chatbot read the page as a total.
+Both answer `{meta, rows}` now, the shape `top_products` and `dead_stock` already carried, with:
+
+- **`total_count` over the WHOLE candidate set** beside `returned_count` and `has_more`. It is
+  `count(*) over ()` on the same pass that cuts the page (`row_number() over (…) <= v_limit`), so
+  the count and the page come from one predicate and one scan. A `total_count` read back off
+  `jsonb_array_length(rows)` would have been the same lie in a new place.
+- **`meta.rule`** stating `total_qty < min_stock_level` in the database's own words. The copy and
+  the predicate drifted apart once already (D-089 §2, repaired by hand); this is how that stops
+  being possible.
+- **`meta.horizon_days`** — the **clamped** horizon that actually ran (`least(greatest(coalesce(
+  p_days, 90), 1), 3650)`), not the one a caller asked for. Same defect class D-089 §4 closed on the
+  chatbot side.
+- **`meta.limit`** — the clamped cap that ran.
+- `dead_stock` gains `total_count`/`returned_count`/`has_more` too. It shipped with the envelope and
+  still could only say "at least N", which is the same defect in the one report that already had the
+  fix.
+
+**The return SHAPE is the compatibility decision.** Adding keys to a function's `returns jsonb`
+changes nothing for a caller that reads it as an object; the two reports that *did* change are the
+two that changed from a bare array to an object. That is a **live RPC's contract**, so it ships in
+the same push as the screens that read it (`alert_payloads.dart`'s two decoders, both repositories,
+both providers, the two alert sections, the reorder tab, and the fakes) — the same rule D-089's
+consequences named. Ordering is deliberately **not** breaking: 00027's order, clamps, predicates and
+row keys are byte-for-byte the same, and `build_00050.js` asserts each load-bearing line of the
+original still appears in the rebuilt body.
+
+**Consequences:**
+
+- `answer.ts`'s three counting list sentences read the envelope's total: "N products are below their
+  reorder level" when the page is the whole set (byte-identical to what this file always wrote), and
+  "Showing the N worst of **M**" when it is not — the brief's own wording, the marker on the total.
+  `isCapped` (which compared a page's length to the requested cap) is gone: the report states the
+  total, so the caller does not infer one.
+- An envelope whose shape or totals cannot be read — the old bare array, no `rows`, no totals, a
+  `returned_count` that does not describe the page in hand, a `has_more` that contradicts its own
+  counts — renders the "does not understand" sentence and never a guessed number, on both sides of
+  the wire. A counting sentence whose whole job is to state a total may not invent one, and silence
+  reads to a pharmacist as "nothing is low".
+- **A truncated list now says so.** The notifications sections and the reorder tab show
+  "Showing the N worst of M" when the report says there is more. Before, a pharmacy with more than
+  200 low products was shown 200 with nothing to distinguish that from the whole list (I-1's class).
+
+### 2. One business clock
+
+The server runs in UTC, so between 00:00 and 05:30 IST `current_date` — and therefore every "aaj"
+figure, every expiry horizon, every dead-stock cutoff and `report_summary`'s own default period —
+belonged to **yesterday**. The brief's first acceptance scenario is exactly that boundary.
+
+`public.business_today()` returns `(now() at time zone 'Asia/Kolkata')::date`, and the zone literal
+lives there and nowhere else: a per-report `'Asia/Kolkata'` would be the second mechanism this
+project forbids. `stable`, not `immutable` — an IMMUTABLE claim would let the planner fold the call
+into an index expression and freeze the day it was built.
+
+Every report that means "today" reads it: `expiring_batches`'s horizon, `as_of` and `days_left`;
+`top_products`' rolling window; `dead_stock`'s `as_of`/`v_cutoff`; `report_summary`'s
+`coalesce(p_from, …)`/`coalesce(p_to, …)`. **And `batch_status`' buckets**, which is the one
+non-function change and is deliberate: its `expiry_status` decides a batch's bucket on the expiry
+dashboard *and* inside `report_summary`'s expiring section, so leaving it on the UTC day would have
+meant a batch that expired in the pharmacy reading as `critical` for five and a half hours a day, in
+a report whose own `as_of` said the day had turned. A second clock for the same question is the
+defect, not a shortcut.
+
+**The boundary is stated where a reader can see it**: `timezone` (and `as_of`) in the envelope of
+every report that has a `meta`, and beside `from`/`to` for `report_summary`, which is a flat object.
+The client's provenance line (`describeAnswerOrigin`) reads it either way and says
+`as of 2026-09-22 (Asia/Kolkata)`, because the brief asks for "scope and period" on every answer and
+a period is meaningless without its boundary.
+
+**Consequences:**
+
+- The SQL assertions about "today" moved onto `business_today()`, and the boundary itself is pinned
+  by **arithmetic rather than by the clock**: `timestamptz '2026-09-22 19:00:00+00' at time zone
+  'Asia/Kolkata'` is the 23rd while the same instant in UTC is the 22nd. The reason for the change is
+  therefore asserted, not just its value.
+- **The clock does not follow the session.** `business_today()` is asserted invariant under a
+  `TimeZone` change while `current_date` is not — which is the property that makes a report's answer
+  independent of who asked.
+- `report_summary`'s default period is the business day, and the envelope states `as_of`/`timezone`.
+- **Not changed, deliberately:** `product_stock` has no date in it, and no other view or trigger
+  computes a day. A future "today" belongs in `business_today()` or it is a second mechanism.
+
+### 3. The follow-up chips (Dart only)
+
+A **structural** map from the answering report (`chatFollowUps`) to one or two questions, rendered
+as chips under the **newest answer only** that ask through the screen's existing `_ask`. No model
+call, no server surface, no migration.
+
+**A chip is a promise.** The set of questions this feature can answer equals the set of reports it
+can run (D-026), so every question offered must be one of `chatExampleQuestions` — asserted by a
+test that walks the map, requires every report to have something to offer, and requires no report to
+offer the question that produced its own answer (a chip that repeats what is on screen would spend a
+model call saying it again, N-2). Nothing is offered while a question is in flight, under a failure,
+or under a refusal (which came from no report). The chips are the **user's** words and are therefore
+not translated: `AnswerLanguage` is about the language an answer is written in.
+
+### What was NOT done, and why
+
+- **Hindi script is still not built.** The `Sentence` maps make it a compiler-guided task (adding
+  `'hi'` to `ANSWER_LANGUAGES` fails to type-check at every sentence until it has one), and it was
+  left as D-089 §5 left it: the owner chose English + Hinglish on 2026-09-22, and the brief makes
+  Hindi the last item of the phase and conditional on a wide window. Recorded as deliberately not
+  built rather than as forgotten.
+- **The live answer-path probe was not run, because there is no sanctioned credential.** A real call
+  needs a signed-in user's access token, and the repository holds none: `app/` has only
+  `.env.example`, and `.qwen/tmp/` holds no session token (the SQL tests impersonate by setting
+  `request.jwt.claims` inside a transaction, which is not a token). No token was invented or guessed.
+  What *was* verified live: the deployed function answers `OPTIONS` with `204` and its CORS headers
+  (`version 4`), `supabase migration list` reads **50 = 50**, and the three touched SQL test files
+  were re-run **against hosted** — `phase5_alerts` **50/0 of 50**, `phase5_chat_aggregates` **38/0 of
+  39**, `phase4_report_summary` **15/0**. The `subject`-enum prompt-shaped risk (an old open item)
+  therefore remains settled by tests only, not by a live probe.
+- **The product stock lookup (the brief's §6 stretch) is not started.** It is the only additive,
+  tenancy-free Phase B item, and it is named as the next legitimate slice.
+
+
+
+
