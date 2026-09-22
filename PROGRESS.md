@@ -193,7 +193,7 @@ after C2, 0 failures** — the count is the gate's own output each time, not a r
 phases.** The owner pasted a third-party brief (`context/chatbot-owner-brief.md`, pinned 60 commits
 back) whose complaint was two sentences long: *the answers are monotonous, and the important words and
 numbers are not bold*. **Taken up before Phase 6.5b on purpose** — D-089 records the reorder as well as
-the decisions. Phase A is **partly done, in three commits, none pushed and none deployed**:
+the decisions. Phase A is **partly done, in four commits, all pushed and deployed**:
 
 - **`f9be7d1` — an answer points at its own finding, and the low-stock sentence stops claiming a row the
   report drops.** A sentence marks the part worth pointing at with `**...**`, **written by the server and
@@ -214,19 +214,35 @@ the decisions. Phase A is **partly done, in three commits, none pushed and none 
   value into **one object** that both the call and the sentence are built from; an unusable horizon or cap
   becomes the report's own default rather than being forwarded to be clamped, and a page that came back
   full says **"at least N"**. (D-089)
+- **`f3ba021` — the answer can be said in Hinglish, and the language is the caller's choice.** Two chips
+  under the transcript (no migration, no settings screen), and the language rides the request body beside
+  the question — **never in the classification and never to a report**, so the one model call is untouched
+  and no language can influence which figures are read. Every sentence in `answer.ts` is now a map keyed
+  by the language union, so **adding Hindi script later is a compile error at every sentence that has not
+  been written in it** rather than a silent English one; the English halves are byte-identical (asserted),
+  the marker contract is asserted over both languages, and an unknown language is English rather than a
+  refusal. (D-089 §5)
 - **Not done, and named so it is not mistaken for done**: the **exact** `total_count` (it needs the two
   `00027` reports to answer in the `{meta, rows}` shape `top_products` and `dead_stock` already carry —
-  a **live RPC's contract**, which must ship together with the alert screens that read it), the language
-  templates (`en` / `hi` / `hinglish`), and the follow-up chips. **Nothing is deployed**: the committed
-  function source is not what `chat-sql-agent` serves until `supabase functions deploy` runs, and the app
-  must be rebuilt to render the marker.
+  a **live RPC's contract**, which must ship together with the alert screens that read it), the follow-up
+  chips, and **Hindi script**, which the owner deferred when he chose English + Hinglish.
 
-**Verified at `a4022d1` (2026-09-22):** `dart format lib test` clean, `build_runner` no tracked output
-changed, `dart run custom_lint` no issues, `flutter analyze` no issues, **`flutter test` 1085 passing, 0
-failures** (1074 at the handoff), **`deno test supabase/functions` 203 passed, 0 failed** (181 at the
-handoff), and the five `deno check` entry points clean. **No migration was written or pushed**, so hosted
-still reads **49 = 49** and the committed SQL suite is untouched (17 files with a SUMMARY line, 0 FAIL,
-none `ABORTED` at the 49-migration state).
+**Verified at `f3ba021` (2026-09-22):** `dart format lib test` clean, `build_runner` no tracked output
+changed (generated Dart is gitignored, `.gitignore:22`), `dart run custom_lint` no issues,
+`flutter analyze` no issues, **`flutter test` 1087 passing, 0 failures** (1074 at the handoff),
+**`deno test supabase/functions` 209 passed, 0 failed** (181 at the handoff), and the five `deno check`
+entry points clean. **No migration was written or pushed**, so hosted still reads **49 = 49** and the
+committed SQL suite is untouched (17 files with a SUMMARY line, 0 FAIL, none `ABORTED` at the
+49-migration state). **`chat-sql-agent` was deployed to hosted** on 2026-09-22 after the push, and a
+curl preflight of the deployed function answers `204` with its CORS headers — the answer path itself
+was **not** exercised, because a real call needs a signed-in user's token and spends one of the
+free tier's five shared Gemini requests a minute (N-2).
+
+**Baseline correction, measured 2026-09-22.** The `a4022d1` commit message says `answer_test.ts` went
+`26 -> 33`; the measured counts are **`26 -> 31`** (`31` before this session's language chunk, `34`
+after it). The other numbers in that message — `handler_test.ts` `22 -> 26`, and the suite totals — are
+as measured. The mistake was arithmetic on my own added tests, not a run: five were added there, and
+the message named seven. `deno test` prints the authoritative number for each file.
 
 **Last Updated:** 2026-09-22
 **Current Phase:** **PHASE 7a IS DONE, and PHASE 6.5c IS COMPLETE.** Chunk 6 (`d0a9639`, `55ad192`,
@@ -245,10 +261,11 @@ change the form in the same migration. **The owner's own sequence says the recei
 Phase 6.5b (`context/chat3r-opening-prompt.md` is answered; **PHASE 7b — hospital profit sharing —
 and 7c — the reports — follow it**). **The owner set that aside on 2026-09-22 to take up the chatbot
 brief first** (`context/chatbot-owner-brief.md`, D-089): Phase A of it is **partly done** in
-`f9be7d1`, `83cecc6` and `a4022d1` — readable answers, a summary that leads on what was asked, and
-all three of the brief's wording/count/horizon defects closed — **none of it pushed and none of it
-deployed**, with the language templates, the follow-up chips and the exact-totals envelope still to
-come. **The receiver app is still what the plan's sequence names next.**
+`f9be7d1`, `83cecc6`, `a4022d1` and `f3ba021` — readable answers, a summary that leads on what was
+asked, all three of the brief's wording/count/horizon defects closed, and the answer sayable in
+Hinglish — **pushed and deployed** (`chat-sql-agent` was redeployed to hosted the same day), with the
+follow-up chips, the exact-totals envelope and Hindi script still to come. **The receiver app is still
+what the plan's sequence names next.**
 **PHASE 6.5a DONE** (2026-09-20 — the opening stock import, D-065/D-066). **PHASE 6 IN PROGRESS**
 (chunk 3 of n, done; `context/chat3n-summary.md`).
 **Overall Status:** Phases 0-5 done and gated; Phase 6 chunks 1-3 done and gated; **Phase 6.5c

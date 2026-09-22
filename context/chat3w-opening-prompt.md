@@ -30,8 +30,8 @@ The plan's own sequence names **Phase 6.5b, the receiver app**, next — and it 
 down** (`MASTER_PLAN.md` is a stub for it).
 
 **On 2026-09-22 the owner set the plan's sequence aside for a new workstream: the chatbot brief.** Its
-Phase A is **partly done**, in three local commits (`f9be7d1`, `83cecc6`, `a4022d1`) that are **not
-pushed and not deployed**:
+Phase A is **partly done**, in four commits (`f9be7d1`, `83cecc6`, `a4022d1`, `f3ba021`) that are
+**pushed and deployed**:
 
 | Phase A item | Status |
 |---|---|
@@ -39,67 +39,50 @@ pushed and not deployed**:
 | The low-stock copy matching its own predicate | **done** — `f9be7d1` |
 | A summary leading with the subject the question named | **done** — `83cecc6` |
 | The sentence written from the query that actually ran (horizon, cap, "at least N") | **done** — `a4022d1` |
-| **The language templates (`en` / `hi` / `hinglish`)** | **not started** |
+| The language the answer is written in (English / Hinglish) | **done** — `f3ba021` |
 | **Follow-up chips after an answer** | **not started** |
 | **The exact `total_count` / `has_more`** | **not started** — see §3 |
+| **Hindi script** | **not started** — the owner deferred it when he chose English + Hinglish |
 
-## ASK FIRST — two questions, and each gates a piece of the work
+## ASK FIRST — one question, and it is the one the last session could not answer for you
 
-### 1. What is the language setting, and where does the owner set it?
+### 1. May this be pushed and deployed again?
 
-The brief asks for *"Roman Hindi/Hinglish, Hindi script, or English"*, respecting *"an explicit language
-setting"*. Three things need his answer, with a recommendation each:
+The owner's brief says in as many words that it is *"not permission to … deploy changes"*, and he was
+asked on 2026-09-22: **he allowed it for that session's work** — `git push`, `supabase functions deploy
+chat-sql-agent`, and (had there been one) `supabase db push`. **That permission was for that work, not a
+standing one.** The exact-totals chunk (§2) needs a **migration pushed to hosted** with its own SQL test
+re-run there (D-082's lesson), which is a change to the live project — so ask for each of the three
+again, and get an explicit yes before any of them.
 
-- **Which languages** — all three (Hinglish, Hindi script, English), or Hinglish + English first? The
-  brief's own examples are Hinglish, and the owner writes Hinglish.
-- **Where the setting lives** — a control on the chatbot screen (a three-way chip, immediately visible
-  and testable) or a `profiles` column (a migration, and it needs a settings screen that does not
-  exist). **Recommended: the screen**, because it is where the choice is felt and it needs no
-  migration.
-- **Whether the *renderer* is all that changes.** Recommending **yes**: the model chooses a report
-  whatever language the question is in, and language only selects which template writes the sentence —
-  so the Gemini call is untouched and D-053 is untouched. If he wants the classifier told the language
-  too, that is a second change and should be asked about separately.
+Two things worth saying to him while you are asking:
 
-**Record his answers as a decision before building.** The templates are ~6 sentences × 5 reports × 3
-languages, so the shape of the answer decides whether this is one chunk or two.
+- **The app must be rebuilt to render the marker.** The function is deployed; the Flutter side is
+  committed, but whatever he is running is whatever he last built.
+- **A live probe of the answer path has never been run** (it needs a signed-in user's token and spends
+  one of the free tier's five shared Gemini requests a minute, N-2). If he wants the new sentences
+  verified end to end, that is the moment to ask for a token — and the `subject` enum's prompt-shaped
+  risk (open item 4 in `context/chat3v-summary.md`) is exactly what such a probe would settle.
 
-### 2. May this be deployed and pushed?
+### 2. Does he want Hindi script now?
 
-**This is the question the last session could not answer, and it now blocks more than one thing.** The
-owner's brief says in as many words that it is *"not permission to … deploy changes"*, so the last
-session pushed nothing and deployed nothing — which means **the owner cannot see any of the last
-session's work**: the deployed `chat-sql-agent` still answers with the old sentences, and the app must
-be rebuilt to render the marker. And the exact-totals chunk (§3) needs a **migration pushed to hosted**
-and its own SQL test re-run there (D-082's lesson), which is a change to the live project.
-
-Put it to him plainly: **the chatbot's Phase A is invisible until the function is deployed and the app
-rebuilt — do that now, or leave everything local?** Get an explicit yes for each of: `git push`,
-`supabase functions deploy chat-sql-agent`, and `supabase db push`.
+The language mechanism is settled and needs no design work: `AnswerLanguage` has the union, the sentence
+maps in `answer.ts` are keyed by it, and every sentence that has no Hindi-script key **fails to
+compile** until it gets one. So this is a pure "do it or defer it" question, and it is worth asking
+before the follow-up chips because it triples the sentence work if it lands later.
 
 ## SCOPE — in this order
 
-### 1. The language templates (the biggest remaining Phase A item)
-
-`answer.ts`'s sentences become a function of a language the caller asks for. The shape, unless §1's
-answer says otherwise: a `language` field on the request (`en` | `hi` | `hinglish`, defaulting to `en`),
-carried on `ChatParams` beside `subject`, **never travelling to a report** (exactly as `subject`
-doesn't), and selecting the template that writes the sentence. Every template keeps the emphasis marker
-(D-089 §1) and every sentence keeps stating the query that ran (D-089 §4).
-
-**The failure direction must be explicit**: an unknown language is `en`, not a blank sentence — the
-same belt `asSubject`/`asDate` already are. And `answer_test.ts` must pin **every** language's sentences
-from **one** envelope, the way the subject test does.
-
-### 2. The follow-up chips
+### 1. The follow-up chips
 
 The brief asks for *"two useful next questions"* under an answer. Keep it structural, not a model call:
 the reports are a closed set (D-026), so the follow-ups are a small map from the report that answered to
 one or two questions **that report can answer**, offered as chips that ask the question. No model call
 is added, and nothing is invented: a follow-up that could not be answered would be a promise this
-feature cannot keep.
+feature cannot keep. **The chips are questions in the user's own words** — they are not sentences, so
+they are not translated (`AnswerLanguage` is about the answer).
 
-### 3. The exact totals — the `{meta, rows}` envelope, and its blast radius
+### 2. The exact totals — the `{meta, rows}` envelope, and its blast radius
 
 `low_stock_products` and `expiring_batches` (`00027`) answer with a bare `jsonb` array, so the chatbot
 can only say "**at least** N" for a full page. Giving them the `{meta, rows}` shape `top_products` and
@@ -120,6 +103,12 @@ can only say "**at least** N" for a full page. Giving them the `{meta, rows}` sh
   `alert_providers.dart`, `notifications_repository.dart`, `notifications_screen.dart`) are in the
   blast radius of this chunk and should move with it.
 - **A new SQL test, run against hosted**, per D-082.
+
+### 3. Hindi script, if he asked for it (the second ASK FIRST question)
+
+A pure content chunk: add the key to `ANSWER_LANGUAGES`, then walk the compile errors in `answer.ts`
+until every sentence has one. Nothing else changes — the request field, the chip (a third one, no
+layout change), and the wire name are all there.
 
 ### 4. Then, from the brief
 
@@ -160,11 +149,12 @@ counter, where does it run, what does it do about the D-046 credentials) and rec
 - **A file that ERRORs prints no SUMMARY line and no FAIL line**, so a run that greps for `FAIL` reads
   it as green. Count the `psql:/repo/supabase/tests/…` header lines and check none says `ABORTED` as
   well as grepping for FAIL.
-- **Run a new SQL test against hosted, not only locally** (D-082's lesson) — and **only if §2's answer
-  said you may push**.
+- **Run a new SQL test against hosted, not only locally** (D-082's lesson) — and **only if the owner
+  said you may push** (ASK FIRST §1).
 - `dart format lib test` before the gates; `flutter analyze` covers `test/**` too.
-- **Deploy nothing, push nothing and send nothing without §2's explicit yes.** The last session's
-  work is invisible because of it, and that is D-089's recorded consequence rather than an oversight.
+- **Deploy nothing, push nothing and send nothing without an explicit yes for that act.** The owner
+  gave one on 2026-09-22 and it covered that session's work only; his brief's standing rule is that this
+  is *"not permission to … deploy changes"*, so ask again (ASK FIRST §1).
 
 ## ENVIRONMENT (FIXED)
 
@@ -181,8 +171,13 @@ counter, where does it run, what does it do about the D-046 credentials) and rec
 - Gates: `dart format lib test` → `dart run build_runner build --delete-conflicting-outputs` →
   `dart run custom_lint` → `flutter analyze` → `flutter test` → `deno test supabase/functions` → the
   five `deno check` entry points.
-- **Baseline at this handoff: 1085 Flutter tests, 203 Deno tests, all passing, at `a4022d1`** (local).
-  The SQL suite is 17 files with a SUMMARY line, 0 FAIL and none `ABORTED` at the 49-migration state.
+- **Baseline at this handoff: 1087 Flutter tests, 209 Deno tests, all passing, at `f3ba021`** (pushed,
+  and `chat-sql-agent` **deployed** to hosted on 2026-09-22). The SQL suite is 17 files with a SUMMARY
+  line, 0 FAIL and none `ABORTED` at the 49-migration state.
+- **The deployed function was smoke-tested, not probed**: `curl -X OPTIONS` on
+  `https://yeroxzkpmodbzcvjlqwd.supabase.co/functions/v1/chat-sql-agent` answers `204` with its CORS
+  headers, and an untokened `POST` answers the platform's `401`. **The answer path has never been
+  exercised** — see ASK FIRST §1.
 
 ## END-OF-SESSION HANDOFF (when you are near the limit)
 

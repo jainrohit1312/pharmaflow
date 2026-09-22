@@ -4341,14 +4341,15 @@ perfectly answerable.
 
 **Date:** 2026-09-22
 
-**Status:** Active (the owner's chatbot brief, Phase A — built in three commits: `f9be7d1`
-(the emphasis marker, and the low-stock wording), `83cecc6` (a summary leads with its subject) and
-`a4022d1` (the sentence is written from the query that ran))
+**Status:** Active (the owner's chatbot brief, Phase A — built in four commits: `f9be7d1`
+(the emphasis marker, and the low-stock wording), `83cecc6` (a summary leads with its subject),
+`a4022d1` (the sentence is written from the query that ran) and `f3ba021` (the answer can be said in
+Hinglish))
 
 **Decision:** The owner's report on this feature was two sentences long — *the answers are
-monotonous, and the important words and numbers are not bold* — and the three parts of Phase A
+monotonous, and the important words and numbers are not bold* — and the four parts of Phase A
 below are what they turned out to mean. **No migration, no new dependency, and no change to the
-five reports' signatures**; the whole of it is `chat-sql-agent`'s own source and one new file in
+five reports' signatures**; the whole of it is `chat-sql-agent`'s own source and two new files in
 the app.
 
 **This is a deliberate reorder.** The owner's recorded sequence had Phase 6.5b (the receiver app)
@@ -4467,12 +4468,58 @@ keep their own clamp as the backstop for a caller that does not come through the
   (`notifications_repository.dart`, `inventory_repository.dart` and their models), so it is a chunk of
   its own rather than a tail on this one. This is the brief's own "preserve compatibility or add
   explicitly versioned envelopes", resolved in favour of compatibility for now.
-- **What is left of Phase A**: the language (`en` / `hi` / `hinglish`) templates, the follow-up
-  chips, and that totals envelope. What is left of the brief: everything from Phase B onward
-  (`context/chatbot-owner-brief.md`).
+- **What is left of Phase A**: the follow-up chips and that totals envelope. What is left of the
+  brief: everything from Phase B onward (`context/chatbot-owner-brief.md`).
 - **Nothing is deployed.** The function's source is committed; the **deployed** `chat-sql-agent` still
   answers with the old sentences until someone runs `supabase functions deploy`, and the app has to
   be rebuilt to render the markers. No migration was pushed, so hosted still reads 49 = 49.
+
+### 5. A sentence can be said in Hinglish, and the language is the CALLER's choice
+
+The brief asks for *"Roman Hindi/Hinglish, Hindi script, or English"*, respecting *"an explicit
+language setting"*. The owner chose **English and Hinglish** for this round; Hindi script is not here.
+
+**The language is the caller's, not the model's.** It arrives on the request body beside the question,
+not in the classification, and it **never reaches a report**. That is the whole of why it is safe:
+which report answers a question does not depend on the language it was asked in, so **the one model
+call is untouched** and **no language can influence which figures are read**. It chooses which
+sentence is written and nothing else. Two tests pin exactly that: a Hinglish request makes exactly one
+classification, with the question it was given, and no report's arguments change.
+
+**A missing language is a type error, not an English sentence.** Every sentence in `answer.ts` is a map
+keyed by the `AnswerLanguage` union, rather than a branch inside the sentence's own function — *the
+compiler counts the languages, a person does not*, and adding Hindi script later fails to compile at
+every sentence that has not been written in it. There is deliberately **no fallback** inside those maps,
+because a fallback is exactly the silent English sentence.
+
+**The English half of every sentence is byte-identical to what this file wrote before it could speak
+Hinglish**, and a test asserts that asking for `en` and asking for nothing produce the same string for
+every shape in the fixtures.
+
+**An unknown language is English, not a refusal** — the same direction `asDate` and `asInteger` already
+take. Absent is the common case (every client sent nothing before this existed); refusing to answer a
+question because of the language it asked for would be a worse answer than answering it in the wrong
+language.
+
+**The marker and the honesty survive translation.** The marker contract is asserted **over both
+languages** (every finding sentence's markers are closed and bracket something; the four "nothing"
+sentences and the fixed refusal carry none), and the refusal and the unreadable-answer sentences are
+translated too — so a Hinglish conversation never falls back to an English sentence in the middle of it.
+
+**Consequences of part 5:**
+
+- **The control is two chips under the transcript**, not a setting under `/settings`: the choice is felt
+  where a question is asked, it only ever affects the *next* answer, and it costs **no migration** — a
+  profile column would, and a setting nobody visits is a setting nobody finds. The language a question
+  is *asked* in is irrelevant to it.
+- **`ChatController` reads the choice when the question is sent**, which is why it is a provider rather
+  than a field on `ChatState`: a transcript in two languages is fine, switching one's mind must not
+  rewrite what has already been said, and a retry must not become the one turn that goes out in a
+  different language by accident. That last one has a test.
+- **`AnswerLanguage` carries the wire name and the chip's label together**, so a control that said one
+  thing and sent another is not a bug anybody would think to look for.
+- **Hindi script remains open**, and the `Sentence` maps are what makes adding it a compiler-guided
+  task rather than a search for English strings.
 
 
 
