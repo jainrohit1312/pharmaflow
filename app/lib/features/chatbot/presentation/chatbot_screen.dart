@@ -31,23 +31,10 @@ import 'package:app/core/widgets/app_scaffold.dart';
 import 'package:app/core/widgets/app_text_field.dart';
 import 'package:app/data/models/answer_language.dart';
 import 'package:app/features/chatbot/application/chat_controller.dart';
+import 'package:app/features/chatbot/presentation/chat_follow_ups.dart';
 import 'package:app/features/chatbot/presentation/widgets/message_bubble.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-
-/// The questions the invitation offers, one per report the function can choose.
-///
-/// Not decoration: the set of questions this feature can answer *equals* the set of
-/// reports (D-026's first consequence), so the examples are the honest way to say
-/// what the thing is for — and they are the reason a user's first attempt is not a
-/// guess that comes back as a refusal.
-const List<String> chatExampleQuestions = <String>[
-  'What is low on stock?',
-  'What sells best this month?',
-  'What is expiring soon?',
-  'What has stopped selling?',
-  'How did last month go?',
-];
 
 /// Asks the assistant, and reads what it says.
 class ChatbotScreen extends ConsumerStatefulWidget {
@@ -136,6 +123,7 @@ class _ChatbotScreenState extends ConsumerState<ChatbotScreen> {
                     state: state,
                     scroll: _scroll,
                     onRetry: () => unawaited(_retry()),
+                    onAsk: (question) => unawaited(_ask(question)),
                   )
                 : _Invitation(onAsk: (question) => unawaited(_ask(question))),
           ),
@@ -158,6 +146,7 @@ class _Transcript extends StatelessWidget {
     required this.state,
     required this.scroll,
     required this.onRetry,
+    required this.onAsk,
   });
 
   /// What the conversation holds.
@@ -169,16 +158,28 @@ class _Transcript extends StatelessWidget {
   /// Re-asks the failed question.
   final VoidCallback onRetry;
 
+  /// Asks a follow-up offered under the newest answer.
+  final ValueChanged<String> onAsk;
+
   @override
   Widget build(BuildContext context) {
     final failure = state.failure;
     final asking = state.asking;
+    // A follow-up belongs under the newest ANSWER, and only once the turn is finished: one
+    // under an old answer mid-conversation is noise, and one offered while a question is in
+    // flight would offer a second model call before the first has come back (N-2).
+    final newest = state.messages.isEmpty ? null : state.messages.last;
+    final followUps = asking == null && failure == null
+        ? followUpsFor(newest?.response?.rpc)
+        : const <String>[];
 
     return ListView(
       controller: scroll,
       padding: const EdgeInsets.all(16),
       children: <Widget>[
         for (final message in state.messages) MessageBubble(message: message),
+        if (followUps.isNotEmpty)
+          _FollowUps(questions: followUps, onAsk: onAsk),
         // The outstanding turn is always the newest, so appending it is the whole
         // of the ordering rule. Only one of the two can exist: asking supersedes a
         // failure, and a failure ends the asking.
@@ -190,6 +191,38 @@ class _Transcript extends StatelessWidget {
             onRetry: onRetry,
           ),
       ],
+    );
+  }
+}
+
+/// What to ask next, offered under the answer that suggests it.
+///
+/// A chip is a question the user could type, so tapping one asks it through the screen's own
+/// `_ask` - the same path a typed question takes, with the same guards. Nothing here picks a
+/// report or spends a model call on its own: the pairing is a plain map of the closed set
+/// (`chatFollowUps`), and every question in it is one the classifier can answer.
+class _FollowUps extends StatelessWidget {
+  const _FollowUps({required this.questions, required this.onAsk});
+
+  /// The questions to offer, in the order they are read.
+  final List<String> questions;
+
+  /// Asks one of them.
+  final ValueChanged<String> onAsk;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      // Left-aligned under the answer's own bubble, which is on the left too.
+      padding: const EdgeInsets.only(left: 4, bottom: 12),
+      child: Wrap(
+        spacing: 8,
+        runSpacing: 8,
+        children: <Widget>[
+          for (final question in questions)
+            ActionChip(label: Text(question), onPressed: () => onAsk(question)),
+        ],
+      ),
     );
   }
 }

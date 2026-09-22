@@ -22,7 +22,7 @@ import 'dart:async';
 import 'package:app/core/errors/app_exception.dart';
 import 'package:app/core/widgets/error_view.dart';
 import 'package:app/data/models/answer_language.dart';
-import 'package:app/features/chatbot/presentation/chatbot_screen.dart';
+import 'package:app/features/chatbot/presentation/chat_follow_ups.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -415,6 +415,92 @@ void main() {
       find.text('Still waiting for an answer…'),
       findsNothing,
       reason: 'nothing is in flight once the failure has landed',
+    );
+  });
+
+  testWidgets('a finished answer offers what to ask next, and a tap asks it', (
+    tester,
+  ) async {
+    final assistant = FakeChatService();
+    await pumpChatbotApp(tester, service: assistant);
+
+    await askQuestion(tester, 'What is low on stock?');
+    await tester.pumpAndSettle();
+
+    // A follow-up is the user's own words, offered as a chip: it is asked through
+    // the screen's own path, so a tap spends exactly one model call (N-2).
+    final followUps = followUpsFor('low_stock_products');
+    expect(followUps, isNotEmpty);
+    for (final question in followUps) {
+      expect(find.widgetWithText(ActionChip, question), findsOneWidget);
+    }
+
+    await tester.tap(find.widgetWithText(ActionChip, followUps.first));
+    await tester.pumpAndSettle();
+
+    expect(assistant.questions, <String>[
+      'What is low on stock?',
+      followUps.first,
+    ]);
+  });
+
+  testWidgets('the chips belong to the newest answer, and only to it', (
+    tester,
+  ) async {
+    final assistant = FakeChatService();
+    await pumpChatbotApp(tester, service: assistant);
+
+    await askQuestion(tester, 'What is low on stock?');
+    await tester.pumpAndSettle();
+    await askQuestion(tester, 'and what is expiring?');
+    await tester.pumpAndSettle();
+
+    // Two answers in the transcript, both from the same report - but one set of chips,
+    // under the newest of them. One under an old answer is noise a reader scrolls past.
+    final followUps = followUpsFor('low_stock_products');
+    expect(followUps, isNotEmpty);
+    for (final question in followUps) {
+      expect(find.widgetWithText(ActionChip, question), findsOneWidget);
+    }
+  });
+
+  testWidgets('nothing is offered while a question is still in flight', (
+    tester,
+  ) async {
+    final assistant = FakeChatService()..gate = Completer<void>();
+    await pumpChatbotApp(tester, service: assistant);
+
+    await askQuestion(tester, 'What is low on stock?');
+    await tester.pump();
+
+    expect(
+      find.byType(ActionChip),
+      findsNothing,
+      reason:
+          'a chip offered before the answer arrives would offer a second model call',
+    );
+
+    assistant.gate!.complete();
+    await tester.pumpAndSettle();
+
+    expect(find.byType(ActionChip), findsWidgets);
+  });
+
+  testWidgets('a refusal offers nothing, because it came from no report', (
+    tester,
+  ) async {
+    final assistant = FakeChatService()..answer = buildChatRefusal();
+    await pumpChatbotApp(tester, service: assistant);
+
+    await askQuestion(tester, 'what is the weather in Mumbai?');
+    await tester.pumpAndSettle();
+
+    expect(find.text(buildChatRefusal().answer), findsOneWidget);
+    expect(
+      find.byType(ActionChip),
+      findsNothing,
+      reason:
+          'offering more of what it just said it cannot do is not a follow-up',
     );
   });
 }
