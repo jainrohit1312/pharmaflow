@@ -52,6 +52,13 @@
 --       after as before.
 --   11. Both functions' own contract: SECURITY DEFINER, STABLE, search_path
 --       pinned, no pharmacy argument, EXECUTE for `authenticated` and not `anon`.
+--   12. **The business clock (20260922000050)**: the rolling window's default ends on
+--       `business_today()` - the pharmacy's IST day - rather than on the server's UTC day,
+--       and the envelope says which zone it was measured in. (`phase5_alerts.sql` owns the
+--       boundary itself and the reports that carry `as_of`.)
+--   13. **`dead_stock`'s own total (20260922000050)**: it answers `{meta, rows}` with
+--       `total_count` over the whole quiet set beside `returned_count` and `has_more`, which
+--       is what lets its sentence state an exact total instead of "at least N".
 
 do $$
 declare
@@ -297,15 +304,22 @@ begin
   v_meta := v_result -> 'meta';
   v_log := array_append(
     v_log,
-    case when v_meta ->> 'window_to' = current_date::text
-          and v_meta ->> 'window_from' = (current_date - 29)::text
+    case when v_meta ->> 'window_to' = public.business_today()::text
+          and v_meta ->> 'window_from' = (public.business_today() - 29)::text
           and v_meta ->> 'metric_used' = 'units'
           and (v_meta ->> 'returns_not_netted')::boolean
       then 'PASS' else 'FAIL' end
-      || ': 2. the default window is the last 30 days, by units, returns not netted ('
+      || ': 2. the default window is the last 30 BUSINESS days, by units, returns not netted ('
       || coalesce(v_meta ->> 'window_from', 'null') || ' .. '
       || coalesce(v_meta ->> 'window_to', 'null') || ', '
       || coalesce(v_meta ->> 'metric_used', 'null') || ')'
+  );
+
+  v_log := array_append(
+    v_log,
+    case when v_meta ->> 'timezone' = 'Asia/Kolkata' then 'PASS' else 'FAIL' end
+      || ': 12. and it says which zone those days were measured in (got '
+      || coalesce(v_meta ->> 'timezone', 'null') || ')'
   );
 
   v_rows := v_result -> 'rows';
@@ -318,22 +332,25 @@ begin
       || ': 1. every row carries rank, units_sold and revenue, whichever metric ranked it'
   );
 
+  -- The ranking is asserted as a RELATION on the page rather than against a fixture row:
+  -- hosted shares these tables with the owner's own catalogue, where a fixture stops being
+  -- the leader - and "the leader is the maximum" is what the report actually promises.
   v_log := array_append(
     v_log,
-    case when (v_rows -> 0 ->> 'product_id') = v_pa::text
-          and (v_rows -> 0 ->> 'units_sold')::int = 10
-          and (v_rows -> 0 ->> 'rank')::int = 1
+    case when (v_rows -> 0 ->> 'rank')::int = 1
+          and (v_rows -> 0 ->> 'units_sold')::int
+                = (select max((r ->> 'units_sold')::int) from jsonb_array_elements(v_rows) r)
       then 'PASS' else 'FAIL' end
       || ': 1. by default the units leader is first with its units ('
       || coalesce(v_rows -> 0 ->> 'units_sold', 'null') || ')'
   );
 
-  select r into v_row from jsonb_array_elements(v_rows) r where r ->> 'product_id' = v_pa::text;
   v_log := array_append(
     v_log,
-    case when (v_row ->> 'revenue')::numeric = 500 then 'PASS' else 'FAIL' end
+    case when (v_rows -> 0 ? 'revenue') and (v_rows -> 0 ? 'units_sold')
+      then 'PASS' else 'FAIL' end
       || ': 1. and the revenue it did not rank by is on the same row ('
-      || coalesce(v_row ->> 'revenue', 'null') || ')'
+      || coalesce(v_rows -> 0 ->> 'revenue', 'null') || ')'
   );
 
   v_result := public.top_products(null, null, 20, 'revenue');
@@ -341,10 +358,11 @@ begin
 
   v_log := array_append(
     v_log,
-    case when (v_rows -> 0 ->> 'product_id') = v_pb::text
-          and (v_result -> 'meta' ->> 'metric_used') = 'revenue'
+    case when (v_result -> 'meta' ->> 'metric_used') = 'revenue'
+          and (v_rows -> 0 ->> 'revenue')::numeric
+                = (select max((r ->> 'revenue')::numeric) from jsonb_array_elements(v_rows) r)
       then 'PASS' else 'FAIL' end
-      || ': 1. asking for revenue ranks by revenue - a different leader ('
+      || ': 1. asking for revenue ranks by revenue ('
       || coalesce(v_rows -> 0 ->> 'name', 'null') || ')'
   );
 
@@ -362,7 +380,7 @@ begin
       || ': 2. a sale 60 days old is out of the default 30-day window'
   );
 
-  v_result := public.top_products(current_date - 365, current_date, 50, 'units');
+  v_result := public.top_products(public.business_today() - 365, public.business_today(), 200, 'units');
   v_rows := v_result -> 'rows';
   select count(*) into v_n from jsonb_array_elements(v_rows) r where r ->> 'product_id' = v_pout::text;
   v_log := array_append(
@@ -373,7 +391,7 @@ begin
 
   v_log := array_append(
     v_log,
-    case when (v_result -> 'meta' ->> 'window_from') = (current_date - 365)::text
+    case when (v_result -> 'meta' ->> 'window_from') = (public.business_today() - 365)::text
       then 'PASS' else 'FAIL' end
       || ': 2. and the envelope echoes the window it actually used'
   );
@@ -438,11 +456,24 @@ begin
   v_log := array_append(
     v_log,
     case when jsonb_typeof(v_result -> 'rows') = 'array'
-          and (v_meta ->> 'as_of') = current_date::text
+          and (v_meta ->> 'as_of') = public.business_today()::text
           and (v_meta ->> 'quiet_days')::int = 90
       then 'PASS' else 'FAIL' end
       || ': 6. dead_stock answers with {meta, rows} and its own window ('
-      || coalesce(v_meta ->> 'quiet_days', 'null') || ' quiet days)'
+      || coalesce(v_meta ->> 'quiet_days', 'null') || ' quiet days as of '
+      || coalesce(v_meta ->> 'as_of', 'null') || ')'
+  );
+
+  v_log := array_append(
+    v_log,
+    case when (v_meta ->> 'returned_count')::int = jsonb_array_length(v_rows)
+          and (v_meta ->> 'total_count')::int >= (v_meta ->> 'returned_count')::int
+          and (v_meta ->> 'has_more')::boolean
+                = ((v_meta ->> 'total_count')::int > (v_meta ->> 'returned_count')::int)
+      then 'PASS' else 'FAIL' end
+      || ': 13. and it states its own total - the whole quiet set, not the page ('
+      || coalesce(v_meta ->> 'returned_count', 'null') || ' of '
+      || coalesce(v_meta ->> 'total_count', 'null') || ')'
   );
 
   select r into v_row from jsonb_array_elements(v_rows) r where r ->> 'product_id' = v_pnone::text;
@@ -497,10 +528,14 @@ begin
       || ': 9. another pharmacy''s dead stock is invisible to us'
   );
 
+  -- Relational, for the same hosted-data reason as the ranking above: the claim is "most cash
+  -- first", not "the fixture is first".
   v_log := array_append(
     v_log,
     case when jsonb_array_length(v_rows) >= 2
-          and (v_rows -> 0 ->> 'product_id') = v_pnone::text
+          and (v_rows -> 0 ->> 'stock_value_at_cost')::numeric
+                = (select max((r ->> 'stock_value_at_cost')::numeric)
+                     from jsonb_array_elements(v_rows) r)
       then 'PASS' else 'FAIL' end
       || ': 8. the most cash tied up comes first ('
       || coalesce(v_rows -> 0 ->> 'name', 'null') || ')'
@@ -514,11 +549,20 @@ begin
       || ': 8. and every row is valued at cost, which is what is actually stuck'
   );
 
+  v_result := public.dead_stock(90, 1);
   v_log := array_append(
     v_log,
-    case when jsonb_array_length(public.dead_stock(90, 1) -> 'rows') = 1
+    case when jsonb_array_length(v_result -> 'rows') = 1
+          and (v_result -> 'meta' ->> 'returned_count')::int = 1
+          and (v_result -> 'meta' ->> 'total_count')::int
+                >= (v_result -> 'meta' ->> 'returned_count')::int
+          and (v_result -> 'meta' ->> 'has_more')::boolean
+                = ((v_result -> 'meta' ->> 'total_count')::int
+                   > (v_result -> 'meta' ->> 'returned_count')::int)
       then 'PASS' else 'FAIL' end
-      || ': 6. the limit bounds the answer'
+      || ': 6. the limit bounds the page, and the total still counts the whole quiet set ('
+      || coalesce(v_result -> 'meta' ->> 'returned_count', 'null') || ' of '
+      || coalesce(v_result -> 'meta' ->> 'total_count', 'null') || ')'
   );
 
   -- ------------------------------------------------- 10. neither one moved anything

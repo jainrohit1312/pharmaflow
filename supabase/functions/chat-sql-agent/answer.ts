@@ -9,9 +9,12 @@
  *
  * That is why this is a `switch` over a closed set rather than a prompt: adding a
  * capability means adding a report and a case, not coaching a model. The
- * rendering is also where the envelope's own semantics are used - `top_products`
- * and `dead_stock` carry a `meta` block (D-053), so their sentences report the
- * window that was actually queried rather than one this file guessed.
+ * rendering is also where the envelope's own semantics are used - every report now
+ * carries a `meta` block (D-053, and migration 00050 for the list ones), so a
+ * sentence reports the window, the horizon and the **total** that were actually
+ * queried rather than ones this file guessed. A list sentence's count is the whole
+ * set's (`meta.total_count`), never the page's length: a page read as a total is
+ * exactly the defect this feature was reported for.
  *
  * `understood` is false when a report answered in a shape this file does not
  * recognise. That is a warning rather than an error: the query ran and the caller
@@ -65,10 +68,10 @@ export interface RenderedAnswer {
 /**
  * The horizon `expiring_batches` uses when the caller (or the model) gives none.
  *
- * It mirrors that function's own default (migration 00027). It is stated here
- * because the function passes it explicitly, so the sentence describes the query
- * that actually ran - and because `expiring_batches` returns a bare array with no
- * `meta` to read the horizon back from.
+ * It mirrors that function's own default (migration 00027). The report also states the horizon
+ * it actually ran in `meta.horizon_days` (migration 00050), and the sentence prefers **that** -
+ * this constant is the fallback for an envelope that does not carry one, and the value
+ * `effectiveParams` resolves the requested horizon to.
  */
 export const EXPIRING_DEFAULT_DAYS = 90;
 
@@ -165,16 +168,36 @@ function listLimit(limit: number | null, fallback: number): number {
 }
 
 /**
- * Whether the report stopped at its cap, which makes the rows a *page* rather than the
- * whole answer.
+ * The totals a list envelope states about itself, or `null` when it states none.
  *
- * A `null` limit means no cap was named, so there is nothing to compare against and no
- * total may be claimed - the honest reading, and the only one available. Every path
- * through the handler names one ([effectiveParams]); this is reachable from a direct
- * call, which is what the tests do.
+ * `total_count` is the **whole set** the report's rule selected, `returned_count` the page it
+ * sent, and `has_more` the two compared (migration 00050). A counting sentence reads its figure
+ * from here and nowhere else: reading `rows.length` was the defect this closes - a page read as
+ * a total - and reading `meta.total_count` without checking that the page it describes is the
+ * page in hand would be the same mistake one level up.
+ *
+ * `null` - rather than a guess - when the envelope does not carry them, which makes the answer
+ * UNREADABLE. A sentence whose entire job is to state a total may not invent one, and the
+ * direction this project always takes for an unreadable shape is to say so.
  */
-function isCapped(rows: number, limit: number | null): boolean {
-  return limit !== null && rows >= limit;
+function listTotals(
+  envelope: Record<string, unknown>,
+  rows: unknown[],
+): { total: number; returned: number; hasMore: boolean } | null {
+  const meta = asRecord(envelope.meta);
+  const total = integer(meta.total_count);
+  const returned = integer(meta.returned_count);
+  const hasMore = meta.has_more;
+
+  if (total === null || returned === null || typeof hasMore !== 'boolean') {
+    return null;
+  }
+  // The page the envelope says it sent must be the page this renderer was given, or the
+  // sentence would describe a list nobody received.
+  if (returned !== rows.length) {
+    return null;
+  }
+  return { total, returned, hasMore };
 }
 
 /** The fixed sentence for a question none of the reports answers, in each language. */
@@ -210,12 +233,11 @@ export function renderAnswer(
     case 'report_summary':
       return renderSummary(data, params.subject ?? DEFAULT_SUMMARY_SUBJECT, language);
     case 'low_stock_products':
-      return renderLowStock(data, params.limit, language);
+      return renderLowStock(data, language);
     case 'expiring_batches':
       return renderExpiring(
         data,
         params.days ?? EXPIRING_DEFAULT_DAYS,
-        params.limit,
         language,
       );
     case 'top_products':
@@ -224,7 +246,6 @@ export function renderAnswer(
       return renderDeadStock(
         data,
         params.days ?? DEAD_STOCK_DEFAULT_DAYS,
-        params.limit,
         language,
       );
     case 'unsupported':
@@ -555,20 +576,26 @@ function renderEverything(
 /**
  * What is running out, worst first.
  *
- * [limit] is the cap the report was actually asked for, and it is here for one reason: a
- * capped list is a *page*, and "2 products are below their reorder level" is a claim about
- * the whole catalogue that a capped list cannot support. When the page came back full the
- * sentence says "at least", which is true whether or not there is a row behind it.
+ * The count is the envelope's **whole set** (`meta.total_count`), not the page that came back:
+ * "2 products are below their reorder level" is a claim about the whole catalogue, and a capped
+ * page cannot support it. When there is more than the page, the sentence says so and gives both
+ * numbers - "Showing the 50 worst of **120**" - which is the brief's own wording, with the
+ * marker on the total because that is the figure an owner would circle.
  */
 function renderLowStock(
   data: unknown,
-  limit: number | null,
   language: AnswerLanguage,
 ): RenderedAnswer {
-  const rows = asArray(data);
+  const envelope = asRecord(data);
+  const rows = asArray(envelope.rows);
   if (rows === null) {
     return UNREADABLE[language];
   }
+  const totals = listTotals(envelope, rows);
+  if (totals === null) {
+    return UNREADABLE[language];
+  }
+
   if (rows.length === 0) {
     const quiet: Sentence = {
       en: 'Nothing is below its reorder level.',
@@ -587,31 +614,34 @@ function renderLowStock(
     return UNREADABLE[language];
   }
 
-  const capped = isCapped(rows.length, limit);
-  const atLeast: Sentence = {
-    en: capped ? 'At least ' : '',
-    hinglish: capped ? 'Kam se kam ' : '',
-  };
-
-  const text: Sentence = {
-    en:
-      `${atLeast.en}${rows.length} ${
+  const counted: Sentence = totals.hasMore
+    ? {
+      en: `Showing the ${totals.returned} worst of **${totals.total}** products below their reorder level. `,
+      hinglish:
+        `Kul **${totals.total}** product apne reorder level se neeche hain - sabse kam wale ${totals.returned} dikha raha hoon. `,
+    }
+    : {
+      en: `${totals.total} ${
         plural(
-          rows.length,
+          totals.total,
           'product is below its reorder level',
           'products are below their reorder level',
         )
-      }. ` +
-      `The biggest gap is **${name}**: **${shortfall} ${plural(shortfall, 'unit', 'units')} short** ` +
-      `(${totalQty} in stock against a level of ${level}).`,
-    hinglish:
-      `${atLeast.hinglish}${rows.length} ${
+      }. `,
+      hinglish: `${totals.total} ${
         plural(
-          rows.length,
+          totals.total,
           'product apne reorder level se neeche hai',
           'products apne reorder level se neeche hain',
         )
-      }. ` +
+      }. `,
+    };
+
+  const text: Sentence = {
+    en: counted.en +
+      `The biggest gap is **${name}**: **${shortfall} ${plural(shortfall, 'unit', 'units')} short** ` +
+      `(${totalQty} in stock against a level of ${level}).`,
+    hinglish: counted.hinglish +
       `Sabse badi kami **${name}** mein hai: **${shortfall} unit kam** ` +
       `(stock ${totalQty}, level ${level}).`,
   };
@@ -622,24 +652,33 @@ function renderLowStock(
 /**
  * What is about to go off, soonest first.
  *
- * [days] is the horizon the report was asked for and [limit] the cap it was asked for, both
- * as `effectiveParams` resolved them - so the horizon in this sentence is the horizon the
- * query used, and a full page is described as a page rather than as the whole list.
+ * [days] is the horizon `effectiveParams` resolved the request to, and it is only a fallback:
+ * the envelope's own `meta.horizon_days` wins when it is there, because that is the horizon the
+ * query used. The count is the whole horizon's (`meta.total_count`), so a page says how much of
+ * the list it is showing.
  */
 function renderExpiring(
   data: unknown,
   days: number,
-  limit: number | null,
   language: AnswerLanguage,
 ): RenderedAnswer {
-  const rows = asArray(data);
+  const envelope = asRecord(data);
+  const rows = asArray(envelope.rows);
   if (rows === null) {
     return UNREADABLE[language];
   }
+  const totals = listTotals(envelope, rows);
+  if (totals === null) {
+    return UNREADABLE[language];
+  }
+
+  const meta = asRecord(envelope.meta);
+  const horizon = integer(meta.horizon_days) ?? days;
+
   if (rows.length === 0) {
     const quiet: Sentence = {
-      en: `No batches expire within ${days} days.`,
-      hinglish: `${days} din mein koi batch expire nahi ho raha.`,
+      en: `No batches expire within ${horizon} days.`,
+      hinglish: `${horizon} din mein koi batch expire nahi ho raha.`,
     };
     return { text: quiet[language], understood: true };
   }
@@ -666,21 +705,26 @@ function renderExpiring(
       : `**${daysLeft} din bache hain**`,
   };
 
-  const capped = isCapped(rows.length, limit);
-  const atLeast: Sentence = {
-    en: capped ? 'At least ' : '',
-    hinglish: capped ? 'Kam se kam ' : '',
-  };
+  const counted: Sentence = totals.hasMore
+    ? {
+      en: `Showing the ${totals.returned} soonest of **${totals.total}** batches expiring within ${horizon} days. `,
+      hinglish:
+        `Kul **${totals.total}** batch ${horizon} din mein expire ho rahe hain - sabse pehle wale ${totals.returned} dikha raha hoon. `,
+    }
+    : {
+      en: `${totals.total} ${
+        plural(totals.total, 'batch expires', 'batches expire')
+      } within ${horizon} days. `,
+      hinglish: `${totals.total} batch ${horizon} din mein expire ho rahe hain. `,
+    };
 
   const batch = batchNo !== null ? ` batch ${batchNo}` : '';
   const on = expiryDate !== null ? ` (${expiryDate})` : '';
 
   const text: Sentence = {
-    en:
-      `${atLeast.en}${rows.length} ${plural(rows.length, 'batch expires', 'batches expire')} within ${days} days. ` +
+    en: counted.en +
       `The soonest is **${product}**${batch}, ${when.en}${on} - ${qty} ${plural(qty, 'unit', 'units')} on the shelf.`,
-    hinglish:
-      `${atLeast.hinglish}${rows.length} batch ${days} din mein expire ho rahe hain. ` +
+    hinglish: counted.hinglish +
       `Sabse pehle **${product}**${batch} - ${when.hinglish}${on} - shelf par ${qty} unit.`,
   };
 
@@ -762,24 +806,28 @@ function renderTopProducts(
 /**
  * Money sitting on a shelf, most of it first.
  *
- * [days] comes from the report's own `meta` when it is there (`quiet_days`), because that is
- * the number the query used; [limit] is the cap it was asked for, and a full page is again
- * described as a page.
+ * [days] comes from the report's own `meta` when it is there (`quiet_days`), because that is the
+ * number the query used; [days] as passed is the fallback. The count comes from the envelope's
+ * `total_count`, so a page states how much of the quiet shelf it is showing - `dead_stock`
+ * answered `{meta, rows}` before but carried no total, which is the one report where "at least N"
+ * was all its own shape allowed (migration 00050 closed that).
  */
 function renderDeadStock(
   data: unknown,
   days: number,
-  limit: number | null,
   language: AnswerLanguage,
 ): RenderedAnswer {
   const envelope = asRecord(data);
   const rows = asArray(envelope.rows);
-  const meta = asRecord(envelope.meta);
-
   if (rows === null) {
     return UNREADABLE[language];
   }
+  const totals = listTotals(envelope, rows);
+  if (totals === null) {
+    return UNREADABLE[language];
+  }
 
+  const meta = asRecord(envelope.meta);
   const quietDays = integer(meta.quiet_days) ?? days;
 
   if (rows.length === 0) {
@@ -800,24 +848,29 @@ function renderDeadStock(
     return UNREADABLE[language];
   }
 
-  const capped = isCapped(rows.length, limit);
-  const atLeast: Sentence = {
-    en: capped ? 'At least ' : '',
-    hinglish: capped ? 'Kam se kam ' : '',
-  };
-
   const sold: Sentence = {
     en: lastSold === null ? 'never sold' : `last sold ${lastSold}`,
     hinglish: lastSold === null ? 'kabhi nahi bika' : `aakhri baar ${lastSold} ko bika`,
   };
 
+  const counted: Sentence = totals.hasMore
+    ? {
+      en: `Showing the ${totals.returned} with the most cash tied up, of **${totals.total}** products holding stock that has not sold in ${quietDays} days. `,
+      hinglish:
+        `Kul **${totals.total}** product ka maal ${quietDays} din se nahi bika - sabse zyada paisa wale ${totals.returned} dikha raha hoon. `,
+    }
+    : {
+      en: `${totals.total} ${
+        plural(totals.total, 'product has', 'products have')
+      } stock that has not sold in ${quietDays} days. `,
+      hinglish: `${totals.total} product ka maal ${quietDays} din se nahi bika. `,
+    };
+
   const text: Sentence = {
-    en:
-      `${atLeast.en}${rows.length} ${plural(rows.length, 'product has', 'products have')} stock that has not sold in ${quietDays} days. ` +
+    en: counted.en +
       `The most cash tied up is **${name}**: ${qty} ${plural(qty, 'unit', 'units')} worth **${value}** at cost, ` +
       `${sold.en}.`,
-    hinglish:
-      `${atLeast.hinglish}${rows.length} product ka maal ${quietDays} din se nahi bika. ` +
+    hinglish: counted.hinglish +
       `Sabse zyada paisa **${name}** mein atka hai: ${qty} unit, cost par **${value}** - ${sold.hinglish}.`,
   };
 

@@ -52,6 +52,28 @@ interface Calls {
   reports: { rpc: string; args: Record<string, unknown> }[];
 }
 
+/**
+ * A low-stock envelope, as migration 00050 answers one.
+ *
+ * The stub's default answer is the real SHAPE rather than a convenient array: the handler
+ * renders whatever the report returned, and a stub that answered in a shape the report no
+ * longer produces would let a broken render path look green.
+ */
+function lowStockEnvelope(rows: unknown[], total = rows.length) {
+  return {
+    meta: {
+      rule: 'total_qty < min_stock_level',
+      as_of: '2026-09-22',
+      timezone: 'Asia/Kolkata',
+      limit: 50,
+      total_count: total,
+      returned_count: rows.length,
+      has_more: total > rows.length,
+    },
+    rows,
+  };
+}
+
 /** Deps with only the behaviour a test cares about replaced. */
 function stubDeps(overrides: Partial<HandlerDeps> = {}): {
   deps: HandlerDeps;
@@ -74,9 +96,11 @@ function stubDeps(overrides: Partial<HandlerDeps> = {}): {
     },
     run: (_request, rpc, args) => {
       calls.reports.push({ rpc, args });
-      return Promise.resolve([
-        { name: 'Dolo 650', shortfall: 7, total_qty: 10, min_stock_level: 17 },
-      ]);
+      return Promise.resolve(
+        lowStockEnvelope([
+          { name: 'Dolo 650', shortfall: 7, total_qty: 10, min_stock_level: 17 },
+        ]),
+      );
     },
     ...overrides,
   };
@@ -193,9 +217,11 @@ Deno.test('the report is called with the chosen name and the declared parameters
 Deno.test('the answer quotes the report, never the model', async () => {
   const { deps } = stubDeps({
     run: () =>
-      Promise.resolve([
-        { name: 'Dolo 650', shortfall: 7, total_qty: 10, min_stock_level: 17 },
-      ]),
+      Promise.resolve(
+        lowStockEnvelope([
+          { name: 'Dolo 650', shortfall: 7, total_qty: 10, min_stock_level: 17 },
+        ]),
+      ),
   });
 
   const body = await bodyOf(await createHandler(deps)(post({ question: 'what is low?' })));
@@ -203,8 +229,9 @@ Deno.test('the answer quotes the report, never the model', async () => {
   assertStringIncludes(body.answer, 'Dolo 650');
   assertStringIncludes(body.answer, '7 units short');
   // The envelope carries the report's own answer, so a screen can show where the
-  // sentence came from.
-  assertEquals(body.data[0].shortfall, 7);
+  // sentence came from - including the total the sentence now states.
+  assertEquals(body.data.rows[0].shortfall, 7);
+  assertEquals(body.data.meta.total_count, 1);
 });
 
 Deno.test('a question no report answers is a 200 that says so, and runs nothing', async () => {
@@ -417,9 +444,20 @@ Deno.test('the horizon the sentence states is the horizon the report was called 
       } satisfies Classification),
     run: (_request, _rpc, args) => {
       calledWith = args;
-      return Promise.resolve([
-        { product_name: 'Amoxy 500', batch_no: 'A-9', days_left: 6, qty: 12, expiry_date: '2026-09-28' },
-      ]);
+      return Promise.resolve({
+        meta: {
+          horizon_days: 90,
+          as_of: '2026-09-22',
+          timezone: 'Asia/Kolkata',
+          limit: 50,
+          total_count: 1,
+          returned_count: 1,
+          has_more: false,
+        },
+        rows: [
+          { product_name: 'Amoxy 500', batch_no: 'A-9', days_left: 6, qty: 12, expiry_date: '2026-09-28' },
+        ],
+      });
     },
   });
 
@@ -486,9 +524,11 @@ Deno.test('the subject the model named is the sentence the caller is given', asy
 Deno.test('a caller can ask for the answer in Hinglish, and the model is not told', async () => {
   const { deps, calls } = stubDeps({
     run: () =>
-      Promise.resolve([
-        { name: 'Dolo 650', shortfall: 7, total_qty: 10, min_stock_level: 17 },
-      ]),
+      Promise.resolve(
+        lowStockEnvelope([
+          { name: 'Dolo 650', shortfall: 7, total_qty: 10, min_stock_level: 17 },
+        ]),
+      ),
   });
 
   const body = await bodyOf(

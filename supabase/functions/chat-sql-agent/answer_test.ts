@@ -45,6 +45,35 @@ function markerCount(text: string): number {
 }
 
 /**
+ * A list envelope, as migration 00050 answers one: `{meta, rows}` with the WHOLE set's size
+ * beside the page's.
+ *
+ * `has_more` defaults to the relation between the two, because that is what the report
+ * computes and a fixture that broke it would let a wrong sentence pass.
+ */
+function listEnvelope(
+  rows: unknown[],
+  overrides: Partial<{
+    total_count: number;
+    returned_count: number;
+    has_more: boolean;
+  }> = {},
+  meta: Record<string, unknown> = {},
+): Record<string, unknown> {
+  const returned = overrides.returned_count ?? rows.length;
+  const total = overrides.total_count ?? returned;
+  return {
+    meta: {
+      total_count: total,
+      returned_count: returned,
+      has_more: overrides.has_more ?? total > returned,
+      ...meta,
+    },
+    rows,
+  };
+}
+
+/**
  * One *finding* sentence per report: an envelope with something in it, which is
  * when a sentence has a figure worth pointing at.
  */
@@ -62,12 +91,16 @@ const FINDING_SENTENCES: Array<[ClassificationChoice, unknown, ChatParams]> = [
   ],
   [
     'low_stock_products',
-    [{ name: 'Dolo 650', shortfall: 40, total_qty: 10, min_stock_level: 50 }],
+    listEnvelope([{ name: 'Dolo 650', shortfall: 40, total_qty: 10, min_stock_level: 50 }]),
     params(),
   ],
   [
     'expiring_batches',
-    [{ product_name: 'Amoxy 500', batch_no: 'A-9', days_left: 6, qty: 12, expiry_date: '2026-09-28' }],
+    listEnvelope(
+      [{ product_name: 'Amoxy 500', batch_no: 'A-9', days_left: 6, qty: 12, expiry_date: '2026-09-28' }],
+      {},
+      { horizon_days: 30 },
+    ),
     params({ days: 30 }),
   ],
   [
@@ -80,10 +113,11 @@ const FINDING_SENTENCES: Array<[ClassificationChoice, unknown, ChatParams]> = [
   ],
   [
     'dead_stock',
-    {
-      meta: { quiet_days: 90 },
-      rows: [{ name: 'Old Syrup', total_qty: 24, stock_value_at_cost: 4800, last_sold_on: null }],
-    },
+    listEnvelope(
+      [{ name: 'Old Syrup', total_qty: 24, stock_value_at_cost: 4800, last_sold_on: null }],
+      {},
+      { quiet_days: 90 },
+    ),
     params(),
   ],
 ];
@@ -93,10 +127,10 @@ const FINDING_SENTENCES: Array<[ClassificationChoice, unknown, ChatParams]> = [
  * there is nothing to point at.
  */
 const NOTHING_SENTENCES: Array<[ClassificationChoice, unknown, ChatParams]> = [
-  ['low_stock_products', [], params()],
-  ['expiring_batches', [], params({ days: 90 })],
+  ['low_stock_products', listEnvelope([]), params()],
+  ['expiring_batches', listEnvelope([], {}, { horizon_days: 90 }), params({ days: 90 })],
   ['top_products', { meta: { window_from: '2026-09-01', window_to: '2026-09-19' }, rows: [] }, params()],
-  ['dead_stock', { meta: { quiet_days: 30 }, rows: [] }, params()],
+  ['dead_stock', listEnvelope([], {}, { quiet_days: 30 }), params()],
   ['unsupported', null, params()],
 ];
 
@@ -275,17 +309,17 @@ Deno.test('an envelope missing the figures is not rendered as if it had them', (
 });
 
 Deno.test('nothing low on stock is a sentence, not an empty list', () => {
-  const rendered = renderAnswer('low_stock_products', [], params());
+  const rendered = renderAnswer('low_stock_products', listEnvelope([]), params());
 
   assertEquals(rendered.understood, true);
   assertEquals(rendered.text, 'Nothing is below its reorder level.');
 });
 
 Deno.test('the low-stock sentence leads with the biggest gap the report ranked first', () => {
-  const rendered = renderAnswer('low_stock_products', [
+  const rendered = renderAnswer('low_stock_products', listEnvelope([
     { name: 'Dolo 650', shortfall: 40, total_qty: 10, min_stock_level: 50 },
     { name: 'Crocin', shortfall: 5, total_qty: 5, min_stock_level: 10 },
-  ], params());
+  ]), params());
 
   assertEquals(
     rendered.text,
@@ -295,9 +329,9 @@ Deno.test('the low-stock sentence leads with the biggest gap the report ranked f
 });
 
 Deno.test('one product low reads in the singular', () => {
-  const rendered = renderAnswer('low_stock_products', [
+  const rendered = renderAnswer('low_stock_products', listEnvelope([
     { name: 'Dolo 650', shortfall: 1, total_qty: 9, min_stock_level: 10 },
-  ], params());
+  ]), params());
 
   assertStringIncludes(rendered.text, '1 product is below its reorder level.');
   assertStringIncludes(rendered.text, '**1 unit short**');
@@ -308,10 +342,10 @@ Deno.test('the low-stock wording matches the rule the report applies', () => {
   // deliberately strict: a product *at* its level is where the pharmacy meant to
   // act, and it is *not* on the list. Saying "at or below" claimed a row the
   // report does not return - the sentence and the query have to agree.
-  const empty = renderAnswer('low_stock_products', [], params());
-  const finding = renderAnswer('low_stock_products', [
+  const empty = renderAnswer('low_stock_products', listEnvelope([]), params());
+  const finding = renderAnswer('low_stock_products', listEnvelope([
     { name: 'Dolo 650', shortfall: 40, total_qty: 10, min_stock_level: 50 },
-  ], params());
+  ]), params());
 
   for (const rendered of [empty, finding]) {
     assertEquals(
@@ -324,15 +358,19 @@ Deno.test('the low-stock wording matches the rule the report applies', () => {
 });
 
 Deno.test('an already-expired batch reads as expired, not as a negative countdown', () => {
-  const rendered = renderAnswer('expiring_batches', [
-    {
-      product_name: 'Amoxy 500',
-      batch_no: 'A-9',
-      days_left: -6,
-      qty: 12,
-      expiry_date: '2026-09-13',
-    },
-  ], params({ days: 30 }));
+  const rendered = renderAnswer('expiring_batches', listEnvelope(
+    [
+      {
+        product_name: 'Amoxy 500',
+        batch_no: 'A-9',
+        days_left: -6,
+        qty: 12,
+        expiry_date: '2026-09-13',
+      },
+    ],
+    {},
+    { horizon_days: 30 },
+  ), params({ days: 30 }));
 
   assertStringIncludes(rendered.text, 'The soonest is **Amoxy 500** batch A-9');
   assertStringIncludes(rendered.text, '**already expired 6 days ago**');
@@ -340,23 +378,32 @@ Deno.test('an already-expired batch reads as expired, not as a negative countdow
 });
 
 Deno.test('an unexpired batch points at the time it has left', () => {
-  const rendered = renderAnswer('expiring_batches', [
-    {
-      product_name: 'Amoxy 500',
-      batch_no: 'A-9',
-      days_left: 6,
-      qty: 12,
-      expiry_date: '2026-09-28',
-    },
-  ], params({ days: 30 }));
+  const rendered = renderAnswer('expiring_batches', listEnvelope(
+    [
+      {
+        product_name: 'Amoxy 500',
+        batch_no: 'A-9',
+        days_left: 6,
+        qty: 12,
+        expiry_date: '2026-09-28',
+      },
+    ],
+    {},
+    { horizon_days: 30 },
+  ), params({ days: 30 }));
 
   assertStringIncludes(rendered.text, '**6 days left**');
 });
 
 Deno.test('the expiry sentence states the horizon the query actually used', () => {
-  const rendered = renderAnswer('expiring_batches', [], params({ days: 7 }));
+  // The envelope's own `horizon_days` wins over the argument, because that is the number the
+  // report ran with - the same rule `dead_stock`'s `quiet_days` has always followed.
+  const envelope = listEnvelope([], {}, { horizon_days: 7 });
 
-  assertEquals(rendered.text, 'No batches expire within 7 days.');
+  assertEquals(renderAnswer('expiring_batches', envelope, params({ days: 7 })).text,
+    'No batches expire within 7 days.');
+  assertEquals(renderAnswer('expiring_batches', envelope, params({ days: 5000 })).text,
+    'No batches expire within 7 days.');
 });
 
 Deno.test('the top-seller sentence takes its window and metric from the report meta', () => {
@@ -400,9 +447,8 @@ Deno.test('nothing sold in the window is a sentence', () => {
 });
 
 Deno.test('dead stock that never sold says so, which is the strongest case of the answer', () => {
-  const rendered = renderAnswer('dead_stock', {
-    meta: { as_of: '2026-09-19', quiet_days: 90, limit: 50 },
-    rows: [
+  const rendered = renderAnswer('dead_stock', listEnvelope(
+    [
       {
         name: 'Old Syrup',
         total_qty: 24,
@@ -410,7 +456,9 @@ Deno.test('dead stock that never sold says so, which is the strongest case of th
         last_sold_on: null,
       },
     ],
-  }, params());
+    {},
+    { as_of: '2026-09-19', quiet_days: 90, limit: 50 },
+  ), params());
 
   assertEquals(rendered.understood, true);
   assertStringIncludes(rendered.text, 'The most cash tied up is **Old Syrup**');
@@ -418,42 +466,39 @@ Deno.test('dead stock that never sold says so, which is the strongest case of th
 });
 
 Deno.test('the dead-stock horizon comes from the report meta, not from the caller', () => {
-  const rendered = renderAnswer('dead_stock', {
-    meta: { quiet_days: 30 },
-    rows: [],
-  }, params({ days: 90 }));
+  const rendered = renderAnswer('dead_stock', listEnvelope([], {}, { quiet_days: 30 }), params({ days: 90 }));
 
   assertEquals(rendered.text, 'Nothing has gone quiet in the last 30 days.');
 });
 
-Deno.test('a list that came back full is described as a page, not as the whole answer', () => {
+Deno.test('a list that is only a page of the whole says how much of it it is showing', () => {
   // The defect this closes: `rows.length` is what the report *returned*, and reporting it as
-  // the number that are low claimed a total the report never established. A page that came
-  // back exactly at its cap says "at least"; one that came back short is the whole answer.
+  // the number that are low claimed a total the report never established. The envelope now
+  // carries both numbers, so a page says so - in the brief's own words, with the marker on the
+  // total, which is the figure worth pointing at.
   const rows = [
     { name: 'Dolo 650', shortfall: 40, total_qty: 10, min_stock_level: 50 },
     { name: 'Crocin', shortfall: 5, total_qty: 5, min_stock_level: 10 },
   ];
 
-  assertStringIncludes(
-    renderAnswer('low_stock_products', rows, params({ limit: 2 })).text,
-    'At least 2 products are below their reorder level.',
+  const paged = renderAnswer(
+    'low_stock_products',
+    listEnvelope(rows, { total_count: 120 }),
+    params({ limit: 2 }),
   );
-  assertEquals(
-    renderAnswer('low_stock_products', rows, params({ limit: 3 })).text.startsWith(
-      '2 products are',
-    ),
-    true,
-    'a page that came back short is the whole answer',
+  assertStringIncludes(paged.text, 'Showing the 2 worst of **120** products below their reorder level.');
+  assertEquals(paged.text.includes('At least'), false, paged.text);
+
+  // A page that came back short of the set is the whole answer, and states the exact total.
+  const whole = renderAnswer(
+    'low_stock_products',
+    listEnvelope(rows, { total_count: 2 }),
+    params({ limit: 3 }),
   );
-  assertEquals(
-    renderAnswer('low_stock_products', rows, params()).text.startsWith('2 products are'),
-    true,
-    'with no cap named there is nothing to compare against, so no total is claimed',
-  );
+  assertEquals(whole.text.startsWith('2 products are below their reorder level.'), true, whole.text);
 });
 
-Deno.test('the two counting list sentences treat a full page the same way', () => {
+Deno.test('the two other counting list sentences state their whole set too', () => {
   const batches = [
     { product_name: 'Amoxy 500', batch_no: 'A-9', days_left: 6, qty: 12, expiry_date: '2026-09-28' },
   ];
@@ -462,15 +507,23 @@ Deno.test('the two counting list sentences treat a full page the same way', () =
   ];
 
   assertStringIncludes(
-    renderAnswer('expiring_batches', batches, params({ days: 30, limit: 1 })).text,
-    'At least 1 batch expires within 30 days.',
+    renderAnswer(
+      'expiring_batches',
+      listEnvelope(batches, { total_count: 96 }, { horizon_days: 30 }),
+      params({ days: 30, limit: 1 }),
+    ).text,
+    'Showing the 1 soonest of **96** batches expiring within 30 days.',
   );
   assertStringIncludes(
-    renderAnswer('dead_stock', { meta: { quiet_days: 90 }, rows: quiet }, params({ limit: 1 })).text,
-    'At least 1 product has stock that has not sold in 90 days.',
+    renderAnswer(
+      'dead_stock',
+      listEnvelope(quiet, { total_count: 40 }, { quiet_days: 90 }),
+      params({ limit: 1 }),
+    ).text,
+    'Showing the 1 with the most cash tied up, of **40** products holding stock that has not sold in 90 days.',
   );
-  // And the sentence that counts nothing is unchanged by a full page: "the top seller is
-  // Dolo 650" is as true of a page as of the whole list.
+  // And the sentence that counts nothing is unchanged by a page: "the top seller is Dolo 650"
+  // is as true of a page as of the whole list.
   assertStringIncludes(
     renderAnswer('top_products', {
       meta: { window_from: '2026-08-21', window_to: '2026-09-19', metric_used: 'units' },
@@ -505,7 +558,7 @@ Deno.test('a cap the reports cannot use becomes the default, and one they can is
   assertEquals(effectiveParams('dead_stock', params()).limit, 50);
   assertEquals(effectiveParams('top_products', params()).limit, 20);
   // The largest cap this function will ever ask for is inside every list report's own
-  // maximum, which is what makes "the page came back full, so say at least" sound.
+  // maximum, so a page is always a page *of a countable set* rather than a truncated read.
   assertEquals(effectiveParams('low_stock_products', params({ limit: LIST_MAX_LIMIT })).limit, LIST_MAX_LIMIT);
   assertEquals(effectiveParams('low_stock_products', params({ limit: LIST_MAX_LIMIT + 1 })).limit, 50);
 });
@@ -515,10 +568,23 @@ Deno.test('a summary is left exactly as the model declared it', () => {
   assertEquals(effectiveParams('report_summary', declared), declared);
 });
 
-Deno.test('an unreadable array is reported rather than rendered as empty', () => {
-  const rendered = renderAnswer('low_stock_products', { rows: [] }, params());
+Deno.test('an envelope whose shape or totals cannot be read is reported, never guessed at', () => {
+  // Four ways to be unreadable, and each one is a sentence rather than a number: the OLD bare
+  // array this report used to answer with, no `rows` at all, an envelope with no totals, and an
+  // envelope whose `returned_count` does not describe the page in hand. A counting sentence
+  // that cannot read its total may not claim one.
+  const unreadable = [
+    [{ name: 'Dolo 650', shortfall: 4, total_qty: 6, min_stock_level: 10 }],
+    { meta: { total_count: 1, returned_count: 1, has_more: false } },
+    { rows: [] },
+    { meta: { total_count: 9, returned_count: 1, has_more: true }, rows: [] },
+  ];
 
-  assertEquals(rendered.understood, false);
+  for (const data of unreadable) {
+    const rendered = renderAnswer('low_stock_products', data, params());
+    assertEquals(rendered.understood, false, `should not have rendered: ${JSON.stringify(data)}`);
+    assertStringIncludes(rendered.text, 'does not understand');
+  }
 });
 
 Deno.test('a question no report answers gets the fixed refusal', () => {
@@ -529,10 +595,11 @@ Deno.test('a question no report answers gets the fixed refusal', () => {
 });
 
 Deno.test('a figure the report did not send is never invented', () => {
-  const rendered = renderAnswer('dead_stock', {
-    meta: { quiet_days: 90 },
-    rows: [{ name: 'Old Syrup', total_qty: 24 }],
-  }, params());
+  const rendered = renderAnswer('dead_stock', listEnvelope(
+    [{ name: 'Old Syrup', total_qty: 24 }],
+    {},
+    { quiet_days: 90 },
+  ), params());
 
   assertEquals(rendered.understood, false);
   assertEquals(rendered.text.includes('₹'), false);
@@ -616,14 +683,27 @@ Deno.test('every sentence a report can write can be said in Hinglish', () => {
     ],
     [
       'low_stock_products',
-      [{ name: 'Dolo 650', shortfall: 40, total_qty: 10, min_stock_level: 50 }],
+      listEnvelope([{ name: 'Dolo 650', shortfall: 40, total_qty: 10, min_stock_level: 50 }]),
       params(),
       '1 product apne reorder level se neeche hai. Sabse badi kami **Dolo 650** mein hai: '
         + '**40 unit kam** (stock 10, level 50).',
     ],
     [
+      'low_stock_products',
+      listEnvelope([{ name: 'Dolo 650', shortfall: 40, total_qty: 10, min_stock_level: 50 }], {
+        total_count: 120,
+      }),
+      params(),
+      'Kul **120** product apne reorder level se neeche hain - sabse kam wale 1 dikha raha hoon. '
+        + 'Sabse badi kami **Dolo 650** mein hai: **40 unit kam** (stock 10, level 50).',
+    ],
+    [
       'expiring_batches',
-      [{ product_name: 'Amoxy 500', batch_no: 'A-9', days_left: -6, qty: 12, expiry_date: '2026-09-13' }],
+      listEnvelope(
+        [{ product_name: 'Amoxy 500', batch_no: 'A-9', days_left: -6, qty: 12, expiry_date: '2026-09-13' }],
+        {},
+        { horizon_days: 30 },
+      ),
       params({ days: 30 }),
       '1 batch 30 din mein expire ho rahe hain. Sabse pehle **Amoxy 500** batch A-9 - '
         + '**6 din pehle expire ho gaya** (2026-09-13) - shelf par 12 unit.',
@@ -643,10 +723,11 @@ Deno.test('every sentence a report can write can be said in Hinglish', () => {
     ],
     [
       'dead_stock',
-      {
-        meta: { quiet_days: 90 },
-        rows: [{ name: 'Old Syrup', total_qty: 24, stock_value_at_cost: 4800, last_sold_on: null }],
-      },
+      listEnvelope(
+        [{ name: 'Old Syrup', total_qty: 24, stock_value_at_cost: 4800, last_sold_on: null }],
+        {},
+        { quiet_days: 90 },
+      ),
       params(),
       '1 product ka maal 90 din se nahi bika. Sabse zyada paisa **Old Syrup** mein atka hai: '
         + '24 unit, cost par **₹4800.00** - kabhi nahi bika.',
@@ -662,7 +743,7 @@ Deno.test('every sentence a report can write can be said in Hinglish', () => {
 });
 
 Deno.test('the Hinglish sentences that have no finding are Hinglish too', () => {
-  const empty = renderAnswer('low_stock_products', [], params(), 'hinglish');
+  const empty = renderAnswer('low_stock_products', listEnvelope([]), params(), 'hinglish');
   const refusal = renderAnswer('unsupported', null, params(), 'hinglish');
   const unreadable = renderAnswer('low_stock_products', { rows: [] }, params(), 'hinglish');
 

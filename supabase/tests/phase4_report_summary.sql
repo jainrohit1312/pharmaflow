@@ -320,6 +320,24 @@ begin
       || (v_summary -> 'stock' ->> 'products') || ' products)'
   );
 
+  -- 8. the default period is the BUSINESS day, and the envelope states its boundary
+  --    (migration 20260922000050, D-090). The server runs in UTC, so `current_date` is
+  --    yesterday's business between 00:00 and 05:30 IST - and a report whose period is its
+  --    own silent default cannot be argued with by its reader.
+  v_summary := public.report_summary(null, null);
+  v_log := array_append(
+    v_log,
+    case when v_summary ->> 'as_of' = public.business_today()::text
+          and v_summary ->> 'timezone' = 'Asia/Kolkata'
+          and v_summary ->> 'from' = public.business_today()::text
+          and v_summary ->> 'to' = public.business_today()::text
+      then 'PASS' else 'FAIL' end
+      || ': 8. no period named means the business day, and the envelope says which day and zone ('
+      || coalesce(v_summary ->> 'from', 'null') || ' .. ' || coalesce(v_summary ->> 'to', 'null')
+      || ' as of ' || coalesce(v_summary ->> 'as_of', 'null') || ' in '
+      || coalesce(v_summary ->> 'timezone', 'null') || ')'
+  );
+
   raise exception E'PHASE4 REPORT SUMMARY TEST\n%',
     array_to_string(v_log, chr(10));
 end $$;
