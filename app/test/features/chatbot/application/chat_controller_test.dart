@@ -15,6 +15,7 @@ library;
 import 'dart:async';
 
 import 'package:app/core/errors/app_exception.dart';
+import 'package:app/data/models/answer_language.dart';
 import 'package:app/features/chatbot/application/chat_controller.dart';
 import 'package:app/services/chat_service.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -202,6 +203,40 @@ void main() {
     expect(assistant.questions, isEmpty);
     expect(stateOf(container).isStarted, isFalse);
   });
+
+  test(
+    'the language is read when the question is sent, and a retry takes the current one',
+    () async {
+      final assistant = FakeChatService()
+        ..failures.addAll(<Exception?>[unreachableAssistantFailure(), null]);
+      final container = pumpController(assistant: assistant);
+
+      await notifier(container).ask('What is low on stock?');
+      expect(
+        assistant.languages,
+        <AnswerLanguage>[AnswerLanguage.english],
+        reason:
+            'a conversation is answered in English until the user says otherwise',
+      );
+
+      // The user switches before retrying. The retry is the same QUESTION, in the language
+      // chosen now - which is what "a choice about the next answer" means, and why the
+      // language is read here rather than stored with the question.
+      container
+          .read(answerLanguageChoiceProvider.notifier)
+          .choose(AnswerLanguage.hinglish);
+      await notifier(container).retry();
+
+      expect(assistant.languages, <AnswerLanguage>[
+        AnswerLanguage.english,
+        AnswerLanguage.hinglish,
+      ]);
+      expect(assistant.questions, <String>[
+        'What is low on stock?',
+        'What is low on stock?',
+      ]);
+    },
+  );
 
   test('a refusal is a message like any other, not a failure', () async {
     // The distinction this whole screen is built on: `rpc: null` is a *successful*

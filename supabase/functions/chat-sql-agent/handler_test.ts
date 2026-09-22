@@ -22,7 +22,7 @@
 import { assertEquals, assertStringIncludes } from 'jsr:@std/assert';
 import { FunctionError } from '../_shared/errors.ts';
 import { effectiveParams } from './answer.ts';
-import { createHandler, paramsFor, type HandlerDeps } from './handler.ts';
+import { createHandler, paramsFor, validateLanguage, type HandlerDeps } from './handler.ts';
 import {
   MAX_HISTORY_TURNS,
   type ChatParams,
@@ -481,4 +481,45 @@ Deno.test('the subject the model named is the sentence the caller is given', asy
   assertStringIncludes(body.answer, 'Stock on hand now is worth');
   assertEquals(calledWith, { p_from: null, p_to: null });
   assertEquals(body.params, { p_from: null, p_to: null });
+});
+
+Deno.test('a caller can ask for the answer in Hinglish, and the model is not told', async () => {
+  const { deps, calls } = stubDeps({
+    run: () =>
+      Promise.resolve([
+        { name: 'Dolo 650', shortfall: 7, total_qty: 10, min_stock_level: 17 },
+      ]),
+  });
+
+  const body = await bodyOf(
+    await createHandler(deps)(post({ question: 'kya kam hai?', language: 'hinglish' })),
+  );
+
+  assertStringIncludes(body.answer, 'apne reorder level se neeche hai');
+  assertStringIncludes(body.answer, 'Dolo 650');
+  // The classification is untouched by the language: it is the CALLER's choice, not the
+  // model's, so one model call and one set of parameters serve every language. That is what
+  // keeps a language from being able to influence which figures are read.
+  assertEquals(calls.classifications.length, 1);
+  assertEquals(calls.classifications[0].question, 'kya kam hai?');
+});
+
+Deno.test('a language never reaches a report, because it is not a report\'s business', async () => {
+  const { deps, calls } = stubDeps();
+
+  await createHandler(deps)(post({ question: 'what is low?', language: 'hinglish' }));
+
+  assertEquals(calls.reports[0].args, { p_limit: 50 });
+});
+
+Deno.test('a language this build does not have is English, not a refusal', () => {
+  // The same direction an unparsable date takes: a caller that asks for something unknown
+  // gets a usable answer rather than an error about the language it asked in.
+  assertEquals(validateLanguage(undefined), 'en');
+  assertEquals(validateLanguage(null), 'en');
+  assertEquals(validateLanguage(7), 'en');
+  assertEquals(validateLanguage('hi'), 'en');
+  assertEquals(validateLanguage('en'), 'en');
+  assertEquals(validateLanguage('hinglish'), 'hinglish');
+  assertEquals(validateLanguage('  Hinglish  '), 'hinglish');
 });

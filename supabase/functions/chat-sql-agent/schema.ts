@@ -100,6 +100,29 @@ export type SummarySubject = (typeof SUMMARY_SUBJECTS)[number];
 /** What a summary leads with when the model names nothing. */
 export const DEFAULT_SUMMARY_SUBJECT: SummarySubject = 'everything';
 
+/**
+ * The languages a sentence can be written in.
+ *
+ * **Not a parameter the model fills** - it is the CALLER's choice, like the question
+ * itself, and it arrives on the request body rather than in the classification. That is
+ * deliberate: which report answers a question does not depend on the language the question
+ * was asked in, so the one model call is untouched by this, and no language can influence
+ * which figures are read. It only chooses which of `answer.ts`'s sentences gets written.
+ *
+ * Hinglish - Hindi in Roman script, with the business nouns left in English - is first
+ * because it is how this owner writes. Hindi script is not here yet, and when it is added,
+ * **every sentence in `answer.ts` fails to compile until it has one**: the sentence tables
+ * there are typed by this union, so a missing language is a type error rather than an
+ * English sentence in disguise.
+ */
+export const ANSWER_LANGUAGES = ['en', 'hinglish'] as const;
+
+/** One of the languages a sentence can be written in. */
+export type AnswerLanguage = (typeof ANSWER_LANGUAGES)[number];
+
+/** What a sentence is written in when the caller names nothing. */
+export const DEFAULT_ANSWER_LANGUAGE: AnswerLanguage = 'en';
+
 /** The parameters the model may fill, whatever report it chose. */
 export interface ChatParams {
   /** `YYYY-MM-DD`, for `report_summary` and `top_products`. */

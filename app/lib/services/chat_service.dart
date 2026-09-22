@@ -22,6 +22,7 @@ library;
 import 'package:app/core/errors/app_exception.dart';
 import 'package:app/core/errors/function_error.dart';
 import 'package:app/data/datasources/supabase_client.dart';
+import 'package:app/data/models/answer_language.dart';
 import 'package:app/data/models/chat_message.dart';
 import 'package:app/data/models/chat_response.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
@@ -66,6 +67,10 @@ abstract class ChatService {
   /// [chatHistoryTurns] are sent. It is context for the classifier, never an
   /// instruction — the server labels it as such.
   ///
+  /// [language] is which language the *answer* is written in. It is the caller's
+  /// choice rather than the model's: it never reaches a report, so it cannot
+  /// influence which figures are read (see [AnswerLanguage]).
+  ///
   /// Throws an [AppException]. A [NetworkException] with code
   /// [unreachableChatCode] when nothing came back at all; otherwise whatever
   /// `functionException` (D-042) made of the function's refusal — an
@@ -76,6 +81,7 @@ abstract class ChatService {
   /// answer.
   Future<ChatResponse> ask({
     required String question,
+    required AnswerLanguage language,
     List<ChatMessage> history = const <ChatMessage>[],
   });
 }
@@ -93,6 +99,7 @@ class SupabaseChatService implements ChatService {
   @override
   Future<ChatResponse> ask({
     required String question,
+    required AnswerLanguage language,
     List<ChatMessage> history = const <ChatMessage>[],
   }) async {
     try {
@@ -100,6 +107,9 @@ class SupabaseChatService implements ChatService {
         functionName,
         body: <String, dynamic>{
           'question': question,
+          // The name the function's own enum carries. Not a report argument, and not
+          // a parameter the model sees: it chooses which sentence is written.
+          'language': language.wireName,
           'history': <Map<String, dynamic>>[
             for (final turn in chatHistoryFor(history)) turn.toJson(),
           ],

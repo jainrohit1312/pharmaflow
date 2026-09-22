@@ -16,6 +16,7 @@ library;
 import 'dart:async';
 
 import 'package:app/core/errors/app_exception.dart';
+import 'package:app/data/models/answer_language.dart';
 import 'package:app/data/models/chat_message.dart';
 import 'package:app/data/models/chat_response.dart';
 import 'package:app/services/chat_service.dart';
@@ -27,6 +28,13 @@ class FakeChatService implements ChatService {
 
   /// The history sent with each call, aligned by position with [questions].
   final List<List<ChatMessage>> histories = <List<ChatMessage>>[];
+
+  /// The language each call was asked for, aligned by position with [questions].
+  ///
+  /// Recorded for the same reason the questions are: "the answer comes back in the language
+  /// that was chosen" is a claim about what this app SENDS, and the server's half of it is
+  /// `answer_test.ts`'s.
+  final List<AnswerLanguage> languages = <AnswerLanguage>[];
 
   /// What every successful call answers with.
   ChatResponse answer = buildChatAnswer();
@@ -43,10 +51,12 @@ class FakeChatService implements ChatService {
   @override
   Future<ChatResponse> ask({
     required String question,
+    required AnswerLanguage language,
     List<ChatMessage> history = const <ChatMessage>[],
   }) async {
     questions.add(question);
     histories.add(history);
+    languages.add(language);
 
     final held = gate;
     if (held != null) {

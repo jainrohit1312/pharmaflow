@@ -33,7 +33,10 @@ import { FunctionError, isFunctionError } from '../_shared/errors.ts';
 import { failJson, okJson, preflight } from '../_shared/response.ts';
 import { effectiveParams, renderAnswer } from './answer.ts';
 import {
+  ANSWER_LANGUAGES,
+  DEFAULT_ANSWER_LANGUAGE,
   MAX_HISTORY_TURNS,
+  type AnswerLanguage,
   type ChatParams,
   type ChatTurn,
   type Classification,
@@ -83,6 +86,9 @@ export function createHandler(
       const body = await readJsonBody(request);
       const question = validateQuestion(body.question);
       const history = validateHistory(body.history);
+      // The caller's own choice, not the model's: read beside the question, because it is
+      // the same kind of thing (see `ANSWER_LANGUAGES`).
+      const language = validateLanguage(body.language);
 
       // Before the model is paid for: an account with no pharmacy has no reports
       // to answer from, and saying so is better than a classification nobody can
@@ -107,7 +113,7 @@ export function createHandler(
         data = await deps.run(request, rpc, args);
       }
 
-      const rendered = renderAnswer(classification.rpc, data, effective);
+      const rendered = renderAnswer(classification.rpc, data, effective, language);
       if (!rendered.understood) {
         warnings.push(
           'The report ran, but its answer came back in a shape this app does not understand.',
@@ -194,6 +200,26 @@ export function validateQuestion(raw: unknown): string {
   }
 
   return question;
+}
+
+/**
+ * The language the answer should be written in, from the body.
+ *
+ * **Absent is the common case, and it is not a failure**: a caller that never heard of a
+ * language gets the default, which is what every client sent before this existed. A name
+ * this function does not know is *also* the default rather than a refusal, in the same
+ * direction `asDate` and `asInteger` go and for the same reason - refusing to answer a
+ * question because of the language it asked for would be a worse answer than answering it
+ * in the wrong language.
+ */
+export function validateLanguage(raw: unknown): AnswerLanguage {
+  if (typeof raw !== 'string') {
+    return DEFAULT_ANSWER_LANGUAGE;
+  }
+  const wanted = raw.trim().toLowerCase();
+  return (ANSWER_LANGUAGES as readonly string[]).includes(wanted)
+    ? (wanted as AnswerLanguage)
+    : DEFAULT_ANSWER_LANGUAGE;
 }
 
 /**

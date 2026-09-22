@@ -29,6 +29,7 @@ import 'dart:async';
 import 'package:app/core/widgets/app_button.dart';
 import 'package:app/core/widgets/app_scaffold.dart';
 import 'package:app/core/widgets/app_text_field.dart';
+import 'package:app/data/models/answer_language.dart';
 import 'package:app/features/chatbot/application/chat_controller.dart';
 import 'package:app/features/chatbot/presentation/widgets/message_bubble.dart';
 import 'package:flutter/material.dart';
@@ -139,6 +140,7 @@ class _ChatbotScreenState extends ConsumerState<ChatbotScreen> {
                 : _Invitation(onAsk: (question) => unawaited(_ask(question))),
           ),
           const Divider(height: 1),
+          const _LanguageBar(),
           _Composer(
             controller: _question,
             isAsking: state.isAsking,
@@ -239,6 +241,42 @@ class _Invitation extends StatelessWidget {
                 ),
             ],
           ),
+        ],
+      ),
+    );
+  }
+}
+
+/// The language the next answer is written in.
+///
+/// Two chips here rather than a setting under `/settings`, and that is a decision: the
+/// choice is felt at the moment a question is asked, it only ever affects the *next*
+/// answer, and it costs no migration — a profile column would, and a setting nobody visits
+/// is a setting nobody finds. The language a question is *asked* in is irrelevant to it;
+/// the classifier answers whatever language it is asked in.
+class _LanguageBar extends ConsumerWidget {
+  const _LanguageBar();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final chosen = ref.watch(answerLanguageChoiceProvider);
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+      child: Wrap(
+        spacing: 8,
+        children: <Widget>[
+          for (final language in AnswerLanguage.values)
+            ChoiceChip(
+              label: Text(language.label),
+              selected: language == chosen,
+              // Tapping the language already in use does nothing rather than
+              // deselecting: an answer has to be written in *some* language, so
+              // "none" is not a state this control can reach.
+              onSelected: (_) => ref
+                  .read(answerLanguageChoiceProvider.notifier)
+                  .choose(language),
+            ),
         ],
       ),
     );

@@ -28,6 +28,7 @@
 ///      — is. Found the hard way while testing the alerts' count.
 library;
 
+import 'package:app/data/models/answer_language.dart';
 import 'package:app/data/models/chat_message.dart';
 import 'package:app/services/chat_service.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
@@ -97,6 +98,29 @@ class ChatFailure {
   final Object error;
 }
 
+/// The language the assistant is asked to answer in.
+///
+/// A provider rather than a field on [ChatState], because the language is a choice about
+/// the NEXT answer rather than part of the conversation: a transcript in two languages is
+/// perfectly fine, and switching one's mind should not rewrite what has already been said.
+/// The controller reads it once per question, so every answer in a conversation is written
+/// in the language that was chosen when it was asked.
+@riverpod
+class AnswerLanguageChoice extends _$AnswerLanguageChoice {
+  @override
+  AnswerLanguage build() => AnswerLanguage.english;
+
+  /// Answers the next question — and every one after it — in [language].
+  ///
+  /// Choosing the language already in use is a no-op rather than a rebuild: tapping the
+  /// chip that is already selected should not make the screen redraw for nothing.
+  void choose(AnswerLanguage language) {
+    if (language != state) {
+      state = language;
+    }
+  }
+}
+
 /// Holds the conversation and asks the assistant one question at a time.
 @riverpod
 class ChatController extends _$ChatController {
@@ -111,6 +135,10 @@ class ChatController extends _$ChatController {
   /// own business; the check here is what guarantees no call is spent either way.
   /// Asking supersedes a previous failure: that failure described one question's
   /// attempt, and the user has moved past it.
+  ///
+  /// The answer is asked for in the language chosen when the question is sent
+  /// ([AnswerLanguageChoice]), read here rather than on the screen so that a retry
+  /// cannot be the one turn that goes out in a different language by accident.
   Future<void> ask(String question) async {
     final trimmed = question.trim();
     if (trimmed.isEmpty || state.isAsking) {
@@ -120,12 +148,13 @@ class ChatController extends _$ChatController {
     // The conversation as it was, captured before the await: it is what the turn
     // is appended to on success, and what is left untouched on failure.
     final history = state.messages;
+    final language = ref.read(answerLanguageChoiceProvider);
     state = ChatState(messages: history, asking: trimmed);
 
     try {
       final response = await ref
           .read(chatServiceProvider)
-          .ask(question: trimmed, history: history);
+          .ask(question: trimmed, language: language, history: history);
       // A screen that navigated away stops watching this provider, and Riverpod
       // then disposes it: writing state afterwards would throw from a future
       // nobody is awaiting (D-034).

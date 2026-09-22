@@ -21,6 +21,7 @@ import 'dart:async';
 
 import 'package:app/core/errors/app_exception.dart';
 import 'package:app/core/widgets/error_view.dart';
+import 'package:app/data/models/answer_language.dart';
 import 'package:app/features/chatbot/presentation/chatbot_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -170,6 +171,54 @@ void main() {
           'the marker is the server talking to this widget, not to a person',
     );
     expect(boldRuns(tester), <String>['Dolo 650', '40 units short']);
+  });
+
+  testWidgets('the answer comes back in the language the user chose', (
+    tester,
+  ) async {
+    final assistant = FakeChatService()
+      ..answer = buildChatAnswer(
+        answer: 'Koi bhi product apne reorder level se neeche nahi hai.',
+      );
+    await pumpChatbotApp(tester, service: assistant);
+
+    // A conversation starts in English, and the chips say which language is in use.
+    expect(assistant.languages, isEmpty);
+    expect(
+      tester
+          .widget<ChoiceChip>(find.widgetWithText(ChoiceChip, 'English'))
+          .selected,
+      isTrue,
+    );
+
+    await tester.tap(find.widgetWithText(ChoiceChip, 'Hinglish'));
+    await tester.pumpAndSettle();
+
+    expect(
+      tester
+          .widget<ChoiceChip>(find.widgetWithText(ChoiceChip, 'Hinglish'))
+          .selected,
+      isTrue,
+    );
+    expect(
+      tester
+          .widget<ChoiceChip>(find.widgetWithText(ChoiceChip, 'English'))
+          .selected,
+      isFalse,
+    );
+
+    await askQuestion(tester, 'kya kam hai?');
+    await tester.pumpAndSettle();
+
+    expect(
+      assistant.languages,
+      <AnswerLanguage>[AnswerLanguage.hinglish],
+      reason: 'the chosen language is what this app sends with the question',
+    );
+    expect(
+      find.text('Koi bhi product apne reorder level se neeche nahi hai.'),
+      findsOneWidget,
+    );
   });
 
   testWidgets("a question is the user's own words, never markup", (

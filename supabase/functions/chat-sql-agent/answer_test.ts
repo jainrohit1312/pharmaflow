@@ -17,13 +17,14 @@
  */
 
 import { assertEquals, assertStringIncludes } from 'jsr:@std/assert';
-import {
-  effectiveParams,
-  LIST_MAX_LIMIT,
-  renderAnswer,
-  UNSUPPORTED_ANSWER,
-} from './answer.ts';
-import type { ChatParams, ClassificationChoice, SummarySubject } from './schema.ts';
+import { effectiveParams, LIST_MAX_LIMIT, renderAnswer, UNSUPPORTED } from './answer.ts';
+import { ANSWER_LANGUAGES } from './schema.ts';
+import type {
+  AnswerLanguage,
+  ChatParams,
+  ClassificationChoice,
+  SummarySubject,
+} from './schema.ts';
 
 /** The parameters a test does not care about. */
 function params(overrides: Partial<ChatParams> = {}): ChatParams {
@@ -523,7 +524,7 @@ Deno.test('an unreadable array is reported rather than rendered as empty', () =>
 Deno.test('a question no report answers gets the fixed refusal', () => {
   const rendered = renderAnswer('unsupported', null, params());
 
-  assertEquals(rendered.text, UNSUPPORTED_ANSWER);
+  assertEquals(rendered.text, UNSUPPORTED.en);
   assertEquals(rendered.understood, true);
 });
 
@@ -538,43 +539,147 @@ Deno.test('a figure the report did not send is never invented', () => {
 });
 
 Deno.test('a sentence points at its finding, and every marker it writes is closed', () => {
-  for (const [rpc, data, p] of FINDING_SENTENCES) {
-    const rendered = renderAnswer(rpc, data, p);
-    const markers = markerCount(rendered.text);
+  // Over every language, because the marker is the SERVER's syntax in each of them: a
+  // Hinglish sentence with an unclosed marker would show a reader a stray `**` exactly as an
+  // English one would.
+  for (const language of ANSWER_LANGUAGES) {
+    for (const [rpc, data, p] of FINDING_SENTENCES) {
+      const rendered = renderAnswer(rpc, data, p, language);
+      const markers = markerCount(rendered.text);
 
-    assertEquals(rendered.understood, true, `${rpc} should have rendered`);
-    assertEquals(markers > 0, true, `${rpc} should point at something: ${rendered.text}`);
-    assertEquals(
-      markers % 2,
-      0,
-      `${rpc} left a marker unclosed, which the client would show as a stray **: ${rendered.text}`,
-    );
+      assertEquals(rendered.understood, true, `${rpc}/${language} should have rendered`);
+      assertEquals(
+        markers > 0,
+        true,
+        `${rpc}/${language} should point at something: ${rendered.text}`,
+      );
+      assertEquals(
+        markers % 2,
+        0,
+        `${rpc}/${language} left a marker unclosed, which the client would show as a stray **: ${rendered.text}`,
+      );
+    }
   }
 });
 
 Deno.test('an emphasis always brackets something: no marker brackets nothing', () => {
-  for (const [rpc, data, p] of FINDING_SENTENCES) {
-    const { text } = renderAnswer(rpc, data, p);
+  for (const language of ANSWER_LANGUAGES) {
+    for (const [rpc, data, p] of FINDING_SENTENCES) {
+      const { text } = renderAnswer(rpc, data, p, language);
 
-    assertEquals(text.includes('****'), false, `${rpc} brackets nothing: ${text}`);
-    assertEquals(text.startsWith('** '), false, `${rpc} marks whitespace: ${text}`);
-    assertEquals(text.endsWith(' **'), false, `${rpc} marks whitespace: ${text}`);
+      assertEquals(text.includes('****'), false, `${rpc}/${language} brackets nothing: ${text}`);
+      assertEquals(text.startsWith('** '), false, `${rpc}/${language} marks whitespace: ${text}`);
+      assertEquals(text.endsWith(' **'), false, `${rpc}/${language} marks whitespace: ${text}`);
+    }
   }
 });
 
 Deno.test('a sentence with nothing to point at carries no marker at all', () => {
-  // A marker that appears everywhere points at nothing, so the four "nothing is
-  // low / expiring / sold / quiet" sentences and the fixed refusal are plain prose
-  // - which is also what lets the client render them exactly as it did before
-  // markers existed.
-  for (const [rpc, data, p] of NOTHING_SENTENCES) {
-    const rendered = renderAnswer(rpc, data, p);
+  // In either language: a marker that appears everywhere points at nothing, so the four
+  // "nothing is low / expiring / sold / quiet" sentences and the fixed refusal are plain
+  // prose - which is also what lets the client render them exactly as it did before markers
+  // existed.
+  for (const language of ANSWER_LANGUAGES) {
+    for (const [rpc, data, p] of NOTHING_SENTENCES) {
+      const rendered = renderAnswer(rpc, data, p, language);
 
-    assertEquals(rendered.understood, true, `${rpc} should have rendered`);
+      assertEquals(rendered.understood, true, `${rpc}/${language} should have rendered`);
+      assertEquals(
+        markerCount(rendered.text),
+        0,
+        `${rpc}/${language} has nothing to point at, so it should carry no marker: ${rendered.text}`,
+      );
+    }
+  }
+});
+
+Deno.test('every sentence a report can write can be said in Hinglish', () => {
+  // One envelope per shape, and the Hinglish sentence it must produce. This is the test that
+  // keeps the language feature from being a half-translation: a report whose Hinglish key was
+  // forgotten fails to COMPILE (the sentence tables are keyed by the language union), and one
+  // whose Hinglish was written but never checked fails here.
+  const cases: Array<[ClassificationChoice, unknown, ChatParams, string]> = [
+    [
+      'report_summary',
+      FULL_SUMMARY,
+      params({ subject: 'sales' }),
+      '2026-09-01 se 2026-09-19 tak: 12 bill bane - total **₹45230.00**, '
+        + 'jisme **₹39000.00** tax se pehle aur **₹6230.00** tax hai. '
+        + '**₹40000.00** mil gaye, **₹5230.00** abhi baaki hai.',
+    ],
+    [
+      'report_summary',
+      FULL_SUMMARY,
+      params({ subject: 'stock' }),
+      'Abhi stock ki value cost par **₹604704.48** hai: 61360 unit, 314 product - '
+        + 'aur MRP par **₹812000.00**.',
+    ],
+    [
+      'low_stock_products',
+      [{ name: 'Dolo 650', shortfall: 40, total_qty: 10, min_stock_level: 50 }],
+      params(),
+      '1 product apne reorder level se neeche hai. Sabse badi kami **Dolo 650** mein hai: '
+        + '**40 unit kam** (stock 10, level 50).',
+    ],
+    [
+      'expiring_batches',
+      [{ product_name: 'Amoxy 500', batch_no: 'A-9', days_left: -6, qty: 12, expiry_date: '2026-09-13' }],
+      params({ days: 30 }),
+      '1 batch 30 din mein expire ho rahe hain. Sabse pehle **Amoxy 500** batch A-9 - '
+        + '**6 din pehle expire ho gaya** (2026-09-13) - shelf par 12 unit.',
+    ],
+    [
+      'top_products',
+      {
+        meta: { window_from: '2026-08-21', window_to: '2026-09-19', metric_used: 'units' },
+        rows: [
+          { rank: 1, name: 'Dolo 650', units_sold: 120, revenue: 6000 },
+          { rank: 2, name: 'Crocin', units_sold: 80, revenue: 1600 },
+        ],
+      },
+      params(),
+      'Units ke hisaab se, 2026-08-21 se 2026-09-19 ke beech sabse zyada bikne wala '
+        + '**Dolo 650** hai: **120 unit**, **₹6000.00** ka. Uske baad Crocin, 80 unit.',
+    ],
+    [
+      'dead_stock',
+      {
+        meta: { quiet_days: 90 },
+        rows: [{ name: 'Old Syrup', total_qty: 24, stock_value_at_cost: 4800, last_sold_on: null }],
+      },
+      params(),
+      '1 product ka maal 90 din se nahi bika. Sabse zyada paisa **Old Syrup** mein atka hai: '
+        + '24 unit, cost par **₹4800.00** - kabhi nahi bika.',
+    ],
+  ];
+
+  for (const [rpc, data, p, expected] of cases) {
+    const rendered = renderAnswer(rpc, data, p, 'hinglish');
+
+    assertEquals(rendered.understood, true, `${rpc} should have rendered in Hinglish`);
+    assertEquals(rendered.text, expected, `${rpc}'s Hinglish sentence is not the one written`);
+  }
+});
+
+Deno.test('the Hinglish sentences that have no finding are Hinglish too', () => {
+  const empty = renderAnswer('low_stock_products', [], params(), 'hinglish');
+  const refusal = renderAnswer('unsupported', null, params(), 'hinglish');
+  const unreadable = renderAnswer('low_stock_products', { rows: [] }, params(), 'hinglish');
+
+  assertEquals(empty.text, 'Koi bhi product apne reorder level se neeche nahi hai.');
+  assertEquals(refusal.text, UNSUPPORTED.hinglish);
+  assertStringIncludes(unreadable.text, 'samajh nahi sakta');
+  assertEquals(unreadable.understood, false);
+});
+
+Deno.test('an English answer is exactly what it was before this file could speak Hinglish', () => {
+  // The default language, and the one every caller sent before this existed. Asking for it
+  // explicitly and not asking at all must be the same string, for every shape.
+  for (const [rpc, data, p] of [...FINDING_SENTENCES, ...NOTHING_SENTENCES]) {
     assertEquals(
-      markerCount(rendered.text),
-      0,
-      `${rpc} has nothing to point at, so it should carry no marker: ${rendered.text}`,
+      renderAnswer(rpc, data, p, 'en').text,
+      renderAnswer(rpc, data, p).text,
+      `${rpc}'s English sentence must not depend on whether the language was named`,
     );
   }
 });

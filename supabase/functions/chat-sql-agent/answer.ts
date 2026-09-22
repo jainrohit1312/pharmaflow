@@ -47,7 +47,9 @@
  */
 
 import {
+  DEFAULT_ANSWER_LANGUAGE,
   DEFAULT_SUMMARY_SUBJECT,
+  type AnswerLanguage,
   type ChatParams,
   type ClassificationChoice,
   type SummarySubject,
@@ -175,36 +177,71 @@ function isCapped(rows: number, limit: number | null): boolean {
   return limit !== null && rows >= limit;
 }
 
-/** The fixed sentence for a question none of the reports answers. */
-export const UNSUPPORTED_ANSWER =
-  'I cannot answer that. I can answer questions about sales and purchases, stock levels, expiring batches, what sells best, and what has stopped selling.';
+/** The fixed sentence for a question none of the reports answers, in each language. */
+export const UNSUPPORTED: Sentence = {
+  en: 'I cannot answer that. I can answer questions about sales and purchases, stock levels, expiring batches, what sells best, and what has stopped selling.',
+  hinglish:
+    'Ye main bata nahi sakta. Main sales aur purchase, stock levels, expire hone wale batches, sabse zyada bikne wala maal, aur jo bikhna band ho gaya hai - inke baare mein bata sakta hoon.',
+};
 
-/** The report [rpc] returned; [text] is what the caller reads. */
+/**
+ * One sentence, in every language this file can say it in.
+ *
+ * A sentence is a **map keyed by [AnswerLanguage]** rather than a branch inside the
+ * sentence's own function, for one reason: *the compiler counts the languages, a person does
+ * not.* A missing key is a type error, so adding Hindi script later cannot leave an English
+ * sentence quietly standing in for it - which is the failure a language feature ships with
+ * when nothing checks it. (That is also why the Hinglish key is spelled out at every
+ * sentence instead of a fallback: falling back is exactly the silent English sentence.)
+ *
+ * The English half of every one of these is **byte-identical to the sentence this file wrote
+ * before it could speak Hinglish**, so nothing about an English answer changed.
+ */
+type Sentence = Record<AnswerLanguage, string>;
+
+/** The report [rpc] returned; [text] is what the caller reads, in [language]. */
 export function renderAnswer(
   rpc: ClassificationChoice,
   data: unknown,
   params: ChatParams,
+  language: AnswerLanguage = DEFAULT_ANSWER_LANGUAGE,
 ): RenderedAnswer {
   switch (rpc) {
     case 'report_summary':
-      return renderSummary(data, params.subject ?? DEFAULT_SUMMARY_SUBJECT);
+      return renderSummary(data, params.subject ?? DEFAULT_SUMMARY_SUBJECT, language);
     case 'low_stock_products':
-      return renderLowStock(data, params.limit);
+      return renderLowStock(data, params.limit, language);
     case 'expiring_batches':
-      return renderExpiring(data, params.days ?? EXPIRING_DEFAULT_DAYS, params.limit);
+      return renderExpiring(
+        data,
+        params.days ?? EXPIRING_DEFAULT_DAYS,
+        params.limit,
+        language,
+      );
     case 'top_products':
-      return renderTopProducts(data);
+      return renderTopProducts(data, language);
     case 'dead_stock':
-      return renderDeadStock(data, params.days ?? DEAD_STOCK_DEFAULT_DAYS, params.limit);
+      return renderDeadStock(
+        data,
+        params.days ?? DEAD_STOCK_DEFAULT_DAYS,
+        params.limit,
+        language,
+      );
     case 'unsupported':
-      return { text: UNSUPPORTED_ANSWER, understood: true };
+      return { text: UNSUPPORTED[language], understood: true };
   }
 }
 
 /** A refusal to render an envelope in an unexpected shape. */
-const UNREADABLE: RenderedAnswer = {
-  text: 'That report ran, but its answer came back in a shape this app does not understand.',
-  understood: false,
+const UNREADABLE: Record<AnswerLanguage, RenderedAnswer> = {
+  en: {
+    text: 'That report ran, but its answer came back in a shape this app does not understand.',
+    understood: false,
+  },
+  hinglish: {
+    text: 'Report chal gayi, lekin uska jawab aisi shape mein aaya jo ye app samajh nahi sakta.',
+    understood: false,
+  },
 };
 
 /**
@@ -229,25 +266,34 @@ const UNREADABLE: RenderedAnswer = {
  * `everything` is the broad question and the default, and it reads exactly as this
  * sentence always did - so a classifier that names no subject changes nothing.
  */
-function renderSummary(data: unknown, subject: SummarySubject): RenderedAnswer {
+function renderSummary(
+  data: unknown,
+  subject: SummarySubject,
+  language: AnswerLanguage,
+): RenderedAnswer {
   const envelope = asRecord(data);
   const from = asString(envelope.from);
   const to = asString(envelope.to);
-  const window = from !== null && to !== null ? `Between ${from} and ${to}: ` : '';
+  // The period, as each language says it. A section that has no period - `stock` - never
+  // reads this, so an absent window cannot leak a date range into a sentence about now.
+  const window: Sentence = {
+    en: from !== null && to !== null ? `Between ${from} and ${to}: ` : '',
+    hinglish: from !== null && to !== null ? `${from} se ${to} tak: ` : '',
+  };
 
   switch (subject) {
     case 'sales':
-      return renderSalesSection(envelope, window);
+      return renderSalesSection(envelope, window[language], language);
     case 'purchases':
-      return renderPurchasesSection(envelope, window);
+      return renderPurchasesSection(envelope, window[language], language);
     case 'returns':
-      return renderReturnsSection(envelope, window);
+      return renderReturnsSection(envelope, window[language], language);
     case 'expenses':
-      return renderExpensesSection(envelope, window);
+      return renderExpensesSection(envelope, window[language], language);
     case 'stock':
-      return renderStockSection(envelope);
+      return renderStockSection(envelope, language);
     case 'everything':
-      return renderEverything(envelope, window);
+      return renderEverything(envelope, window[language], language);
   }
 }
 
@@ -261,6 +307,7 @@ function renderSummary(data: unknown, subject: SummarySubject): RenderedAnswer {
 function renderSalesSection(
   envelope: Record<string, unknown>,
   window: string,
+  language: AnswerLanguage,
 ): RenderedAnswer {
   const sales = asRecord(envelope.sales);
   const count = integer(sales.count);
@@ -274,26 +321,36 @@ function renderSalesSection(
     count === null || grandTotal === null || subTotal === null ||
     taxTotal === null || collected === null || outstanding === null
   ) {
-    return UNREADABLE;
+    return UNREADABLE[language];
   }
 
+  const nothing: Sentence = {
+    en: `${window}Nothing was billed.`,
+    hinglish: `${window}Koi bill nahi bana.`,
+  };
   if (count === 0) {
-    return { text: `${window}Nothing was billed.`, understood: true };
+    return { text: nothing[language], understood: true };
   }
 
-  return {
-    text:
+  const text: Sentence = {
+    en:
       `${window}${count} ${plural(count, 'sale', 'sales')} for **${grandTotal}** - ` +
       `**${subTotal}** of it before tax and **${taxTotal}** tax. ` +
       `${collected} collected and **${outstanding}** still due.`,
-    understood: true,
+    hinglish:
+      `${window}${count} ${plural(count, 'bill bana', 'bill bane')} - total **${grandTotal}**, ` +
+      `jisme **${subTotal}** tax se pehle aur **${taxTotal}** tax hai. ` +
+      `**${collected}** mil gaye, **${outstanding}** abhi baaki hai.`,
   };
+
+  return { text: text[language], understood: true };
 }
 
 /** What was bought in, and how much of the bill was tax. */
 function renderPurchasesSection(
   envelope: Record<string, unknown>,
   window: string,
+  language: AnswerLanguage,
 ): RenderedAnswer {
   const purchases = asRecord(envelope.purchases);
   const count = integer(purchases.count);
@@ -301,19 +358,27 @@ function renderPurchasesSection(
   const taxTotal = money(purchases.tax_total);
 
   if (count === null || grandTotal === null || taxTotal === null) {
-    return UNREADABLE;
+    return UNREADABLE[language];
   }
 
+  const nothing: Sentence = {
+    en: `${window}No purchases were received.`,
+    hinglish: `${window}Koi purchase receive nahi hua.`,
+  };
   if (count === 0) {
-    return { text: `${window}No purchases were received.`, understood: true };
+    return { text: nothing[language], understood: true };
   }
 
-  return {
-    text:
+  const text: Sentence = {
+    en:
       `${window}${count} ${plural(count, 'purchase was', 'purchases were')} received ` +
       `for **${grandTotal}**, of which **${taxTotal}** is tax.`,
-    understood: true,
+    hinglish:
+      `${window}${count} purchase receive hue, total **${grandTotal}** ka - ` +
+      `jisme **${taxTotal}** tax hai.`,
   };
+
+  return { text: text[language], understood: true };
 }
 
 /**
@@ -327,6 +392,7 @@ function renderPurchasesSection(
 function renderReturnsSection(
   envelope: Record<string, unknown>,
   window: string,
+  language: AnswerLanguage,
 ): RenderedAnswer {
   const returns = asRecord(envelope.returns);
   const saleCount = integer(returns.sale_count);
@@ -338,53 +404,76 @@ function renderReturnsSection(
     saleCount === null || saleTotal === null ||
     purchaseCount === null || purchaseTotal === null
   ) {
-    return UNREADABLE;
+    return UNREADABLE[language];
   }
 
+  const nothing: Sentence = {
+    en: `${window}Nothing came back - no sale returns and no purchase returns.`,
+    hinglish: `${window}Kuch bhi wapas nahi aaya - na koi sale return, na koi purchase return.`,
+  };
   if (saleCount === 0 && purchaseCount === 0) {
-    return {
-      text: `${window}Nothing came back - no sale returns and no purchase returns.`,
-      understood: true,
-    };
+    return { text: nothing[language], understood: true };
   }
 
-  const fromCustomers = saleCount === 0
-    ? 'No sales came back'
-    : `**${saleTotal}** of sales came back over ${saleCount} ${
-      plural(saleCount, 'sale return', 'sale returns')
-    }`;
-  const toSuppliers = purchaseCount === 0
-    ? 'nothing went back to a supplier'
-    : `**${purchaseTotal}** went back to suppliers over ${purchaseCount} ${
-      plural(purchaseCount, 'purchase return', 'purchase returns')
-    }`;
+  const fromCustomers: Sentence = {
+    en: saleCount === 0
+      ? 'No sales came back'
+      : `**${saleTotal}** of sales came back over ${saleCount} ${
+        plural(saleCount, 'sale return', 'sale returns')
+      }`,
+    hinglish: saleCount === 0
+      ? 'Customer se kuch wapas nahi aaya'
+      : `customer se **${saleTotal}** ka maal wapas aaya (${saleCount} sale return)`,
+  };
+  const toSuppliers: Sentence = {
+    en: purchaseCount === 0
+      ? 'nothing went back to a supplier'
+      : `**${purchaseTotal}** went back to suppliers over ${purchaseCount} ${
+        plural(purchaseCount, 'purchase return', 'purchase returns')
+      }`,
+    hinglish: purchaseCount === 0
+      ? 'supplier ko kuch wapas nahi gaya'
+      : `supplier ko **${purchaseTotal}** ka maal wapas gaya (${purchaseCount} purchase return)`,
+  };
 
-  return { text: `${window}${fromCustomers}, and ${toSuppliers}.`, understood: true };
+  const text: Sentence = {
+    en: `${window}${fromCustomers.en}, and ${toSuppliers.en}.`,
+    hinglish: `${window}${fromCustomers.hinglish}, aur ${toSuppliers.hinglish}.`,
+  };
+
+  return { text: text[language], understood: true };
 }
 
 /** What the owner spent, over and above what he bought for stock. */
 function renderExpensesSection(
   envelope: Record<string, unknown>,
   window: string,
+  language: AnswerLanguage,
 ): RenderedAnswer {
   const expenses = asRecord(envelope.expenses);
   const count = integer(expenses.count);
   const total = money(expenses.total);
 
   if (count === null || total === null) {
-    return UNREADABLE;
+    return UNREADABLE[language];
   }
 
+  const nothing: Sentence = {
+    en: `${window}No expenses were recorded.`,
+    hinglish: `${window}Koi kharch record nahi hua.`,
+  };
   if (count === 0) {
-    return { text: `${window}No expenses were recorded.`, understood: true };
+    return { text: nothing[language], understood: true };
   }
 
-  return {
-    text: `${window}${count} ${
+  const text: Sentence = {
+    en: `${window}${count} ${
       plural(count, 'expense was', 'expenses were')
     } recorded, totalling **${total}**.`,
-    understood: true,
+    hinglish: `${window}${count} kharch record hue, total **${total}**.`,
   };
+
+  return { text: text[language], understood: true };
 }
 
 /**
@@ -395,7 +484,10 @@ function renderExpensesSection(
  * asking "how much stock do I have" after a question about September should not be shown
  * one number that claims to be both.
  */
-function renderStockSection(envelope: Record<string, unknown>): RenderedAnswer {
+function renderStockSection(
+  envelope: Record<string, unknown>,
+  language: AnswerLanguage,
+): RenderedAnswer {
   const stock = asRecord(envelope.stock);
   const products = integer(stock.products);
   const units = integer(stock.units);
@@ -403,23 +495,28 @@ function renderStockSection(envelope: Record<string, unknown>): RenderedAnswer {
   const atMrp = money(stock.value_at_mrp);
 
   if (products === null || units === null || atCost === null || atMrp === null) {
-    return UNREADABLE;
+    return UNREADABLE[language];
   }
 
-  return {
-    text:
+  const text: Sentence = {
+    en:
       `Stock on hand now is worth **${atCost}** at cost: ${units} ${
         plural(units, 'unit', 'units')
       } across ${products} ${plural(products, 'product', 'products')}, ` +
       `and **${atMrp}** at MRP.`,
-    understood: true,
+    hinglish:
+      `Abhi stock ki value cost par **${atCost}** hai: ${units} unit, ${products} product - ` +
+      `aur MRP par **${atMrp}**.`,
   };
+
+  return { text: text[language], understood: true };
 }
 
 /** The broad question: one line on each of the three things an owner checks first. */
 function renderEverything(
   envelope: Record<string, unknown>,
   window: string,
+  language: AnswerLanguage,
 ): RenderedAnswer {
   const sales = asRecord(envelope.sales);
   const purchases = asRecord(envelope.purchases);
@@ -436,17 +533,23 @@ function renderEverything(
     count === null || grandTotal === null || collected === null ||
     outstanding === null || purchaseCount === null || stockValue === null
   ) {
-    return UNREADABLE;
+    return UNREADABLE[language];
   }
 
-  return {
-    text:
+  const text: Sentence = {
+    en:
       `${window}${count} ${plural(count, 'sale', 'sales')} for **${grandTotal}**, ` +
       `${collected} collected and **${outstanding}** still due. ` +
       `${purchaseCount} ${plural(purchaseCount, 'purchase was', 'purchases were')} received. ` +
       `Stock on hand is worth **${stockValue}** at cost.`,
-    understood: true,
+    hinglish:
+      `${window}${count} ${plural(count, 'bill bana', 'bill bane')}, total **${grandTotal}** - ` +
+      `**${collected}** mil gaye, **${outstanding}** abhi baaki hai. ` +
+      `${purchaseCount} purchase receive hue. ` +
+      `Stock cost par **${stockValue}** ka hai.`,
   };
+
+  return { text: text[language], understood: true };
 }
 
 /**
@@ -457,13 +560,21 @@ function renderEverything(
  * the whole catalogue that a capped list cannot support. When the page came back full the
  * sentence says "at least", which is true whether or not there is a row behind it.
  */
-function renderLowStock(data: unknown, limit: number | null): RenderedAnswer {
+function renderLowStock(
+  data: unknown,
+  limit: number | null,
+  language: AnswerLanguage,
+): RenderedAnswer {
   const rows = asArray(data);
   if (rows === null) {
-    return UNREADABLE;
+    return UNREADABLE[language];
   }
   if (rows.length === 0) {
-    return { text: 'Nothing is below its reorder level.', understood: true };
+    const quiet: Sentence = {
+      en: 'Nothing is below its reorder level.',
+      hinglish: 'Koi bhi product apne reorder level se neeche nahi hai.',
+    };
+    return { text: quiet[language], understood: true };
   }
 
   const first = asRecord(rows[0]);
@@ -473,14 +584,18 @@ function renderLowStock(data: unknown, limit: number | null): RenderedAnswer {
   const level = integer(first.min_stock_level);
 
   if (name === null || shortfall === null || totalQty === null || level === null) {
-    return UNREADABLE;
+    return UNREADABLE[language];
   }
 
-  const atLeast = isCapped(rows.length, limit) ? 'At least ' : '';
+  const capped = isCapped(rows.length, limit);
+  const atLeast: Sentence = {
+    en: capped ? 'At least ' : '',
+    hinglish: capped ? 'Kam se kam ' : '',
+  };
 
-  return {
-    text:
-      `${atLeast}${rows.length} ${
+  const text: Sentence = {
+    en:
+      `${atLeast.en}${rows.length} ${
         plural(
           rows.length,
           'product is below its reorder level',
@@ -489,8 +604,19 @@ function renderLowStock(data: unknown, limit: number | null): RenderedAnswer {
       }. ` +
       `The biggest gap is **${name}**: **${shortfall} ${plural(shortfall, 'unit', 'units')} short** ` +
       `(${totalQty} in stock against a level of ${level}).`,
-    understood: true,
+    hinglish:
+      `${atLeast.hinglish}${rows.length} ${
+        plural(
+          rows.length,
+          'product apne reorder level se neeche hai',
+          'products apne reorder level se neeche hain',
+        )
+      }. ` +
+      `Sabse badi kami **${name}** mein hai: **${shortfall} unit kam** ` +
+      `(stock ${totalQty}, level ${level}).`,
   };
+
+  return { text: text[language], understood: true };
 }
 
 /**
@@ -504,16 +630,18 @@ function renderExpiring(
   data: unknown,
   days: number,
   limit: number | null,
+  language: AnswerLanguage,
 ): RenderedAnswer {
   const rows = asArray(data);
   if (rows === null) {
-    return UNREADABLE;
+    return UNREADABLE[language];
   }
   if (rows.length === 0) {
-    return {
-      text: `No batches expire within ${days} days.`,
-      understood: true,
+    const quiet: Sentence = {
+      en: `No batches expire within ${days} days.`,
+      hinglish: `${days} din mein koi batch expire nahi ho raha.`,
     };
+    return { text: quiet[language], understood: true };
   }
 
   const first = asRecord(rows[0]);
@@ -524,24 +652,39 @@ function renderExpiring(
   const expiryDate = asString(first.expiry_date);
 
   if (product === null || daysLeft === null || qty === null) {
-    return UNREADABLE;
+    return UNREADABLE[language];
   }
 
   // Both halves are the answer's point - "6 days left" on the one you can still
   // move, "already expired" on the one that is already a loss - so both are marked.
-  const when = daysLeft < 0
-    ? `**already expired ${Math.abs(daysLeft)} ${plural(Math.abs(daysLeft), 'day', 'days')} ago**`
-    : `**${daysLeft} ${plural(daysLeft, 'day', 'days')} left**`;
-
-  const atLeast = isCapped(rows.length, limit) ? 'At least ' : '';
-
-  return {
-    text:
-      `${atLeast}${rows.length} ${plural(rows.length, 'batch expires', 'batches expire')} within ${days} days. ` +
-      `The soonest is **${product}**${batchNo !== null ? ` batch ${batchNo}` : ''}, ${when}` +
-      `${expiryDate !== null ? ` (${expiryDate})` : ''} - ${qty} ${plural(qty, 'unit', 'units')} on the shelf.`,
-    understood: true,
+  const when: Sentence = {
+    en: daysLeft < 0
+      ? `**already expired ${Math.abs(daysLeft)} ${plural(Math.abs(daysLeft), 'day', 'days')} ago**`
+      : `**${daysLeft} ${plural(daysLeft, 'day', 'days')} left**`,
+    hinglish: daysLeft < 0
+      ? `**${Math.abs(daysLeft)} din pehle expire ho gaya**`
+      : `**${daysLeft} din bache hain**`,
   };
+
+  const capped = isCapped(rows.length, limit);
+  const atLeast: Sentence = {
+    en: capped ? 'At least ' : '',
+    hinglish: capped ? 'Kam se kam ' : '',
+  };
+
+  const batch = batchNo !== null ? ` batch ${batchNo}` : '';
+  const on = expiryDate !== null ? ` (${expiryDate})` : '';
+
+  const text: Sentence = {
+    en:
+      `${atLeast.en}${rows.length} ${plural(rows.length, 'batch expires', 'batches expire')} within ${days} days. ` +
+      `The soonest is **${product}**${batch}, ${when.en}${on} - ${qty} ${plural(qty, 'unit', 'units')} on the shelf.`,
+    hinglish:
+      `${atLeast.hinglish}${rows.length} batch ${days} din mein expire ho rahe hain. ` +
+      `Sabse pehle **${product}**${batch} - ${when.hinglish}${on} - shelf par ${qty} unit.`,
+  };
+
+  return { text: text[language], understood: true };
 }
 
 /**
@@ -552,21 +695,31 @@ function renderExpiring(
  * alike. A sentence here that ever *counts* will need one - the way the three list
  * sentences above do - and that is the point at which it should be added.
  */
-function renderTopProducts(data: unknown): RenderedAnswer {
+function renderTopProducts(
+  data: unknown,
+  language: AnswerLanguage,
+): RenderedAnswer {
   const envelope = asRecord(data);
   const rows = asArray(envelope.rows);
   const meta = asRecord(envelope.meta);
 
   if (rows === null) {
-    return UNREADABLE;
+    return UNREADABLE[language];
   }
 
   const from = asString(meta.window_from);
   const to = asString(meta.window_to);
-  const window = from !== null && to !== null ? `between ${from} and ${to}` : 'in that window';
+  const window: Sentence = {
+    en: from !== null && to !== null ? `between ${from} and ${to}` : 'in that window',
+    hinglish: from !== null && to !== null ? `${from} se ${to} ke beech` : 'us period mein',
+  };
 
   if (rows.length === 0) {
-    return { text: `Nothing sold ${window}.`, understood: true };
+    const quiet: Sentence = {
+      en: `Nothing sold ${window.en}.`,
+      hinglish: `${window.hinglish} kuch nahi bika.`,
+    };
+    return { text: quiet[language], understood: true };
   }
 
   const first = asRecord(rows[0]);
@@ -575,26 +728,35 @@ function renderTopProducts(data: unknown): RenderedAnswer {
   const revenue = money(first.revenue);
 
   if (name === null || units === null || revenue === null) {
-    return UNREADABLE;
+    return UNREADABLE[language];
   }
 
-  const by = meta.metric_used === 'revenue' ? 'revenue' : 'units sold';
-  // The winner's identity and both of its figures are the answer, so all three are
-  // marked - and only in this clause: the runner-up is context, and marking it too
-  // would leave nothing for the marker to point at.
-  let text =
-    `By ${by}, ${window} the top seller is **${name}**: **${units} ${plural(units, 'unit', 'units')}** for **${revenue}**.`;
+  const by: Sentence = {
+    en: `By ${meta.metric_used === 'revenue' ? 'revenue' : 'units sold'}, `,
+    hinglish: `${meta.metric_used === 'revenue' ? 'Revenue' : 'Units'} ke hisaab se, `,
+  };
+
+  const text: Sentence = {
+    en:
+      `${by.en}${window.en} the top seller is **${name}**: **${units} ${
+        plural(units, 'unit', 'units')
+      }** for **${revenue}**.`,
+    hinglish:
+      `${by.hinglish}${window.hinglish} sabse zyada bikne wala **${name}** hai: ` +
+      `**${units} unit**, **${revenue}** ka.`,
+  };
 
   if (rows.length > 1) {
     const second = asRecord(rows[1]);
     const secondName = asString(second.name);
     const secondUnits = integer(second.units_sold);
     if (secondName !== null && secondUnits !== null) {
-      text += ` Next is ${secondName} with ${secondUnits} ${plural(secondUnits, 'unit', 'units')}.`;
+      text.en += ` Next is ${secondName} with ${secondUnits} ${plural(secondUnits, 'unit', 'units')}.`;
+      text.hinglish += ` Uske baad ${secondName}, ${secondUnits} unit.`;
     }
   }
 
-  return { text, understood: true };
+  return { text: text[language], understood: true };
 }
 
 /**
@@ -608,22 +770,24 @@ function renderDeadStock(
   data: unknown,
   days: number,
   limit: number | null,
+  language: AnswerLanguage,
 ): RenderedAnswer {
   const envelope = asRecord(data);
   const rows = asArray(envelope.rows);
   const meta = asRecord(envelope.meta);
 
   if (rows === null) {
-    return UNREADABLE;
+    return UNREADABLE[language];
   }
 
   const quietDays = integer(meta.quiet_days) ?? days;
 
   if (rows.length === 0) {
-    return {
-      text: `Nothing has gone quiet in the last ${quietDays} days.`,
-      understood: true,
+    const quiet: Sentence = {
+      en: `Nothing has gone quiet in the last ${quietDays} days.`,
+      hinglish: `Pichhle ${quietDays} din mein kuch bhi nahi bika.`,
     };
+    return { text: quiet[language], understood: true };
   }
 
   const first = asRecord(rows[0]);
@@ -633,18 +797,31 @@ function renderDeadStock(
   const lastSold = asString(first.last_sold_on);
 
   if (name === null || qty === null || value === null) {
-    return UNREADABLE;
+    return UNREADABLE[language];
   }
 
-  const atLeast = isCapped(rows.length, limit) ? 'At least ' : '';
-
-  return {
-    text:
-      `${atLeast}${rows.length} ${plural(rows.length, 'product has', 'products have')} stock that has not sold in ${quietDays} days. ` +
-      `The most cash tied up is **${name}**: ${qty} ${plural(qty, 'unit', 'units')} worth **${value}** at cost, ` +
-      `${lastSold === null ? 'never sold' : `last sold ${lastSold}`}.`,
-    understood: true,
+  const capped = isCapped(rows.length, limit);
+  const atLeast: Sentence = {
+    en: capped ? 'At least ' : '',
+    hinglish: capped ? 'Kam se kam ' : '',
   };
+
+  const sold: Sentence = {
+    en: lastSold === null ? 'never sold' : `last sold ${lastSold}`,
+    hinglish: lastSold === null ? 'kabhi nahi bika' : `aakhri baar ${lastSold} ko bika`,
+  };
+
+  const text: Sentence = {
+    en:
+      `${atLeast.en}${rows.length} ${plural(rows.length, 'product has', 'products have')} stock that has not sold in ${quietDays} days. ` +
+      `The most cash tied up is **${name}**: ${qty} ${plural(qty, 'unit', 'units')} worth **${value}** at cost, ` +
+      `${sold.en}.`,
+    hinglish:
+      `${atLeast.hinglish}${rows.length} product ka maal ${quietDays} din se nahi bika. ` +
+      `Sabse zyada paisa **${name}** mein atka hai: ${qty} unit, cost par **${value}** - ${sold.hinglish}.`,
+  };
+
+  return { text: text[language], understood: true };
 }
 
 /** An integer, or `null`. A numeric string counts; a fraction is not one. */
