@@ -160,9 +160,12 @@ begin
   insert into public.products (pharmacy_id, name) values (v_other, 'ZZTEST Chat Other Best Seller') returning id into v_other_top;
   insert into public.products (pharmacy_id, name) values (v_other, 'ZZTEST Chat Other Dead') returning id into v_other_dead;
 
-  -- Batches. purchase_rate decides the cost a shelf is holding, so it is set
-  -- deliberately: `v_pnone` carries the most cash on purpose, so "most tied up
-  -- first" has one unambiguous winner.
+  -- Batches. `purchase_rate` decides the cost a shelf is holding, and it is set so that every
+  -- fixture this file asserts MEMBERSHIP of is at the top of the page it must appear in: hosted
+  -- shares these tables with the owner's real catalogue, where a page of 50 dead-stock rows is
+  -- filled by its own stock and a fixture valued at a few hundred rupees falls off the end.
+  -- `v_pnone` (never sold), `v_d_quiet` (100 days quiet) and `v_d_expired` (expired only) are
+  -- therefore sized far above the whole catalogue's cost, not merely above a neighbour's.
   insert into public.product_batches (pharmacy_id, product_id, batch_no, expiry_date, qty, purchase_rate)
   values (v_pharmacy, v_pa, 'C-A', current_date + 365, 200, 1) returning id into v_b_pa;
   insert into public.product_batches (pharmacy_id, product_id, batch_no, expiry_date, qty, purchase_rate)
@@ -176,15 +179,15 @@ begin
   insert into public.product_batches (pharmacy_id, product_id, batch_no, expiry_date, qty, purchase_rate)
   values (v_pharmacy, v_pinact, 'C-INACT', current_date + 365, 100, 1) returning id into v_b_inact;
   insert into public.product_batches (pharmacy_id, product_id, batch_no, expiry_date, qty, purchase_rate)
-  values (v_pharmacy, v_pnone, 'C-NONE', current_date + 365, 500, 100) returning id into v_b_none;
+  values (v_pharmacy, v_pnone, 'C-NONE', current_date + 365, 500, 1000000) returning id into v_b_none;
   insert into public.product_batches (pharmacy_id, product_id, batch_no, expiry_date, qty, purchase_rate)
-  values (v_pharmacy, v_d_quiet, 'C-QUIET', current_date + 365, 55, 10) returning id into v_b_quiet;
+  values (v_pharmacy, v_d_quiet, 'C-QUIET', current_date + 365, 55, 100000) returning id into v_b_quiet;
   insert into public.product_batches (pharmacy_id, product_id, batch_no, expiry_date, qty, purchase_rate)
   values (v_pharmacy, v_d_boundary, 'C-BOUND', current_date + 365, 45, 10) returning id into v_b_bound;
   insert into public.product_batches (pharmacy_id, product_id, batch_no, expiry_date, qty, purchase_rate)
   values (v_pharmacy, v_d_moving, 'C-MOVE', current_date + 365, 35, 10) returning id into v_b_moving;
   insert into public.product_batches (pharmacy_id, product_id, batch_no, expiry_date, qty, purchase_rate)
-  values (v_pharmacy, v_d_expired, 'C-EXP', current_date - 10, 20, 10) returning id into v_b_expired;
+  values (v_pharmacy, v_d_expired, 'C-EXP', current_date - 10, 20, 50000) returning id into v_b_expired;
   insert into public.product_batches (pharmacy_id, product_id, batch_no, expiry_date, qty, purchase_rate)
   values (v_pharmacy, v_d_empty, 'C-EMPTY', current_date + 365, 0, 10) returning id into v_b_empty;
 
